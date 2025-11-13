@@ -17,7 +17,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         // Merge config
         $this->mergeConfigFrom(
-            __DIR__ . '/../../config/mcp.php',
+            __DIR__ . '/../config/mcp.php',
             'mcp'
         );
 
