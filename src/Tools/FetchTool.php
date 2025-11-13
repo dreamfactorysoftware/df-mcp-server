@@ -1,8 +1,8 @@
 <?php
 
-declare(strict_types=1);
 
-namespace DreamFactory\McpServer\Tools;
+
+namespace DreamFactory\Core\McpServer\Tools;
 
 use Mcp\Capability\Attribute\McpTool;
 
@@ -20,3 +20,4 @@ final class FetchTool
         ];
     }
 }
+

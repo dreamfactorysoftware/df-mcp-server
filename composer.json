@@ -2,7 +2,7 @@
   "name": "dreamfactory/df-mcp-server",
   "description": "DreamFactory MCP server package built on the MCP PHP SDK.",
   "type": "library",
-  "license": "MIT",
+  "license": "",
   "authors": [
     {
       "name": "DreamFactory",
@@ -15,17 +15,19 @@
   },
   "autoload": {
     "psr-4": {
-      "DreamFactory\\McpServer\\": "src/"
+      "DreamFactory\\Core\\McpServer\\": "src/"
     }
   },
-  "autoload-dev": {
-    "psr-4": {
-      "DreamFactory\\McpServer\\Tests\\": "tests/"
+  "extra":       {
+    "branch-alias": {
+      "dev-develop": "0.8.x-dev"
+    },
+    "laravel": {
+      "providers": [
+        "DreamFactory\\Core\\McpServer\\ServiceProvider"
+      ]
     }
   },
-  "bin": [
-    "bin/server"
-  ],
   "minimum-stability": "dev",
   "prefer-stable": true
 }

@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+
 
 namespace DreamFactory\McpServer;
 
@@ -12,10 +12,10 @@ final class DreamFactoryService
     public function __construct(?string $baseUrl = null, ?string $apiKey = null)
     {
         $this->baseUrl = rtrim($baseUrl ?? (string) getenv('DREAMFACTORY_URL'), '/');
-        $this->apiKey = $apiKey ?? (string) getenv('DREAMFACTORY_API_KEY');
+        $this->apiKey = $apiKey;
 
         if ($this->baseUrl === '' || $this->apiKey === '') {
-            throw new \RuntimeException('DreamFactory configuration missing. Set DREAMFACTORY_URL and DREAMFACTORY_API_KEY.');
+            throw new \RuntimeException('DreamFactory configuration missing.');
         }
     }
 

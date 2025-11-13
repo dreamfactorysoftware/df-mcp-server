@@ -1,10 +1,10 @@
 <?php
 
-declare(strict_types=1);
 
-namespace DreamFactory\McpServer\Tools;
 
-use DreamFactory\McpServer\DreamFactoryService;
+namespace DreamFactory\Core\McpServer\Tools;
+
+use DreamFactory\Core\McpServer\DreamFactoryService;
 use Mcp\Capability\Attribute\McpTool;
 
 final class GetTablesTool
@@ -29,3 +29,4 @@ final class GetTablesTool
         ];
     }
 }
+
