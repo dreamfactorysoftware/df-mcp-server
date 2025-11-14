@@ -1,7 +1,5 @@
 <?php
 
-
-
 namespace DreamFactory\Core\McpServer\Tools;
 
 use Mcp\Capability\Attribute\McpTool;

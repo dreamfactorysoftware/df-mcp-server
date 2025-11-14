@@ -1,8 +1,6 @@
 <?php
 
-
-
-namespace DreamFactory\McpServer;
+namespace DreamFactory\Core\McpServer\Services;
 
 final class DreamFactoryService
 {

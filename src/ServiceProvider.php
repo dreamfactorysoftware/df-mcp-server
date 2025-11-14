@@ -30,7 +30,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                         'name'            => 'mcp',
                         'label'           => 'MCP Server Service',
                         'description'     => 'MCP Server service for Model Context Protocol.',
-                        'group'           => ServiceTypeGroups::MCP,
+                        'group'           => ServiceTypeGroups::EMAIL,
                         'config_handler'  => McpServerConfig::class,
                         'factory'         => function ($config) {
                             return new Mcp($config);

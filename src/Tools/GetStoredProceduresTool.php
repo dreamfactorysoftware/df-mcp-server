@@ -4,7 +4,7 @@
 
 namespace DreamFactory\Core\McpServer\Tools;
 
-use DreamFactory\Core\McpServer\DreamFactoryService;
+use DreamFactory\Core\McpServer\Services\DreamFactoryService;
 use Mcp\Capability\Attribute\McpTool;
 
 final class GetStoredProceduresTool

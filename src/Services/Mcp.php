@@ -3,7 +3,7 @@
 namespace DreamFactory\Core\McpServer\Services;
 
 use DreamFactory\Core\Services\BaseRestService;
-use DreamFactory\McpServer\DreamFactoryService;
+use DreamFactory\Core\McpServer\Services\DreamFactoryService;
 use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
 use Mcp\Server;
