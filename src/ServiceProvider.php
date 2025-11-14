@@ -3,6 +3,7 @@
 namespace DreamFactory\Core\McpServer;
 
 use DreamFactory\Core\McpServer\Models\McpServerConfig;
+use DreamFactory\Core\McpServer\Services\Mcp;
 use Illuminate\Support\Facades\Route;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Services\ServiceManager;
@@ -26,13 +27,13 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             $df->addType(
                 new ServiceType(
                     [
-                        'name'            => 'mcp_server',
+                        'name'            => 'mcp',
                         'label'           => 'MCP Server Service',
-                        'description'     => 'MCP Server service.',
+                        'description'     => 'MCP Server service for Model Context Protocol.',
                         'group'           => ServiceTypeGroups::MCP,
                         'config_handler'  => McpServerConfig::class,
                         'factory'         => function ($config) {
-                            return new Local($config);
+                            return new Mcp($config);
                         },
                     ]));
         });

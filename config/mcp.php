@@ -53,5 +53,7 @@ return [
     ],
     
     'server_ttl_seconds' => 1800,
+
+    'mcp_route_prefix' => 'mcp'
 ];
 
