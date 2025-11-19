@@ -30,7 +30,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                         'name'            => 'mcp',
                         'label'           => 'MCP Server Service',
                         'description'     => 'MCP Server service for Model Context Protocol.',
-                        'group'           => ServiceTypeGroups::EMAIL,
+                        'group'           => ServiceTypeGroups::MCP,
                         'config_handler'  => McpServerConfig::class,
                         'factory'         => function ($config) {
                             return new Mcp($config);
@@ -46,11 +46,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         // Load migrations
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
-
-        // Load routes
-        if (!$this->app->routesAreCached()) {
-            include __DIR__ . '/../routes/api.php';
-        }
     }
 }
 

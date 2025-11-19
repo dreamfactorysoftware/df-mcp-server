@@ -2,12 +2,16 @@
 
 namespace DreamFactory\Core\McpServer\Services;
 
+use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Services\BaseRestService;
-use DreamFactory\Core\McpServer\Services\DreamFactoryService;
 use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\Exceptions\InternalServerErrorException;
+use DreamFactory\Core\Utility\ResourcesWrapper;
+use DreamFactory\Core\Utility\ServiceResponse;
+use Illuminate\Support\Facades\Log;
 use Mcp\Server;
-use ReflectionClass;
+use Mcp\Server\Session\FileSessionStore;
+use Symfony\Component\Uid\Uuid;
 
 class Mcp extends BaseRestService
 {
@@ -18,10 +22,20 @@ class Mcp extends BaseRestService
         parent::__construct($settings);
 
         // Set MCP server if configuration is available
-        // Similar to how BaseService sets transport in constructor
         $config = $this->getConfig();
         if (!empty($config['api_name'])) {
-            $this->setMcpServer($config);
+            try {
+                $this->setMcpServer($config);
+            } catch (\Exception $e) {
+                \Log::error('Failed to initialize MCP server', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+            }
+        } else {
+            \Log::warning('MCP service created without api_name configuration', [
+                'config_keys' => array_keys($config ?? [])
+            ]);
         }
     }
 
@@ -50,14 +64,101 @@ class Mcp extends BaseRestService
     }
 
     /**
+     * Get service name from request or config
+     * serviceName is set by BaseRestService during request handling,
+     * but may not be available in constructor
+     */
+    protected function getServiceName(): string
+    {
+        // First try to get from BaseRestService property (set during request handling)
+        if (isset($this->serviceName) && !empty($this->serviceName) && $this->serviceName !== 'unknown') {
+            return $this->serviceName;
+        }
+
+        // Try to get from request
+        $request = $this->request ?? request();
+        if ($request) {
+            // ServiceRequest doesn't have segment(), so extract from path or URI
+            try {
+                // Try to get path from request
+                $path = method_exists($request, 'path') ? $request->path() : null;
+                if (!$path && method_exists($request, 'getPathInfo')) {
+                    $path = $request->getPathInfo();
+                }
+                if (!$path && method_exists($request, 'getUri')) {
+                    $uri = $request->getUri();
+                    $path = is_string($uri) ? parse_url($uri, PHP_URL_PATH) : $uri->getPath();
+                }
+                
+                if ($path) {
+                    $parts = explode('/', trim($path, '/'));
+                    // Look for service name after 'v2' in path like 'api/v2/{serviceName}'
+                    $v2Index = array_search('v2', $parts);
+                    if ($v2Index !== false && isset($parts[$v2Index + 1])) {
+                        $serviceName = $parts[$v2Index + 1];
+                        if ($serviceName && $serviceName !== 'api' && $serviceName !== 'v2') {
+                            return $serviceName;
+                        }
+                    }
+                    // Alternative: if path starts with api/v2/, service name is at index 2
+                    if (isset($parts[0]) && $parts[0] === 'api' && isset($parts[1]) && $parts[1] === 'v2' && isset($parts[2])) {
+                        return $parts[2];
+                    }
+                }
+            } catch (\Exception $e) {
+                // Ignore extraction failures and fall back to other strategies
+            }
+        }
+
+        // Fallback to api_name from config
+        $apiName = $this->getApiName();
+        if ($apiName) {
+            return $apiName;
+        }
+
+        return 'unknown';
+    }
+
+    /**
      * Handle GET request - Get MCP server information or handle MCP protocol requests
      */
     protected function handleGET()
     {
+
+        $accept = null;
+
+        if (($this->request ?? null) instanceof \Symfony\Component\HttpFoundation\Request) {
+            $accept = $this->request->getHeader('Accept');
+        } else {
+            $accept = request()->header('Accept');
+        }
+
+        if (is_string($accept) && str_contains($accept, 'text/event-stream')) {
+            $sr = new ServiceResponse();
+            $sr->setStatusCode(200);
+            $sr->setContent('');
+            $sr->setContentType('text/event-stream');
+            $sr->setHeaders(['Content-Type' => 'text/event-stream']);
+
+            return $sr;
+        }
+
+        if ($this->request->getParameterAsBool(ApiOptions::AS_ACCESS_LIST)) {
+            return ResourcesWrapper::wrapResources($this->getAccessList());
+        }
         // Check if this is an MCP protocol request (has jsonrpc in payload)
         $payload = $this->getPayloadData();
+
         if ($this->isMcpRequest($payload)) {
             return $this->handleMcpRequest();
+        }
+
+        // If payload exists, try to handle as MCP request anyway
+        if ($payload !== null && !empty($payload)) {
+            try {
+                return $this->handleMcpRequest();
+            } catch (\Exception $e) {
+            }
         }
 
         // Standard GET - return service info
@@ -66,15 +167,17 @@ class Mcp extends BaseRestService
         $role = $this->getRole();
 
         if (!$apiName || !$apiKey) {
-            throw new BadRequestException('API name and API key must be configured for this service');
+            throw new BadRequestException('API name and API key must be configured for this service. Please configure the service with api_name and api_key settings.');
         }
 
+        $serviceId = $this->id;
+
         return [
-            'service_id' => $this->serviceId,
+            'service_id' => $serviceId,
             'api_name' => $apiName,
-            'api_key' => '***', // Mask API key for security
+            'api_key' => $apiKey,
             'role' => $role,
-            'mcp_endpoint' => url('/api/v2/' . $this->serviceName),
+            'mcp_endpoint' => url('/api/v2/' . $this->getServiceName()),
         ];
     }
 
@@ -83,10 +186,42 @@ class Mcp extends BaseRestService
      */
     protected function handlePOST()
     {
-        // Check if this is an MCP protocol request (has jsonrpc in payload)
-        $payload = $this->getPayloadData();
-        if ($this->isMcpRequest($payload)) {
-            return $this->handleMcpRequest();
+        try {
+            // Check if this is an MCP protocol request (has jsonrpc in payload)
+            $payload = $this->getPayloadData();
+
+            \Log::info('MCP POST request payload', [
+                'payload' => $payload,
+                'payload_type' => gettype($payload),
+                'is_mcp_request' => $payload !== null && is_array($payload) ? $this->isMcpRequest($payload) : false,
+                'raw_body' => substr($this->request->getContent(), 0, 500), // First 500 chars
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Mcp service: Failed to get payload', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
+
+        // For POST requests, prioritize MCP protocol handling
+        // MCP client sends POST requests with JSON-RPC protocol
+        if ($payload !== null && is_array($payload)) {
+            // Check if it's a JSON-RPC request (MCP protocol)
+            if ($this->isMcpRequest($payload)) {
+                return $this->handleMcpRequest();
+            }
+            
+            // If payload looks like JSON-RPC (has method or id), try MCP handling
+            if (isset($payload['method']) || isset($payload['id']) || isset($payload['jsonrpc'])) {
+                try {
+                    \Log::info('Attempting MCP handling for JSON-RPC-like request');
+                    return $this->handleMcpRequest();
+                } catch (\Exception $e) {
+                    \Log::warning('MCP handling failed', ['error' => $e->getMessage()]);
+                    // If MCP handling fails, fall through to standard POST
+                }
+            }
         }
 
         // Standard POST - sync configuration to registry
@@ -95,7 +230,7 @@ class Mcp extends BaseRestService
         $role = $this->getRole();
 
         if (!$apiName || !$apiKey) {
-            throw new BadRequestException('API name and API key must be configured for this service');
+            throw new BadRequestException('API name and API key must be configured for this service. Please configure the service with api_name and api_key settings.');
         }
 
         // Rebuild MCP server with updated config
@@ -108,7 +243,7 @@ class Mcp extends BaseRestService
             'server' => [
                 'api_name' => $apiName,
                 'role' => $this->getRole(),
-                'mcp_endpoint' => url('/api/v2/' . $this->serviceName),
+                'mcp_endpoint' => url('/api/v2/' . $this->getServiceName()),
             ],
         ];
     }
@@ -129,10 +264,15 @@ class Mcp extends BaseRestService
     protected function handleMcpRequest()
     {
         try {
+            $payload = $this->getPayloadData();
             $apiName = $this->getApiName();
 
             if (!$apiName) {
-                throw new BadRequestException('API name not configured for this service');
+                \Log::error('MCP request failed: API name not configured', [
+                    'service_name' => $this->getServiceName(),
+                    'config' => $this->config ?? null
+                ]);
+                throw new BadRequestException('API name not configured for this service. Please configure the service with api_name setting.');
             }
 
             // Get MCP Server instance (using getMcpServer method)
@@ -147,11 +287,56 @@ class Mcp extends BaseRestService
             // Run MCP server
             $psrResponse = $mcpServer->run($transport);
 
+            // Check if SDK returned session ID in response headers
+            $sessionId = $psrResponse->getHeaderLine('mcp-session-id');
+
             // Convert PSR-7 response to array
-            return $this->psrResponseToArray($psrResponse);
+            $response = $this->psrResponseToArray($psrResponse);
+
+            if (isset($response['result']['capabilities']) && is_array($response['result']['capabilities'])) {
+                $caps = &$response['result']['capabilities'];
+
+                foreach (['tools', 'prompts', 'resources', 'logging', 'completions'] as $key) {
+                    if (array_key_exists($key, $caps) && $caps[$key] === []) {
+                        $caps[$key] = (object)[];
+                    }
+                }
+
+                if (!array_key_exists('tools', $caps)) {
+                    $caps['tools'] = (object)[];
+                }
+            }
+            
+            // Log response for debugging
+            $method = $payload['method'] ?? 'unknown';
+            \Log::info('MCP response', [
+                'method' => $method,
+                'response_keys' => array_keys($response),
+                'has_result' => isset($response['result']),
+                'has_error' => isset($response['error']),
+                'session_id' => $sessionId ?: 'none',
+                'response_preview' => json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            ]);
+            
+            // If we have a session ID, add it to response headers
+            $jsonResponse = response()->json($response);
+            if (!empty($sessionId)) {
+                $jsonResponse->header('mcp-session-id', $sessionId);
+            }
+            
+            return $jsonResponse;
         } catch (BadRequestException $e) {
+            \Log::error('MCP request BadRequestException', [
+                'error' => $e->getMessage(),
+                'api_name' => $this->getApiName() ?? 'unknown'
+            ]);
             throw $e;
         } catch (\Exception $e) {
+            \Log::error('Failed to handle MCP request', [
+                'error' => $e->getMessage(),
+                'api_name' => $this->getApiName() ?? 'unknown',
+                'trace' => $e->getTraceAsString()
+            ]);
             throw new InternalServerErrorException('Failed to handle MCP request: ' . $e->getMessage());
         }
     }
@@ -162,8 +347,39 @@ class Mcp extends BaseRestService
     protected function createPsrRequest()
     {
         try {
+            // Check if required classes are available
+            if (!class_exists(\Nyholm\Psr7\Factory\Psr17Factory::class)) {
+                throw new InternalServerErrorException(
+                    'PSR-7 factory not found. Please install required dependencies: ' .
+                    'composer require nyholm/psr7 symfony/psr-http-message-bridge'
+                );
+            }
+
+            if (!class_exists(\Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory::class)) {
+                throw new InternalServerErrorException(
+                    'PSR HTTP Message Bridge not found. Please install: ' .
+                    'composer require symfony/psr-http-message-bridge'
+                );
+            }
+
             $psr17Factory = new \Nyholm\Psr7\Factory\Psr17Factory();
-            $request = $this->request ?? request();
+
+            // Convert DreamFactory ServiceRequest to Symfony Request if needed
+            $symfonyRequest = null;
+            if (($this->request ?? null) instanceof \Symfony\Component\HttpFoundation\Request) {
+                $symfonyRequest = $this->request;
+            } else {
+                $illuminateRequest = request();
+                if ($illuminateRequest instanceof \Symfony\Component\HttpFoundation\Request) {
+                    $symfonyRequest = $illuminateRequest;
+                }
+            }
+
+            if (!$symfonyRequest instanceof \Symfony\Component\HttpFoundation\Request) {
+                throw new InternalServerErrorException(
+                    'Unable to access HTTP request instance required for MCP transport.'
+                );
+            }
 
             $psrHttpFactory = new \Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory(
                 $psr17Factory,
@@ -172,7 +388,9 @@ class Mcp extends BaseRestService
                 $psr17Factory
             );
 
-            return $psrHttpFactory->createRequest($request);
+            return $psrHttpFactory->createRequest($symfonyRequest);
+        } catch (InternalServerErrorException $e) {
+            throw $e;
         } catch (\Exception $e) {
             throw new InternalServerErrorException('Failed to create PSR-7 request: ' . $e->getMessage());
         }
@@ -185,8 +403,11 @@ class Mcp extends BaseRestService
     {
         $psr17Factory = new \Nyholm\Psr7\Factory\Psr17Factory();
 
-        // Add mcp-session-id header
-        $psrRequest = $psrRequest->withHeader('mcp-session-id', $apiName);
+        // Let SDK handle session creation automatically
+        // If client provides mcp-session-id, it will be used
+        // If not, SDK will create a new session on initialize
+        // Only add service name header for tracking
+        $psrRequest = $psrRequest->withHeader('mcp-service-name', $apiName);
 
         return new \Mcp\Server\Transport\StreamableHttpTransport(
             $psrRequest,
@@ -241,11 +462,9 @@ class Mcp extends BaseRestService
      */
     protected function buildMcpServer(string $apiName, string $apiKey): Server
     {
-        // Construct baseUrl from apiName: /api/v2/{apiName}
         $appUrl = rtrim(config('app.url', ''), '/');
         $baseUrl = $appUrl . '/api/v2/' . $apiName;
 
-        // Create DreamFactoryService with the baseUrl for this API instance
         $dreamFactoryService = new DreamFactoryService($baseUrl, $apiKey);
 
         $builder = Server::builder();
@@ -253,55 +472,38 @@ class Mcp extends BaseRestService
 
         foreach ($toolsConfig as $toolClass => $methods) {
             if (!class_exists($toolClass)) {
+                \Log::warning('Tool class does not exist', ['class' => $toolClass]);
                 continue;
             }
 
-            $instance = $this->instantiateTool($toolClass, $dreamFactoryService);
-
             foreach ($methods as $method => $toolName) {
-                if (method_exists($instance, $method)) {
-                    $builder->addTool([$instance, $method], $toolName);
+                if (!method_exists($toolClass, $method)) {
+                    continue;
+                }
+
+                try {
+                    $builder->addTool([$toolClass, $method], $toolName);
+                } catch (\Exception $e) {
+                    \Log::error('Failed to register tool', [
+                        'tool'   => $toolName,
+                        'class'  => $toolClass,
+                        'method' => $method,
+                        'error'  => $e->getMessage(),
+                        'trace'  => $e->getTraceAsString(),
+                    ]);
                 }
             }
         }
 
         $builder->setServerInfo("DreamFactory MCP ({$apiName})", '1.0.0');
 
+        $sessionPath = storage_path('app/mcp-sessions');
+        if (!is_dir($sessionPath)) {
+            @mkdir($sessionPath, 0755, true);
+        }
+        $builder->setSession(new FileSessionStore($sessionPath));
+
         return $builder->build();
-    }
-
-    /**
-     * Instantiate tool with DreamFactoryService injection
-     */
-    protected function instantiateTool(string $className, DreamFactoryService $dreamFactoryService): object
-    {
-        $reflection = new ReflectionClass($className);
-        $constructor = $reflection->getConstructor();
-
-        if ($constructor === null) {
-            return new $className();
-        }
-
-        $parameters = $constructor->getParameters();
-
-        if (count($parameters) >= 1) {
-            $firstParam = $parameters[0];
-            $firstParamType = $firstParam->getType();
-            $firstParamTypeName = $firstParamType instanceof \ReflectionNamedType
-                ? $firstParamType->getName()
-                : null;
-
-            if ($firstParamTypeName === DreamFactoryService::class ||
-                ($firstParam->allowsNull() && $firstParamTypeName === null)) {
-                try {
-                    return new $className($dreamFactoryService);
-                } catch (\Throwable $e) {
-                    // Fall through to next attempt
-                }
-            }
-        }
-
-        return new $className();
     }
 
     /**
