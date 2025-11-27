@@ -16,7 +16,6 @@ return new class extends Migration
                     $table->foreign('service_id')->references('id')->on('service')->onDelete('cascade');
                     $table->string('api_key', 255)->index();
                     $table->string('api_name', 255)->index();
-                    $table->string('role', 255)->nullable();
                     $table->timestamps();
                     $table->softDeletes();
             });

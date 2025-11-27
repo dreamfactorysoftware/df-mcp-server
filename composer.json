@@ -12,8 +12,7 @@
   "require": {
     "php": ">=8.3",
     "mcp/sdk": "dev-main",
-    "nyholm/psr7": "^1.8",
-    "symfony/psr-http-message-bridge": "^6.0|^7.0"
+    "guzzlehttp/guzzle": "^7.0"
   },
   "autoload": {
     "psr-4": {

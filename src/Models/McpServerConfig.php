@@ -2,7 +2,9 @@
 
 namespace DreamFactory\Core\McpServer\Models;
 
+use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Models\BaseServiceConfigModel;
+use ServiceManager;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
@@ -16,7 +18,6 @@ class McpServerConfig extends BaseServiceConfigModel
         'service_id',
         'api_name',
         'api_key',
-        'role',
     ];
 
     protected $casts = [
@@ -32,16 +33,26 @@ class McpServerConfig extends BaseServiceConfigModel
 
         switch ($schema['name']) {
             case 'api_name':
+                $services = ServiceManager::getServiceListByGroup(ServiceTypeGroups::DATABASE, ['name'], true);
+
+                $apinSvcList = [
+                    [
+                        'label' => '',
+                        'name'  => null
+                    ]
+                ];
+                foreach ($services as $service) {
+                    $apinSvcList[] = ['label' => array_get($service, 'name'), 'name' => array_get($service, 'name')];
+                }
+
+                $schema['type'] = 'picklist';
+                $schema['values'] = $apinSvcList;
                 $schema['label'] = 'API Name';
                 $schema['description'] = 'Your Dreamfactory API name.';
                 break;
             case 'api_key':
                 $schema['label'] = 'API Key';
                 $schema['description'] = 'Dreamfactory API Key.';
-                break;
-            case 'role':
-                $schema['label'] = 'Role';
-                $schema['description'] = 'Dreamfactory Role for selected API Key.';
                 break;
         }
     }
