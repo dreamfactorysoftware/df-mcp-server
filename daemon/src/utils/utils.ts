@@ -29,8 +29,8 @@ export function updateSessionConfigFromHeaders(
 
   try {
     const parsed = JSON.parse(configHeader);
-    const apiKey = parsed?.api_key;
-    if (typeof apiKey === 'string' && apiKey.length > 0) {
+    const apiKey = extractApiKey(parsed);
+    if (apiKey) {
       sessionManager.setConfig(sessionId, { url: baseUrl, apiKey });
     }
   } catch (error) {
@@ -38,7 +38,7 @@ export function updateSessionConfigFromHeaders(
   }
 }
 
-export function parseConfigFromHeaders(req: Request, serviceName: string) {
+export function parseConfigFromHeaders(req: Request) {
   const configHeader = req.header('X-Mcp-Config');
   const baseUrl = req.header('X-Mcp-Base-Url');
 
@@ -49,12 +49,15 @@ export function parseConfigFromHeaders(req: Request, serviceName: string) {
     throw new Error('X-Mcp-Base-Url header required for initialization requests');
   }
 
-  const parsed = JSON.parse(configHeader);
-  const apiKey = parsed?.api_key;
-  const apiName = parsed?.api_name ?? serviceName;
+  const configObject = resolveConfig(JSON.parse(configHeader));
+  const apiKey = extractApiKey(configObject);
+  const apiName = extractApiName(configObject);
 
   if (!apiKey) {
     throw new Error('API key is required for MCP service');
+  }
+  if (!apiName) {
+    throw new Error('api_name is required for MCP service');
   }
 
   return {
@@ -62,6 +65,43 @@ export function parseConfigFromHeaders(req: Request, serviceName: string) {
     apiName,
     baseUrl
   };
+}
+
+function resolveConfig(payload: unknown): Record<string, unknown> {
+  if (!isRecord(payload)) {
+    throw new Error('X-Mcp-Config header must be a JSON object');
+  }
+
+  const nested = payload.config;
+  if (isRecord(nested)) {
+    return nested;
+  }
+
+  return payload;
+}
+
+function extractApiKey(config: Record<string, unknown>): string | undefined {
+  return extractString(config?.api_key ?? config?.apiKey);
+}
+
+function extractApiName(config: Record<string, unknown>): string | undefined {
+  return extractString(config?.api_name, config?.apiName);
+}
+
+function extractString(...values: Array<unknown>): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 export function createServer(

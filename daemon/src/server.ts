@@ -88,7 +88,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       return;
     }
 
-    const config = parseConfigFromHeaders(req, serviceName);
+    const config = parseConfigFromHeaders(req);
     const server = createServer(serviceName, config.baseUrl, sessionManager);
 
     const transport = new StreamableHTTPServerTransport({

@@ -41,7 +41,14 @@ class McpStreamController extends Controller
             ], 404)->withHeaders($this->corsHeaders());
         }
 
-        $apiName = $config['api_name'] ?? $mcpService;
+        $apiName = $config['api_name'] ?? null;
+        if (empty($apiName)) {
+            Log::error('MCP service missing api_name', ['mcpService' => $mcpService]);
+            return response()->json([
+                'error' => 'MCP service misconfigured: api_name is required',
+                'service' => $mcpService,
+            ], 422)->withHeaders($this->corsHeaders());
+        }
         
         // Determine scheme - prioritize X-Forwarded-Proto (for proxies like ngrok)
         $scheme = $request->header('X-Forwarded-Proto');
@@ -96,9 +103,6 @@ class McpStreamController extends Controller
             if (method_exists($service, 'getConfig')) {
                 $config = $service->getConfig();
                 // Ensure api_name is set (use service name as fallback)
-                if (empty($config['api_name'])) {
-                    $config['api_name'] = $mcpService;
-                }
                 return $config;
             }
         } catch (\Throwable $e) {
