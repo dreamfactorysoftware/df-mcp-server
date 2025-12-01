@@ -9,7 +9,6 @@
     "skipLibCheck": true,
     "rootDir": "src",
     "outDir": "dist",
-    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "types": [
       "node"

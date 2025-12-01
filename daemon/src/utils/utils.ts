@@ -2,7 +2,7 @@ import { Request } from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SessionService } from '../services/session.service.js';
 import { registerDreamFactoryTools } from '../services/tools.service.js';
-import { version } from '../../package.json'
+import packageJson from '../../package.json' with { type: 'json' };
 
 export function getSessionId(req: Request): string | undefined {
   const header = req.headers['mcp-session-id'];
@@ -80,7 +80,7 @@ export function createServer(
   const server = new McpServer(
     {
       name: `DreamFactory MCP (${serviceName})`,
-      version: version ?? 'dev'
+      version: (packageJson as { version?: string })?.version ?? 'dev'
     },
     {
       instructions

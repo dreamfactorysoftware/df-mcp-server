@@ -53,38 +53,6 @@ npm start
 - `X-Mcp-Config`: JSON with `{"api_name": "...", "api_key": "..."}`
 - `X-Mcp-Base-Url`: Base URL for DreamFactory API
 
-## Systemd Service
-
-Create `/etc/systemd/system/mcp-daemon.service`:
-
-```ini
-[Unit]
-Description=MCP Daemon Server (Node.js)
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=/path/to/df-mcp-server/daemon
-Environment="NODE_ENV=production"
-Environment="MCP_DAEMON_HOST=127.0.0.1"
-Environment="MCP_DAEMON_PORT=8006"
-ExecStart=/usr/bin/node server.js
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable mcp-daemon
-sudo systemctl start mcp-daemon
-sudo systemctl status mcp-daemon
-```
-
 ## DreamFactory Configuration
 
 Update DreamFactory `.env`:
