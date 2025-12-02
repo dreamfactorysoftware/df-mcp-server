@@ -34,11 +34,7 @@ class Mcp extends BaseRestService
 
     protected function getServiceName(): string
     {
-        if (isset($this->serviceName) && !empty($this->serviceName) && $this->serviceName !== 'unknown') {
-            return $this->serviceName;
-        }
-
-        return $this->getApiName() ?? 'unknown';
+        return $this->name;
     }
 
     protected function handleGET()
