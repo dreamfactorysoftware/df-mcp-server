@@ -11,7 +11,6 @@
   ],
   "require": {
     "php": ">=8.3",
-    "mcp/sdk": "dev-main",
     "guzzlehttp/guzzle": "^7.0"
   },
   "autoload": {

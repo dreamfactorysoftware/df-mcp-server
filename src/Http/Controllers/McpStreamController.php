@@ -60,9 +60,7 @@ class McpStreamController extends Controller
         $host = $request->getHttpHost();
         if ($scheme === 'https' || 
             $request->secure() || 
-            str_starts_with($request->fullUrl(), 'https://') ||
-            str_contains($host, 'ngrok.app') ||
-            str_contains($host, 'ngrok.io')) {
+            str_starts_with($request->fullUrl(), 'https://')) {
             $scheme = 'https';
         } else {
             $scheme = 'http';
@@ -99,10 +97,8 @@ class McpStreamController extends Controller
             $serviceManager = app('df.service');
             $service = $serviceManager->getService($mcpService);
 
-            // Get config from service (BaseRestService has getConfig method)
             if (method_exists($service, 'getConfig')) {
                 $config = $service->getConfig();
-                // Ensure api_name is set (use service name as fallback)
                 return $config;
             }
         } catch (\Throwable $e) {

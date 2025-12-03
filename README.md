@@ -14,6 +14,32 @@ Edit your project’s composer.json to require the following package.
 		"dreamfactory/df-mcp-server": "~0.1.0"
 	}
 
+Save your composer.json and do a "composer update" to install the package.
+
+### MCP Daemon process
+The Laravel package proxies every MCP request through a persistent Node.js daemon that keeps long-lived MCP server instances warm.  
+
+1. Install dependencies  
+   ```
+   cd daemon
+   npm install
+   ```
+2. Configure the daemon host/port (or use defaults) and point DreamFactory to it by adding the following to your `.env` file:  
+   ```
+   MCP_DAEMON_ENABLED=true
+   MCP_DAEMON_URL=http://127.0.0.1:8006
+   ```
+3. Start the daemon (choose the mode you need):  
+   ```
+   # Development
+   npm run dev
+
+   # Production
+   npm start
+   ```
+
+Once the daemon is online, the MCP routes in DreamFactory automatically forward traffic to it. See `daemon/README.md` for advanced options and management endpoints.
+
 ## Feedback and Contributions
 
 * Feedback is welcome in the form of pull requests and/or issues.
