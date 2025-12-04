@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Login - DreamFactory MCP</title>
+  <style>
+    body { font-family: system-ui; max-width: 500px; margin: 100px auto; padding: 20px; text-align: center; }
+    .btn { display: block; width: 100%; padding: 15px; margin: 10px 0; text-align: center;
+           text-decoration: none; border-radius: 5px; font-size: 16px; cursor: pointer; border: none; }
+    .btn-df { background: #6366f1; color: white; }
+    .btn-df:hover { background: #4f46e5; }
+    .btn-local { background: #64748b; color: white; }
+    .btn-local:hover { background: #475569; }
+    .divider { text-align: center; margin: 20px 0; color: #666; }
+    input { width: 100%; padding: 10px; margin: 10px 0; box-sizing: border-box; }
+    .local-form { margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; text-align: left; }
+    .status { margin: 20px 0; padding: 15px; border-radius: 5px; display: none; }
+    .status.waiting { display: block; background: #fef3c7; color: #92400e; }
+    .status.success { display: block; background: #d1fae5; color: #065f46; }
+    .status.error { display: block; background: #fee2e2; color: #991b1b; }
+    .token-input { margin: 20px 0; }
+  </style>
+</head>
+<body>
+  <h2>Sign in to DreamFactory</h2>
+  <p>Connect your DreamFactory account to continue</p>
+
+  <div id="status" class="status"></div>
+
+  <!-- Option 1: Open DF login in new tab -->
+  <button onclick="openDFLogin()" class="btn btn-df">
+    Open DreamFactory Login
+  </button>
+
+  <div class="token-input">
+    <p style="color: #666; font-size: 14px;">After logging into DreamFactory, paste your session token below:</p>
+    <input type="text" id="session_token" placeholder="Paste session token from DreamFactory" />
+    <button onclick="submitToken()" class="btn btn-df" style="margin-top: 10px;">
+      Continue with Token
+    </button>
+  </div>
+
+  <p class="divider">— or use local credentials —</p>
+
+  <!-- Option 2: Local Login Form -->
+  <form method="POST" action="{{LOGIN_URL}}" class="local-form">
+    <input type="hidden" name="client_id" value="{{CLIENT_ID}}" />
+    <input type="hidden" name="redirect_uri" value="{{REDIRECT_URI}}" />
+    <input type="hidden" name="state" value="{{AUTH_STATE}}" />
+    <input type="hidden" name="code_challenge" value="{{CODE_CHALLENGE}}" />
+    <input type="hidden" name="code_challenge_method" value="S256" />
+
+    <input type="email" name="email" placeholder="Email" required />
+    <input type="password" name="password" placeholder="Password" required />
+    <button type="submit" class="btn btn-local">Sign In with Email/Password</button>
+  </form>
+
+  <script>
+    const dfUrl = "{{DF_URL}}";
+    const authState = "{{AUTH_STATE}}";
+    const redirectUri = "{{REDIRECT_URI}}";
+    const clientId = "{{CLIENT_ID}}";
+    const codeChallenge = "{{CODE_CHALLENGE}}";
+    const originalState = "{{ORIGINAL_STATE}}";
+    const dfCallbackUrl = "{{DF_CALLBACK_URL}}";
+
+    function openDFLogin() {
+      // Open DreamFactory login in new tab
+      window.open(dfUrl, '_blank');
+      showStatus('waiting', 'DreamFactory login opened in new tab. After logging in, copy your session token from browser DevTools (Application > Local Storage > session_token) and paste it above.');
+    }
+
+    function showStatus(type, message) {
+      const status = document.getElementById('status');
+      status.className = 'status ' + type;
+      status.textContent = message;
+    }
+
+    async function submitToken() {
+      const token = document.getElementById('session_token').value.trim();
+      if (!token) {
+        showStatus('error', 'Please enter a session token');
+        return;
+      }
+
+      showStatus('waiting', 'Verifying token...');
+
+      try {
+        // Submit token to our callback endpoint
+        const response = await fetch(dfCallbackUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_token: token,
+            state: authState,
+            client_id: clientId,
+            redirect_uri: redirectUri,
+            code_challenge: codeChallenge,
+            original_state: originalState
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.redirect) {
+          showStatus('success', 'Success! Redirecting...');
+          window.location.href = data.redirect;
+        } else {
+          showStatus('error', data.error || 'Failed to verify token');
+        }
+      } catch (err) {
+        showStatus('error', 'Error: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>
