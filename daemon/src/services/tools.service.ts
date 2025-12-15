@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { DreamFactoryService } from './dreamfactory.service.js';
+import { DreamFactoryService, type DFAuthConfig } from './dreamfactory.service.js';
 import { SessionService } from './session.service.js';
 
 type ToolResponse = {
@@ -48,18 +48,32 @@ const handleError = (error: unknown, operation: string): string => {
 };
 
 export function registerDreamFactoryTools(server: McpServer, sessionManager: SessionService) {
-  const getSessionConfig = (sessionId?: string) => {
+  const getSessionConfig = (sessionId?: string): { url: string; auth: DFAuthConfig } => {
     const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
     const url = sessionConfig?.url ?? process.env.DREAMFACTORY_URL ?? '';
     const apiKey = sessionConfig?.apiKey ?? process.env.DREAMFACTORY_API_KEY ?? '';
+    const sessionToken = sessionConfig?.sessionToken;
 
-    if (!url || !apiKey) {
+    // DEBUG
+    console.log('[Tools] getSessionConfig:', {
+      sessionId,
+      hasSessionConfig: !!sessionConfig,
+      url: url ? url.substring(0, 50) + '...' : 'none',
+      hasApiKey: !!apiKey,
+      hasSessionToken: !!sessionToken,
+      sessionTokenPreview: sessionToken ? sessionToken.substring(0, 30) + '...' : 'none',
+    });
+
+    if (!url || (!apiKey && !sessionToken)) {
       throw new Error(
         'DreamFactory configuration not found. Please ensure DREAMFACTORY_URL and DREAMFACTORY_API_KEY are configured either in the session or process environment.'
       );
     }
 
-    return { url, apiKey };
+    return {
+      url,
+      auth: { apiKey, sessionToken }
+    };
   };
 
   const tool = (
@@ -89,7 +103,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
 
   tool('get_tables', 'List Tables', 'Get tables available in the database', z.object({}), async (_args, { sessionId }) => {
     const config = getSessionConfig(sessionId);
-    const data = await DreamFactoryService.getTables(config.url, config.apiKey);
+    const data = await DreamFactoryService.getTables(config.url, config.auth);
     return respond('Tables available in the database:', data);
   });
 
@@ -100,7 +114,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     z.object({ tableName: z.string() }),
     async ({ tableName }, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.getTableSchema(tableName, config.url, config.apiKey);
+      const data = await DreamFactoryService.getTableSchema(tableName, config.url, config.auth);
       return respond(`Schema for table ${tableName}:`, data);
     }
   );
@@ -126,7 +140,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     }),
     async (args, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.getTableData(config.url, config.apiKey, args);
+      const data = await DreamFactoryService.getTableData(config.url, config.auth, args);
       return respond(`Data for table ${args.tableName}:`, data);
     }
   );
@@ -145,7 +159,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     }),
     async ({ tableName, records, ...options }, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.createRecords(tableName, config.url, config.apiKey, records, options);
+      const data = await DreamFactoryService.createRecords(tableName, config.url, config.auth, records, options);
       return respond(`Records created in table ${tableName}:`, data);
     }
   );
@@ -166,7 +180,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     }),
     async ({ tableName, records, ...options }, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.updateRecords(tableName, config.url, config.apiKey, records, options);
+      const data = await DreamFactoryService.updateRecords(tableName, config.url, config.auth, records, options);
       return respond(`Records updated in table ${tableName}:`, data);
     }
   );
@@ -187,7 +201,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     }),
     async ({ tableName, ...options }, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.deleteRecords(tableName, config.url, config.apiKey, options);
+      const data = await DreamFactoryService.deleteRecords(tableName, config.url, config.auth, options);
       return respond(`Records deleted from table ${tableName}:`, data);
     }
   );
@@ -202,7 +216,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     }),
     async ({ tableName, refresh }, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.getTableFields(tableName, config.url, config.apiKey, refresh);
+      const data = await DreamFactoryService.getTableFields(tableName, config.url, config.auth, refresh);
       return respond(`Fields for table ${tableName}:`, data);
     }
   );
@@ -217,7 +231,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     }),
     async ({ tableName, refresh }, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.getTableRelationships(tableName, config.url, config.apiKey, refresh);
+      const data = await DreamFactoryService.getTableRelationships(tableName, config.url, config.auth, refresh);
       return respond(`Relationships for table ${tableName}:`, data);
     }
   );
@@ -229,7 +243,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     z.object({}),
     async (_args, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.getStoredProcedures(config.url, config.apiKey);
+      const data = await DreamFactoryService.getStoredProcedures(config.url, config.auth);
       return respond('Stored procedures available:', data);
     }
   );
@@ -249,7 +263,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
       const data = await DreamFactoryService.callStoredProcedure(
         procedureName,
         config.url,
-        config.apiKey,
+        config.auth,
         parameters,
         wrapper,
         returns
@@ -265,7 +279,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     z.object({}),
     async (_args, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.getStoredFunctions(config.url, config.apiKey);
+      const data = await DreamFactoryService.getStoredFunctions(config.url, config.auth);
       return respond('Stored functions available:', data);
     }
   );
@@ -281,7 +295,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     }),
     async ({ functionName, parameters, returns }, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.callStoredFunction(functionName, config.url, config.apiKey, parameters, returns);
+      const data = await DreamFactoryService.callStoredFunction(functionName, config.url, config.auth, parameters, returns);
       return respond(`Stored function ${functionName} called successfully:`, data);
     }
   );
@@ -299,7 +313,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     }),
     async (args, { sessionId }) => {
       const config = getSessionConfig(sessionId);
-      const data = await DreamFactoryService.getDatabaseResources(config.url, config.apiKey, args);
+      const data = await DreamFactoryService.getDatabaseResources(config.url, config.auth, args);
       return respond('Database resources:', data);
     }
   );

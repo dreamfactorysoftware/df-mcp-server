@@ -1,15 +1,20 @@
+export type DFAuthConfig = {
+  apiKey: string;
+  sessionToken?: string;
+};
+
 export class DreamFactoryService {
-  static async getTables(baseUrl: string, apiKey: string): Promise<unknown> {
-    return this.request('GET', `${baseUrl}/_schema`, apiKey);
+  static async getTables(baseUrl: string, auth: DFAuthConfig): Promise<unknown> {
+    return this.request('GET', `${baseUrl}/_schema`, auth.apiKey, undefined, undefined, auth.sessionToken);
   }
 
-  static async getTableSchema(tableName: string, baseUrl: string, apiKey: string): Promise<unknown> {
-    return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}`, apiKey);
+  static async getTableSchema(tableName: string, baseUrl: string, auth: DFAuthConfig): Promise<unknown> {
+    return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}`, auth.apiKey, undefined, undefined, auth.sessionToken);
   }
 
   static async getTableData(
     baseUrl: string,
-    apiKey: string,
+    auth: DFAuthConfig,
     options: Record<string, unknown> = {}
   ): Promise<unknown> {
     const params = new URLSearchParams();
@@ -39,71 +44,71 @@ export class DreamFactoryService {
     append('ids', options.ids);
 
     const url = `${baseUrl}/_table/${encodeURIComponent(String(options.tableName ?? ''))}`;
-    return this.request('GET', url, apiKey, params);
+    return this.request('GET', url, auth.apiKey, params, undefined, auth.sessionToken);
   }
 
   static async createRecords(
     tableName: string,
     baseUrl: string,
-    apiKey: string,
+    auth: DFAuthConfig,
     records: Record<string, unknown>[],
     options: Record<string, unknown> = {}
   ): Promise<unknown> {
-    return this.request('POST', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, apiKey, this.buildParams(options), {
+    return this.request('POST', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, auth.apiKey, this.buildParams(options), {
       resource: records
-    });
+    }, auth.sessionToken);
   }
 
   static async updateRecords(
     tableName: string,
     baseUrl: string,
-    apiKey: string,
+    auth: DFAuthConfig,
     records: Record<string, unknown>[],
     options: Record<string, unknown> = {}
   ): Promise<unknown> {
-    return this.request('PATCH', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, apiKey, this.buildParams(options), {
+    return this.request('PATCH', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, auth.apiKey, this.buildParams(options), {
       resource: records
-    });
+    }, auth.sessionToken);
   }
 
   static async deleteRecords(
     tableName: string,
     baseUrl: string,
-    apiKey: string,
+    auth: DFAuthConfig,
     options: Record<string, unknown> = {}
   ): Promise<unknown> {
-    return this.request('DELETE', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, apiKey, this.buildParams(options));
+    return this.request('DELETE', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, auth.apiKey, this.buildParams(options), undefined, auth.sessionToken);
   }
 
-  static async getTableFields(tableName: string, baseUrl: string, apiKey: string, refresh?: boolean): Promise<unknown> {
+  static async getTableFields(tableName: string, baseUrl: string, auth: DFAuthConfig, refresh?: boolean): Promise<unknown> {
     const params = new URLSearchParams();
     if (refresh !== undefined) {
       params.set('refresh', String(refresh));
     }
-    return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}/_field`, apiKey, params);
+    return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}/_field`, auth.apiKey, params, undefined, auth.sessionToken);
   }
 
   static async getTableRelationships(
     tableName: string,
     baseUrl: string,
-    apiKey: string,
+    auth: DFAuthConfig,
     refresh?: boolean
   ): Promise<unknown> {
     const params = new URLSearchParams();
     if (refresh !== undefined) {
       params.set('refresh', String(refresh));
     }
-    return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}/_related`, apiKey, params);
+    return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}/_related`, auth.apiKey, params, undefined, auth.sessionToken);
   }
 
-  static async getStoredProcedures(baseUrl: string, apiKey: string): Promise<unknown> {
-    return this.request('GET', `${baseUrl}/_proc`, apiKey);
+  static async getStoredProcedures(baseUrl: string, auth: DFAuthConfig): Promise<unknown> {
+    return this.request('GET', `${baseUrl}/_proc`, auth.apiKey, undefined, undefined, auth.sessionToken);
   }
 
   static async callStoredProcedure(
     procedureName: string,
     baseUrl: string,
-    apiKey: string,
+    auth: DFAuthConfig,
     parameters?: Record<string, unknown>,
     wrapper?: string,
     returns?: string
@@ -111,31 +116,31 @@ export class DreamFactoryService {
     const params = new URLSearchParams();
     if (wrapper) params.set('wrapper', wrapper);
     if (returns) params.set('returns', returns);
-    return this.request('POST', `${baseUrl}/_proc/${encodeURIComponent(procedureName)}`, apiKey, params, parameters ?? {});
+    return this.request('POST', `${baseUrl}/_proc/${encodeURIComponent(procedureName)}`, auth.apiKey, params, parameters ?? {}, auth.sessionToken);
   }
 
-  static async getStoredFunctions(baseUrl: string, apiKey: string): Promise<unknown> {
-    return this.request('GET', `${baseUrl}/_func`, apiKey);
+  static async getStoredFunctions(baseUrl: string, auth: DFAuthConfig): Promise<unknown> {
+    return this.request('GET', `${baseUrl}/_func`, auth.apiKey, undefined, undefined, auth.sessionToken);
   }
 
   static async callStoredFunction(
     functionName: string,
     baseUrl: string,
-    apiKey: string,
+    auth: DFAuthConfig,
     parameters?: Record<string, unknown>,
     returns?: string
   ): Promise<unknown> {
     const params = new URLSearchParams();
     if (returns) params.set('returns', returns);
-    return this.request('POST', `${baseUrl}/_func/${encodeURIComponent(functionName)}`, apiKey, params, parameters ?? {});
+    return this.request('POST', `${baseUrl}/_func/${encodeURIComponent(functionName)}`, auth.apiKey, params, parameters ?? {}, auth.sessionToken);
   }
 
   static async getDatabaseResources(
     baseUrl: string,
-    apiKey: string,
+    auth: DFAuthConfig,
     options: Record<string, unknown> = {}
   ): Promise<unknown> {
-    return this.request('GET', baseUrl, apiKey, this.buildParams(options));
+    return this.request('GET', baseUrl, auth.apiKey, this.buildParams(options), undefined, auth.sessionToken);
   }
 
   private static buildParams(options: Record<string, unknown>): URLSearchParams {
@@ -158,24 +163,40 @@ export class DreamFactoryService {
     url: string,
     apiKey: string,
     params?: URLSearchParams,
-    body?: Record<string, unknown>
+    body?: Record<string, unknown>,
+    sessionToken?: string
   ): Promise<unknown> {
-    if (!apiKey) {
-      throw new Error('API key is required');
+    if (!sessionToken && !apiKey) {
+      throw new Error('Session token or API key is required');
     }
 
     const target = new URL(url);
-    target.searchParams.set('api_key', apiKey);
+
+    // Only add api_key to query params if no session token (fallback mode)
+    if (!sessionToken) {
+      target.searchParams.set('api_key', apiKey);
+    }
+
     if (params) {
       params.forEach((value, key) => target.searchParams.set(key, value));
     }
 
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+    };
+
+    // Use session token header for user role-based authentication
+    if (sessionToken) {
+      headers['X-DreamFactory-Session-Token'] = sessionToken;
+    }
+
+    if (body) {
+      headers['Content-Type'] = 'application/json';
+    }
+
     const response = await fetch(target, {
       method,
-      headers: {
-        Accept: 'application/json',
-        ...(body ? { 'Content-Type': 'application/json' } : {})
-      },
+      headers,
       body: body ? JSON.stringify(body) : undefined
     });
 

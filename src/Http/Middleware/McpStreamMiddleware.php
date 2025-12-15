@@ -5,7 +5,7 @@ namespace DreamFactory\Core\McpServer\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use DreamFactory\Core\McpServer\Http\Controllers\McpStreamController;
-use DreamFactory\Core\McpServer\Http\Controllers\McpOAuthProxyController;
+use DreamFactory\Core\McpServer\Http\Controllers\McpOAuthController;
 
 /**
  * Middleware to intercept MCP requests before DreamFactory's routing
@@ -14,16 +14,17 @@ use DreamFactory\Core\McpServer\Http\Controllers\McpOAuthProxyController;
 class McpStreamMiddleware
 {
     /**
-     * OAuth sub-paths that should be proxied to daemon
+     * OAuth sub-paths handled by McpOAuthController
      */
     private const OAUTH_PATHS = [
-        '.well-known/oauth-protected-resource',
-        '.well-known/oauth-authorization-server',
-        'register',
-        'authorize',
-        'login',
-        'df-callback',
-        'token',
+        '.well-known/oauth-protected-resource' => 'protectedResourceMetadata',
+        '.well-known/oauth-authorization-server' => 'authorizationServerMetadata',
+        'register' => 'register',
+        'authorize' => 'authorizeGet',
+        'oauth-callback' => 'oauthCallback',
+        'login' => 'login',
+        'df-callback' => 'dfCallback',
+        'token' => 'token',
     ];
 
     /**
@@ -49,7 +50,7 @@ class McpStreamMiddleware
             $subPath = $matches[2];
 
             if ($this->isOAuthPath($subPath)) {
-                return $this->handleOAuthProxy($request, $mcpService, $method);
+                return $this->handleOAuth($request, $mcpService, $subPath, $method);
             }
         }
 
@@ -72,17 +73,22 @@ class McpStreamMiddleware
     }
 
     /**
-     * Handle OAuth proxy requests (sub-paths)
+     * Handle OAuth requests (sub-paths)
      */
-    private function handleOAuthProxy(Request $request, string $mcpService, string $method)
+    private function handleOAuth(Request $request, string $mcpService, string $subPath, string $method)
     {
-        $controller = new McpOAuthProxyController();
+        $controller = new McpOAuthController();
 
-        return match ($method) {
-            'GET', 'POST' => $controller->proxy($request, $mcpService),
-            'OPTIONS' => $controller->handleOptions($request, $mcpService),
-            default => null,
-        };
+        if ($method === 'OPTIONS') {
+            return $controller->handleOptions($request, $mcpService);
+        }
+
+        $action = self::OAUTH_PATHS[$subPath] ?? null;
+        if (!$action) {
+            return null;
+        }
+
+        return $controller->$action($request, $mcpService);
     }
 
     /**
@@ -90,12 +96,7 @@ class McpStreamMiddleware
      */
     private function isOAuthPath(string $subPath): bool
     {
-        foreach (self::OAUTH_PATHS as $oauthPath) {
-            if ($subPath === $oauthPath) {
-                return true;
-            }
-        }
-        return false;
+        return isset(self::OAUTH_PATHS[$subPath]);
     }
 }
 

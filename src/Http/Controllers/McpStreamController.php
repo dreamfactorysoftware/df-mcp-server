@@ -4,6 +4,7 @@ namespace DreamFactory\Core\McpServer\Http\Controllers;
 
 use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
+use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -32,6 +33,12 @@ class McpStreamController extends Controller
         
     private function processMcpRequest(Request $request, string $mcpService)
     {
+        // Validate Bearer token and get DF session token
+        $dfSessionToken = $this->validateBearerToken($request);
+        if ($dfSessionToken instanceof \Illuminate\Http\JsonResponse) {
+            return $dfSessionToken; // Return error response
+        }
+
         // Get service configuration
         $config = $this->getServiceConfig($mcpService);
         if (!$config) {
@@ -49,23 +56,23 @@ class McpStreamController extends Controller
                 'service' => $mcpService,
             ], 422)->withHeaders($this->corsHeaders());
         }
-        
+
         // Determine scheme - prioritize X-Forwarded-Proto (for proxies like ngrok)
         $scheme = $request->header('X-Forwarded-Proto');
         if (empty($scheme)) {
             $scheme = $request->getScheme();
         }
-        
+
         // Force HTTPS if any of these conditions are true
         $host = $request->getHttpHost();
-        if ($scheme === 'https' || 
-            $request->secure() || 
+        if ($scheme === 'https' ||
+            $request->secure() ||
             str_starts_with($request->fullUrl(), 'https://')) {
             $scheme = 'https';
         } else {
             $scheme = 'http';
         }
-        
+
         $baseUrl = $scheme . '://' . $host . '/api/v2/' . $apiName;
 
         if (!config('mcp.daemon.enabled', false)) {
@@ -75,7 +82,44 @@ class McpStreamController extends Controller
         }
 
         $client = new McpDaemonClient();
-        return $client->proxyRequest($request, $mcpService, $config, $baseUrl);
+        return $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken);
+    }
+
+    /**
+     * Validate Bearer token and return DF session token
+     *
+     * @return string|\Illuminate\Http\JsonResponse DF session token or error response
+     */
+    private function validateBearerToken(Request $request): string|\Illuminate\Http\JsonResponse
+    {
+        $authHeader = $request->header('Authorization');
+
+        if (empty($authHeader) || !str_starts_with($authHeader, 'Bearer ')) {
+            return response()->json([
+                'jsonrpc' => '2.0',
+                'id' => null,
+                'error' => [
+                    'code' => -32001,
+                    'message' => 'Unauthorized: Bearer token required',
+                ],
+            ], 401)->withHeaders($this->corsHeaders());
+        }
+
+        $bearerToken = substr($authHeader, 7);
+        $token = McpOAuthAccessToken::findValidAccessToken($bearerToken);
+
+        if (!$token) {
+            return response()->json([
+                'jsonrpc' => '2.0',
+                'id' => null,
+                'error' => [
+                    'code' => -32001,
+                    'message' => 'Unauthorized: Invalid or expired token',
+                ],
+            ], 401)->withHeaders($this->corsHeaders());
+        }
+
+        return $token->getDfSessionToken();
     }
 
     private function corsHeaders(): array

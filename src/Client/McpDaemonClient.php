@@ -23,7 +23,7 @@ class McpDaemonClient
     /**
      * Proxy request to daemon server
      */
-    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl): Response|JsonResponse|StreamedResponse
+    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl, string $dfSessionToken): Response|JsonResponse|StreamedResponse
     {
         try {
             $client = new \GuzzleHttp\Client([
@@ -35,13 +35,14 @@ class McpDaemonClient
             $headers = [
                 'X-Mcp-Config' => json_encode($config),
                 'X-Mcp-Base-Url' => $baseUrl,
+                'X-DreamFactory-Session-Token' => $dfSessionToken,
                 'Accept' => 'application/json, text/event-stream',
             ];
 
-            // Copy relevant headers from original request
+            // Copy relevant headers from original request (excluding Authorization - we use DF session token instead)
             foreach ($request->headers->all() as $key => $values) {
                 $lowerKey = strtolower($key);
-                if (in_array($lowerKey, ['content-type', 'authorization', 'accept', 'mcp-session-id', 'last-event-id'])) {
+                if (in_array($lowerKey, ['content-type', 'accept', 'mcp-session-id', 'last-event-id'])) {
                     $headers[$key] = $values[0] ?? '';
                 }
             }

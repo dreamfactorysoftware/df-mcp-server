@@ -23,6 +23,7 @@ export function updateSessionConfigFromHeaders(
 
   const configHeader = req.header('X-Mcp-Config');
   const baseUrl = req.header('X-Mcp-Base-Url');
+  const sessionToken = req.header('X-DreamFactory-Session-Token');
   if (!configHeader || !baseUrl) {
     return;
   }
@@ -30,8 +31,8 @@ export function updateSessionConfigFromHeaders(
   try {
     const parsed = JSON.parse(configHeader);
     const apiKey = extractApiKey(parsed);
-    if (apiKey) {
-      sessionManager.setConfig(sessionId, { url: baseUrl, apiKey });
+    if (apiKey || sessionToken) {
+      sessionManager.setConfig(sessionId, { url: baseUrl, apiKey: apiKey ?? '', sessionToken });
     }
   } catch (error) {
     console.warn('Failed to parse X-Mcp-Config header:', error);

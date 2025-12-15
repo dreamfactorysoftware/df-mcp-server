@@ -21,8 +21,8 @@ type SessionEntry = {
 const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
-const BASE_URL = process.env.MCP_BASE_URL || `http://${HOST}:${PORT}`;
-const DF_URL = process.env.DF_URL || 'http://localhost:80';
+const BASE_URL = 'https://e4598d73a972.ngrok-free.app'; //process.env.MCP_DAEMON_BASE_URL || `http://${HOST}:${PORT}`;
+const DF_URL = 'https://e4598d73a972.ngrok-free.app';
 const DF_API_KEY = process.env.DF_API_KEY || '';
 
 app.use(cors());
@@ -35,17 +35,6 @@ const oauthProvider = new DreamFactoryOAuthProvider({
   apiKey: DF_API_KEY,
   baseUrl: BASE_URL,
 });
-
-/**
- * Check for Bearer token in Authorization header
- */
-function getBearerToken(req: Request): string | null {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
-    return null;
-  }
-  return authHeader.slice(7);
-}
 
 /**
  * Send 401 Unauthorized with WWW-Authenticate header pointing to protected resource metadata
@@ -322,19 +311,19 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
   const sessionIdHeader = getSessionId(req);
   const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
 
-  // Check for Bearer token authentication
-  const bearerToken = getBearerToken(req);
-  if (!bearerToken) {
-    return sendUnauthorized(res, serviceName);
-  }
+  // Get DreamFactory session token from header (passed by PHP after OAuth validation)
+  const dfSessionToken = req.headers['x-dreamfactory-session-token'] as string | undefined;
 
-  // Verify the token
-  let authInfo;
-  try {
-    authInfo = await oauthProvider.verifyAccessToken(bearerToken);
-    console.log(`Authenticated user: ${authInfo.extra?.email}`);
-  } catch (error) {
-    console.error('Token verification failed:', error);
+  // DEBUG
+  console.log('[MCP] Request received:', {
+    serviceName,
+    sessionIdHeader,
+    hasExistingSession: !!existingSession,
+    hasDfSessionToken: !!dfSessionToken,
+    dfSessionTokenPreview: dfSessionToken ? dfSessionToken.substring(0, 30) + '...' : 'none',
+  });
+
+  if (!dfSessionToken) {
     return sendUnauthorized(res, serviceName);
   }
 
@@ -357,20 +346,19 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       return;
     }
 
-    // Use the DF JWT from the OAuth token for API calls
-    const dfJwt = authInfo.extra?.dfJwt;
-    if (!dfJwt) {
-      throw new Error('Missing DreamFactory session token');
-    }
-
-    // Build config from auth info - use DF JWT as the API key
+    // Build config from headers
     const config = parseConfigFromHeaders(req);
     const server = createServer(serviceName, config.baseUrl, sessionManager);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {
         const sessionId = randomUUID();
-        sessionManager.setConfig(sessionId, { url: config.baseUrl, apiKey: config.apiKey });
+        // Store DF session token for user role-based access
+        sessionManager.setConfig(sessionId, {
+          url: config.baseUrl,
+          apiKey: config.apiKey,
+          sessionToken: dfSessionToken
+        });
         return sessionId;
       },
       onsessioninitialized: sessionId => {
