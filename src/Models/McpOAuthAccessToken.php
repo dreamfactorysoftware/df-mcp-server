@@ -19,8 +19,6 @@ class McpOAuthAccessToken extends Model
         'df_session_token',
         'user_email',
         'user_name',
-        'is_sys_admin',
-        'role_id',
         'scope',
         'expires_at',
         'refresh_token_expires_at',
@@ -28,8 +26,6 @@ class McpOAuthAccessToken extends Model
 
     protected $casts = [
         'user_id' => 'integer',
-        'is_sys_admin' => 'boolean',
-        'role_id' => 'integer',
         'expires_at' => 'datetime',
         'refresh_token_expires_at' => 'datetime',
     ];
@@ -62,8 +58,6 @@ class McpOAuthAccessToken extends Model
             'df_session_token' => $data['df_session_token'],
             'user_email' => $data['user_email'],
             'user_name' => $data['user_name'] ?? null,
-            'is_sys_admin' => $data['is_sys_admin'] ?? false,
-            'role_id' => $data['role_id'] ?? null,
             'scope' => $data['scope'] ?? null,
             'expires_at' => Carbon::now()->addHours(self::ACCESS_TOKEN_LIFETIME_HOURS),
             'refresh_token_expires_at' => Carbon::now()->addDays(self::REFRESH_TOKEN_LIFETIME_DAYS),

@@ -35,8 +35,6 @@ return new class extends Migration
                 $table->text('df_session_token'); // Store DreamFactory JWT
                 $table->string('user_email', 255);
                 $table->string('user_name', 255)->nullable();
-                $table->boolean('is_sys_admin')->default(false);
-                $table->integer('role_id')->unsigned()->nullable();
                 $table->timestamp('expires_at');
                 $table->timestamp('created_at')->nullable();
 
@@ -58,8 +56,6 @@ return new class extends Migration
                 $table->text('df_session_token'); // Store DreamFactory JWT
                 $table->string('user_email', 255);
                 $table->string('user_name', 255)->nullable();
-                $table->boolean('is_sys_admin')->default(false);
-                $table->integer('role_id')->unsigned()->nullable();
                 $table->text('scope')->nullable();
                 $table->timestamp('expires_at');
                 $table->timestamp('refresh_token_expires_at')->nullable();

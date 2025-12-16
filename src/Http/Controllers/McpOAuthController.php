@@ -178,8 +178,6 @@ class McpOAuthController extends Controller
                 'df_session_token' => $existingSession['session_token'],
                 'user_email' => $existingSession['email'],
                 'user_name' => $existingSession['name'] ?? $existingSession['first_name'] ?? null,
-                'is_sys_admin' => $existingSession['is_sys_admin'] ?? false,
-                'role_id' => $existingSession['role_id'] ?? null,
             ]);
 
             // Build redirect URL back to the client
@@ -258,8 +256,6 @@ class McpOAuthController extends Controller
             'df_session_token' => $dfSession['session_token'],
             'user_email' => $dfSession['email'],
             'user_name' => $dfSession['name'] ?? null,
-            'is_sys_admin' => $dfSession['is_sys_admin'] ?? false,
-            'role_id' => $dfSession['role_id'] ?? null,
         ]);
 
         // Build redirect URL
@@ -342,8 +338,6 @@ class McpOAuthController extends Controller
             'df_session_token' => $existingSession['session_token'],
             'user_email' => $existingSession['email'],
             'user_name' => $existingSession['name'] ?? $existingSession['first_name'] ?? null,
-            'is_sys_admin' => $existingSession['is_sys_admin'] ?? false,
-            'role_id' => $existingSession['role_id'] ?? null,
         ]);
 
         // Clean up pending authorization
@@ -401,8 +395,6 @@ class McpOAuthController extends Controller
             'df_session_token' => $sessionToken,
             'user_email' => $dfSession['email'],
             'user_name' => $dfSession['name'] ?? null,
-            'is_sys_admin' => $dfSession['is_sys_admin'] ?? false,
-            'role_id' => $dfSession['role_id'] ?? null,
         ]);
 
         // Build redirect URL
@@ -537,8 +529,6 @@ class McpOAuthController extends Controller
             'df_session_token' => $authCode->df_session_token,
             'user_email' => $authCode->user_email,
             'user_name' => $authCode->user_name,
-            'is_sys_admin' => $authCode->is_sys_admin,
-            'role_id' => $authCode->role_id,
             'scope' => $authCode->scope,
         ]);
 

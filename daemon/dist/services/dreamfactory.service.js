@@ -1,9 +1,9 @@
 export class DreamFactoryService {
     static async getTables(baseUrl, auth) {
-        return this.request('GET', `${baseUrl}/_schema`, auth.apiKey, undefined, undefined, auth.sessionToken);
+        return this.request('GET', `${baseUrl}/_schema`, auth.sessionToken);
     }
     static async getTableSchema(tableName, baseUrl, auth) {
-        return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}`, auth.apiKey, undefined, undefined, auth.sessionToken);
+        return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}`, auth.sessionToken);
     }
     static async getTableData(baseUrl, auth, options = {}) {
         const params = new URLSearchParams();
@@ -32,37 +32,37 @@ export class DreamFactoryService {
         append('include_schema', options.includeSchema);
         append('ids', options.ids);
         const url = `${baseUrl}/_table/${encodeURIComponent(String(options.tableName ?? ''))}`;
-        return this.request('GET', url, auth.apiKey, params, undefined, auth.sessionToken);
+        return this.request('GET', url, auth.sessionToken, params);
     }
     static async createRecords(tableName, baseUrl, auth, records, options = {}) {
-        return this.request('POST', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, auth.apiKey, this.buildParams(options), {
+        return this.request('POST', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, auth.sessionToken, this.buildParams(options), {
             resource: records
-        }, auth.sessionToken);
+        });
     }
     static async updateRecords(tableName, baseUrl, auth, records, options = {}) {
-        return this.request('PATCH', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, auth.apiKey, this.buildParams(options), {
+        return this.request('PATCH', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, auth.sessionToken, this.buildParams(options), {
             resource: records
-        }, auth.sessionToken);
+        });
     }
     static async deleteRecords(tableName, baseUrl, auth, options = {}) {
-        return this.request('DELETE', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, auth.apiKey, this.buildParams(options), undefined, auth.sessionToken);
+        return this.request('DELETE', `${baseUrl}/_table/${encodeURIComponent(tableName)}`, auth.sessionToken, this.buildParams(options));
     }
     static async getTableFields(tableName, baseUrl, auth, refresh) {
         const params = new URLSearchParams();
         if (refresh !== undefined) {
             params.set('refresh', String(refresh));
         }
-        return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}/_field`, auth.apiKey, params, undefined, auth.sessionToken);
+        return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}/_field`, auth.sessionToken, params);
     }
     static async getTableRelationships(tableName, baseUrl, auth, refresh) {
         const params = new URLSearchParams();
         if (refresh !== undefined) {
             params.set('refresh', String(refresh));
         }
-        return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}/_related`, auth.apiKey, params, undefined, auth.sessionToken);
+        return this.request('GET', `${baseUrl}/_schema/${encodeURIComponent(tableName)}/_related`, auth.sessionToken, params);
     }
     static async getStoredProcedures(baseUrl, auth) {
-        return this.request('GET', `${baseUrl}/_proc`, auth.apiKey, undefined, undefined, auth.sessionToken);
+        return this.request('GET', `${baseUrl}/_proc`, auth.sessionToken);
     }
     static async callStoredProcedure(procedureName, baseUrl, auth, parameters, wrapper, returns) {
         const params = new URLSearchParams();
@@ -70,19 +70,19 @@ export class DreamFactoryService {
             params.set('wrapper', wrapper);
         if (returns)
             params.set('returns', returns);
-        return this.request('POST', `${baseUrl}/_proc/${encodeURIComponent(procedureName)}`, auth.apiKey, params, parameters ?? {}, auth.sessionToken);
+        return this.request('POST', `${baseUrl}/_proc/${encodeURIComponent(procedureName)}`, auth.sessionToken, params, parameters ?? {});
     }
     static async getStoredFunctions(baseUrl, auth) {
-        return this.request('GET', `${baseUrl}/_func`, auth.apiKey, undefined, undefined, auth.sessionToken);
+        return this.request('GET', `${baseUrl}/_func`, auth.sessionToken);
     }
     static async callStoredFunction(functionName, baseUrl, auth, parameters, returns) {
         const params = new URLSearchParams();
         if (returns)
             params.set('returns', returns);
-        return this.request('POST', `${baseUrl}/_func/${encodeURIComponent(functionName)}`, auth.apiKey, params, parameters ?? {}, auth.sessionToken);
+        return this.request('POST', `${baseUrl}/_func/${encodeURIComponent(functionName)}`, auth.sessionToken, params, parameters ?? {});
     }
     static async getDatabaseResources(baseUrl, auth, options = {}) {
-        return this.request('GET', baseUrl, auth.apiKey, this.buildParams(options), undefined, auth.sessionToken);
+        return this.request('GET', baseUrl, auth.sessionToken, this.buildParams(options));
     }
     static buildParams(options) {
         const params = new URLSearchParams();
@@ -99,25 +99,18 @@ export class DreamFactoryService {
         });
         return params;
     }
-    static async request(method, url, apiKey, params, body, sessionToken) {
-        if (!sessionToken && !apiKey) {
-            throw new Error('Session token or API key is required');
+    static async request(method, url, sessionToken, params, body) {
+        if (!sessionToken) {
+            throw new Error('Session token is required');
         }
         const target = new URL(url);
-        // Only add api_key to query params if no session token (fallback mode)
-        if (!sessionToken) {
-            target.searchParams.set('api_key', apiKey);
-        }
         if (params) {
             params.forEach((value, key) => target.searchParams.set(key, value));
         }
         const headers = {
             Accept: 'application/json',
+            'X-DreamFactory-Session-Token': sessionToken,
         };
-        // Use session token header for user role-based authentication
-        if (sessionToken) {
-            headers['X-DreamFactory-Session-Token'] = sessionToken;
-        }
         if (body) {
             headers['Content-Type'] = 'application/json';
         }

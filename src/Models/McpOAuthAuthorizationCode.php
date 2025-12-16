@@ -22,15 +22,11 @@ class McpOAuthAuthorizationCode extends Model
         'df_session_token',
         'user_email',
         'user_name',
-        'is_sys_admin',
-        'role_id',
         'expires_at',
     ];
 
     protected $casts = [
         'user_id' => 'integer',
-        'is_sys_admin' => 'boolean',
-        'role_id' => 'integer',
         'expires_at' => 'datetime',
     ];
 
@@ -62,8 +58,6 @@ class McpOAuthAuthorizationCode extends Model
             'df_session_token' => $data['df_session_token'],
             'user_email' => $data['user_email'],
             'user_name' => $data['user_name'] ?? null,
-            'is_sys_admin' => $data['is_sys_admin'] ?? false,
-            'role_id' => $data['role_id'] ?? null,
             'expires_at' => Carbon::now()->addMinutes(self::CODE_LIFETIME_MINUTES),
         ]);
     }

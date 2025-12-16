@@ -17,7 +17,6 @@ class McpServerConfig extends BaseServiceConfigModel
     protected $fillable = [
         'service_id',
         'api_name',
-        'api_key',
         'oauth_client_id',
         'oauth_client_secret',
     ];
@@ -51,10 +50,6 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['values'] = $apinSvcList;
                 $schema['label'] = 'API Name';
                 $schema['description'] = 'Your Dreamfactory API name.';
-                break;
-            case 'api_key':
-                $schema['label'] = 'API Key';
-                $schema['description'] = 'Dreamfactory API Key.';
                 break;
             case 'oauth_client_id':
                 $schema['label'] = 'OAuth Client ID (Optional)';

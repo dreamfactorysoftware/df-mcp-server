@@ -51,28 +51,26 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
   const getSessionConfig = (sessionId?: string): { url: string; auth: DFAuthConfig } => {
     const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
     const url = sessionConfig?.url ?? process.env.DREAMFACTORY_URL ?? '';
-    const apiKey = sessionConfig?.apiKey ?? process.env.DREAMFACTORY_API_KEY ?? '';
-    const sessionToken = sessionConfig?.sessionToken;
+    const sessionToken = sessionConfig?.sessionToken ?? '';
 
     // DEBUG
     console.log('[Tools] getSessionConfig:', {
       sessionId,
       hasSessionConfig: !!sessionConfig,
       url: url ? url.substring(0, 50) + '...' : 'none',
-      hasApiKey: !!apiKey,
       hasSessionToken: !!sessionToken,
       sessionTokenPreview: sessionToken ? sessionToken.substring(0, 30) + '...' : 'none',
     });
 
-    if (!url || (!apiKey && !sessionToken)) {
+    if (!url || !sessionToken) {
       throw new Error(
-        'DreamFactory configuration not found. Please ensure DREAMFACTORY_URL and DREAMFACTORY_API_KEY are configured either in the session or process environment.'
+        'DreamFactory session not found. Please authenticate via OAuth.'
       );
     }
 
     return {
       url,
-      auth: { apiKey, sessionToken }
+      auth: { sessionToken }
     };
   };
 

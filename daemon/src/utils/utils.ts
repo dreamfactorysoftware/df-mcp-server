@@ -21,22 +21,13 @@ export function updateSessionConfigFromHeaders(
     return;
   }
 
-  const configHeader = req.header('X-Mcp-Config');
   const baseUrl = req.header('X-Mcp-Base-Url');
   const sessionToken = req.header('X-DreamFactory-Session-Token');
-  if (!configHeader || !baseUrl) {
+  if (!baseUrl || !sessionToken) {
     return;
   }
 
-  try {
-    const parsed = JSON.parse(configHeader);
-    const apiKey = extractApiKey(parsed);
-    if (apiKey || sessionToken) {
-      sessionManager.setConfig(sessionId, { url: baseUrl, apiKey: apiKey ?? '', sessionToken });
-    }
-  } catch (error) {
-    console.warn('Failed to parse X-Mcp-Config header:', error);
-  }
+  sessionManager.setConfig(sessionId, { url: baseUrl, sessionToken });
 }
 
 export function parseConfigFromHeaders(req: Request) {
@@ -51,18 +42,13 @@ export function parseConfigFromHeaders(req: Request) {
   }
 
   const configObject = resolveConfig(JSON.parse(configHeader));
-  const apiKey = extractApiKey(configObject);
   const apiName = extractApiName(configObject);
 
-  if (!apiKey) {
-    throw new Error('API key is required for MCP service');
-  }
   if (!apiName) {
     throw new Error('api_name is required for MCP service');
   }
 
   return {
-    apiKey,
     apiName,
     baseUrl
   };
@@ -79,10 +65,6 @@ function resolveConfig(payload: unknown): Record<string, unknown> {
   }
 
   return payload;
-}
-
-function extractApiKey(config: Record<string, unknown>): string | undefined {
-  return extractString(config?.api_key ?? config?.apiKey);
 }
 
 function extractApiName(config: Record<string, unknown>): string | undefined {
@@ -115,7 +97,7 @@ export function createServer(
     `Base URL: ${baseUrl}`,
     '',
     'Use the available tools to inspect schemas, fetch data, and call stored procedures/functions.',
-    'All tools operate against the DreamFactory REST API using the API key supplied when this session was initialized.'
+    'All tools operate against the DreamFactory REST API using the authenticated user session.'
   ].join('\n');
 
   const server = new McpServer(
@@ -131,5 +113,3 @@ export function createServer(
   registerDreamFactoryTools(server, sessionManager);
   return server;
 }
-
-

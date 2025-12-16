@@ -12,22 +12,12 @@ export function updateSessionConfigFromHeaders(req, sessionManager, sessionId) {
     if (!sessionId) {
         return;
     }
-    const configHeader = req.header('X-Mcp-Config');
     const baseUrl = req.header('X-Mcp-Base-Url');
     const sessionToken = req.header('X-DreamFactory-Session-Token');
-    if (!configHeader || !baseUrl) {
+    if (!baseUrl || !sessionToken) {
         return;
     }
-    try {
-        const parsed = JSON.parse(configHeader);
-        const apiKey = extractApiKey(parsed);
-        if (apiKey || sessionToken) {
-            sessionManager.setConfig(sessionId, { url: baseUrl, apiKey: apiKey ?? '', sessionToken });
-        }
-    }
-    catch (error) {
-        console.warn('Failed to parse X-Mcp-Config header:', error);
-    }
+    sessionManager.setConfig(sessionId, { url: baseUrl, sessionToken });
 }
 export function parseConfigFromHeaders(req) {
     const configHeader = req.header('X-Mcp-Config');
@@ -39,16 +29,11 @@ export function parseConfigFromHeaders(req) {
         throw new Error('X-Mcp-Base-Url header required for initialization requests');
     }
     const configObject = resolveConfig(JSON.parse(configHeader));
-    const apiKey = extractApiKey(configObject);
     const apiName = extractApiName(configObject);
-    if (!apiKey) {
-        throw new Error('API key is required for MCP service');
-    }
     if (!apiName) {
         throw new Error('api_name is required for MCP service');
     }
     return {
-        apiKey,
         apiName,
         baseUrl
     };
@@ -62,9 +47,6 @@ function resolveConfig(payload) {
         return nested;
     }
     return payload;
-}
-function extractApiKey(config) {
-    return extractString(config?.api_key ?? config?.apiKey);
 }
 function extractApiName(config) {
     return extractString(config?.api_name, config?.apiName);
@@ -89,7 +71,7 @@ export function createServer(serviceName, baseUrl, sessionManager) {
         `Base URL: ${baseUrl}`,
         '',
         'Use the available tools to inspect schemas, fetch data, and call stored procedures/functions.',
-        'All tools operate against the DreamFactory REST API using the API key supplied when this session was initialized.'
+        'All tools operate against the DreamFactory REST API using the authenticated user session.'
     ].join('\n');
     const server = new McpServer({
         name: `DreamFactory MCP (${serviceName})`,

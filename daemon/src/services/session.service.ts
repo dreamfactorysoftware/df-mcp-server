@@ -1,7 +1,6 @@
 export type SessionConfig = {
   url: string;
-  apiKey: string;
-  sessionToken?: string; // DF JWT for user role-based access
+  sessionToken: string; // DF JWT for user authentication
 };
 
 export class SessionService {
