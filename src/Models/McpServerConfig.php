@@ -5,7 +5,6 @@ namespace DreamFactory\Core\McpServer\Models;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Models\BaseServiceConfigModel;
 use ServiceManager;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class McpServerConfig extends BaseServiceConfigModel
@@ -24,6 +23,7 @@ class McpServerConfig extends BaseServiceConfigModel
     protected $casts = [
         'service_id' => 'integer'
     ];
+
 
     /**
      * @param array $schema
@@ -52,12 +52,12 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['description'] = 'Your Dreamfactory API name.';
                 break;
             case 'oauth_client_id':
-                $schema['label'] = 'OAuth Client ID (Optional)';
-                $schema['description'] = 'Pre-shared OAuth Client ID. When set, only clients with this exact ID can connect. Leave empty to auto-generate on first save.';
+                $schema['label'] = 'OAuth Client ID';
+                $schema['description'] = 'OAuth Client ID for authentication. Auto-generated on service creation.';
                 break;
             case 'oauth_client_secret':
-                $schema['label'] = 'OAuth Client Secret (Optional)';
-                $schema['description'] = 'Pre-shared OAuth Client Secret for authentication. Leave empty to auto-generate on first save.';
+                $schema['label'] = 'OAuth Client Secret';
+                $schema['description'] = 'OAuth Client Secret for authentication. Auto-generated on service creation.';
                 break;
         }
     }

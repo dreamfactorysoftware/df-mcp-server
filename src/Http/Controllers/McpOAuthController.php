@@ -2,14 +2,11 @@
 
 namespace DreamFactory\Core\McpServer\Http\Controllers;
 
-use Carbon\Carbon;
 use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\McpServer\Models\McpOAuthAuthorizationCode;
 use DreamFactory\Core\McpServer\Models\McpOAuthClient;
-use DreamFactory\Core\McpServer\Models\McpServerConfig;
 use GuzzleHttp\Client;
-use GuzzleHttp\Exception\ClientException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -21,13 +18,29 @@ use Illuminate\Support\Facades\Log;
 class McpOAuthController extends Controller
 {
     private string $dfUrl;
-    private string $dfFrontendUrl;
 
     public function __construct()
     {
+        // Internal API URL for server-to-server calls (not proxied)
         $this->dfUrl = rtrim(config('app.url', env('DF_URL', 'http://localhost')), '/');
-        // Frontend URL for login redirects - defaults to env or hardcoded for dev
-        $this->dfFrontendUrl = rtrim(env('DF_FRONTEND_URL', 'https://e4598d73a972.ngrok-free.app/dreamfactory/dist/#'), '/');
+    }
+
+    /**
+     * Get frontend URL for login redirects
+     *
+     * Uses the request's base URL (respecting X-Forwarded-* headers from proxies)
+     * combined with the frontend path. Can be overridden with DF_FRONTEND_URL.
+     */
+    private function getFrontendUrl(Request $request): string
+    {
+        $frontendUrl = env('DF_FRONTEND_URL');
+        if ($frontendUrl) {
+            return rtrim($frontendUrl, '/');
+        }
+
+        $baseUrl = $this->getBaseUrl($request);
+        $frontendPath = env('DF_FRONTEND_PATH', '/dreamfactory/dist/#');
+        return rtrim($baseUrl . $frontendPath, '/');
     }
 
     /**
@@ -42,7 +55,7 @@ class McpOAuthController extends Controller
             'resource' => "{$baseUrl}/mcp/{$mcpService}",
             'authorization_servers' => ["{$baseUrl}/mcp/{$mcpService}"],
             'bearer_methods_supported' => ['header'],
-        ])->withHeaders($this->corsHeaders());
+        ]);
     }
 
     /**
@@ -63,7 +76,7 @@ class McpOAuthController extends Controller
             'token_endpoint_auth_methods_supported' => ['none', 'client_secret_post'],
             'code_challenge_methods_supported' => ['S256', 'plain'],
             'scopes_supported' => ['mcp:tools', 'mcp:resources', 'mcp:prompts'],
-        ])->withHeaders($this->corsHeaders());
+        ]);
     }
 
     /**
@@ -76,13 +89,13 @@ class McpOAuthController extends Controller
     public function register(Request $request, string $mcpService)
     {
         // Dynamic registration is disabled - return the configured client info
-        $serviceConfig = $this->getServiceConfig($mcpService);
+        $serviceConfig = $request->attributes->get('mcp_service_config');
 
         if (!$serviceConfig || empty($serviceConfig['oauth_client_id'])) {
             return response()->json([
                 'error' => 'invalid_request',
                 'error_description' => 'Dynamic client registration is disabled. Please use pre-configured OAuth credentials.',
-            ], 400)->withHeaders($this->corsHeaders());
+            ], 400);
         }
 
         // Return the pre-configured client info (without the secret)
@@ -93,7 +106,7 @@ class McpOAuthController extends Controller
             'grant_types' => ['authorization_code', 'refresh_token'],
             'response_types' => ['code'],
             'token_endpoint_auth_method' => 'client_secret_post',
-        ])->withHeaders($this->corsHeaders());
+        ]);
     }
 
     /**
@@ -120,7 +133,7 @@ class McpOAuthController extends Controller
         }
 
         // Get service config and validate client_id matches
-        $serviceConfig = $this->getServiceConfig($mcpService);
+        $serviceConfig = $request->attributes->get('mcp_service_config');
         if (!$serviceConfig) {
             return $this->errorResponse('server_error', 'MCP service not found');
         }
@@ -186,7 +199,7 @@ class McpOAuthController extends Controller
                 $redirectParams['state'] = $state;
             }
 
-            $redirectUrl = $redirectUri . (strpos($redirectUri, '?') !== false ? '&' : '?') . http_build_query($redirectParams);
+            $redirectUrl = $this->buildRedirectUrl($redirectUri, $redirectParams);
 
             return redirect($redirectUrl);
         }
@@ -215,7 +228,7 @@ class McpOAuthController extends Controller
 
         // Redirect to DreamFactory's main login page with redirect parameter
         // DF login should redirect back to our callback after successful authentication
-        $dfLoginUrl = "{$this->dfFrontendUrl}/auth/login?redirect=" . urlencode($callbackUrl);
+        $dfLoginUrl = $this->getFrontendUrl($request) . "/auth/login?redirect=" . urlencode($callbackUrl);
 
         return redirect($dfLoginUrl);
     }
@@ -270,7 +283,7 @@ class McpOAuthController extends Controller
             cache()->forget($pendingKey);
         }
 
-        $redirectUrl = $redirectUri . (strpos($redirectUri, '?') !== false ? '&' : '?') . http_build_query($redirectParams);
+        $redirectUrl = $this->buildRedirectUrl($redirectUri, $redirectParams);
 
         return redirect($redirectUrl);
     }
@@ -323,7 +336,7 @@ class McpOAuthController extends Controller
             // User still not authenticated - redirect back to DF login
             $baseUrl = $this->getBaseUrl($request);
             $callbackUrl = "{$baseUrl}/mcp/{$mcpService}/oauth-callback?auth_state={$authState}";
-            $dfLoginUrl = "{$this->dfFrontendUrl}/auth/login?redirect=" . urlencode($callbackUrl);
+            $dfLoginUrl = $this->getFrontendUrl($request) . "/auth/login?redirect=" . urlencode($callbackUrl);
 
             return redirect($dfLoginUrl);
         }
@@ -349,7 +362,7 @@ class McpOAuthController extends Controller
             $redirectParams['state'] = $pending['state'];
         }
 
-        $redirectUrl = $pending['redirect_uri'] . (strpos($pending['redirect_uri'], '?') !== false ? '&' : '?') . http_build_query($redirectParams);
+        $redirectUrl = $this->buildRedirectUrl($pending['redirect_uri'], $redirectParams);
 
         return redirect($redirectUrl);
     }
@@ -371,7 +384,7 @@ class McpOAuthController extends Controller
             return response()->json([
                 'error' => 'invalid_request',
                 'error_description' => 'Missing session_token',
-            ], 400)->withHeaders($this->corsHeaders());
+            ], 400);
         }
 
         // Validate session token with DreamFactory
@@ -382,7 +395,7 @@ class McpOAuthController extends Controller
             return response()->json([
                 'error' => 'invalid_token',
                 'error_description' => 'Invalid or expired session token',
-            ], 401)->withHeaders($this->corsHeaders());
+            ], 401);
         }
 
         // Generate authorization code
@@ -403,11 +416,11 @@ class McpOAuthController extends Controller
             $redirectParams['state'] = $originalState;
         }
 
-        $redirectUrl = $redirectUri . (strpos($redirectUri, '?') !== false ? '&' : '?') . http_build_query($redirectParams);
+        $redirectUrl = $this->buildRedirectUrl($redirectUri, $redirectParams);
 
         return response()->json([
             'redirect' => $redirectUrl,
-        ])->withHeaders($this->corsHeaders());
+        ]);
     }
 
     /**
@@ -436,13 +449,6 @@ class McpOAuthController extends Controller
         return $this->tokenErrorResponse('unsupported_grant_type', 'Unsupported grant type');
     }
 
-    /**
-     * Handle CORS preflight
-     */
-    public function handleOptions(Request $request, string $mcpService)
-    {
-        return response('', 204)->withHeaders($this->corsHeaders());
-    }
 
     /**
      * Handle authorization_code grant
@@ -461,7 +467,7 @@ class McpOAuthController extends Controller
         }
 
         // Get service config and validate client credentials
-        $serviceConfig = $this->getServiceConfig($mcpService);
+        $serviceConfig = $request->attributes->get('mcp_service_config');
         if (!$serviceConfig || empty($serviceConfig['oauth_client_id'])) {
             return $this->tokenErrorResponse('server_error', 'OAuth not configured for this service');
         }
@@ -541,7 +547,7 @@ class McpOAuthController extends Controller
             'expires_in' => McpOAuthAccessToken::ACCESS_TOKEN_LIFETIME_HOURS * 3600,
             'refresh_token' => $accessToken->refresh_token,
             'scope' => $accessToken->scope,
-        ])->withHeaders($this->corsHeaders());
+        ]);
     }
 
     /**
@@ -558,7 +564,7 @@ class McpOAuthController extends Controller
         }
 
         // Get service config and validate client credentials
-        $serviceConfig = $this->getServiceConfig($mcpService);
+        $serviceConfig = $request->attributes->get('mcp_service_config');
         if (!$serviceConfig || empty($serviceConfig['oauth_client_id'])) {
             return $this->tokenErrorResponse('server_error', 'OAuth not configured for this service');
         }
@@ -600,7 +606,7 @@ class McpOAuthController extends Controller
             'expires_in' => McpOAuthAccessToken::ACCESS_TOKEN_LIFETIME_HOURS * 3600,
             'refresh_token' => $token->refresh_token,
             'scope' => $token->scope,
-        ])->withHeaders($this->corsHeaders());
+        ]);
     }
 
     /**
@@ -733,26 +739,12 @@ class McpOAuthController extends Controller
     }
 
     /**
-     * Get service configuration by service name
+     * Build URL with query parameters
      */
-    private function getServiceConfig(string $mcpService): ?array
+    private function buildRedirectUrl(string $baseUrl, array $params): string
     {
-        try {
-            /** @var \DreamFactory\Core\Services\ServiceManager $serviceManager */
-            $serviceManager = app('df.service');
-            $service = $serviceManager->getService($mcpService);
-
-            if (method_exists($service, 'getConfig')) {
-                return $service->getConfig();
-            }
-        } catch (\Throwable $e) {
-            Log::error('Failed to get service config', [
-                'mcpService' => $mcpService,
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        return null;
+        $separator = str_contains($baseUrl, '?') ? '&' : '?';
+        return $baseUrl . $separator . http_build_query($params);
     }
 
     /**
@@ -763,7 +755,7 @@ class McpOAuthController extends Controller
         return response()->json([
             'error' => $error,
             'error_description' => $description,
-        ], 400)->withHeaders($this->corsHeaders());
+        ], 400);
     }
 
     /**
@@ -776,18 +768,6 @@ class McpOAuthController extends Controller
         return response()->json([
             'error' => $error,
             'error_description' => $description,
-        ], $statusCode)->withHeaders($this->corsHeaders());
-    }
-
-    /**
-     * CORS headers
-     */
-    private function corsHeaders(): array
-    {
-        return [
-            'Access-Control-Allow-Origin' => '*',
-            'Access-Control-Allow-Methods' => 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers' => 'Content-Type, Authorization',
-        ];
+        ], $statusCode);
     }
 }

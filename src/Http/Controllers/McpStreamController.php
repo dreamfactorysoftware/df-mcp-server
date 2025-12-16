@@ -10,17 +10,11 @@ use Illuminate\Support\Facades\Log;
 
 class McpStreamController extends Controller
 {
-    public function handleOptions(Request $request, string $mcpService)
-    {
-        return response('', 200)->withHeaders($this->corsHeaders());
-    }
-
     public function handleGet(Request $request, string $mcpService)
     {
         $accept = strtolower($request->header('Accept', ''));
         if (!str_contains($accept, 'text/event-stream')) {
-            return response('Accept header must include text/event-stream for GET requests', 406)
-                ->withHeaders($this->corsHeaders());
+            return response('Accept header must include text/event-stream for GET requests', 406);
         }
 
         return $this->processMcpRequest($request, $mcpService);
@@ -30,22 +24,22 @@ class McpStreamController extends Controller
     {
         return $this->processMcpRequest($request, $mcpService);
     }
-        
+
     private function processMcpRequest(Request $request, string $mcpService)
     {
         // Validate Bearer token and get DF session token
         $dfSessionToken = $this->validateBearerToken($request);
         if ($dfSessionToken instanceof \Illuminate\Http\JsonResponse) {
-            return $dfSessionToken; // Return error response
+            return $dfSessionToken;
         }
 
-        // Get service configuration
-        $config = $this->getServiceConfig($mcpService);
+        // Get service configuration from request (set by middleware)
+        $config = $request->attributes->get('mcp_service_config');
         if (!$config) {
             return response()->json([
                 'error' => 'MCP service not found',
                 'service' => $mcpService,
-            ], 404)->withHeaders($this->corsHeaders());
+            ], 404);
         }
 
         $apiName = $config['api_name'] ?? null;
@@ -54,20 +48,18 @@ class McpStreamController extends Controller
             return response()->json([
                 'error' => 'MCP service misconfigured: api_name is required',
                 'service' => $mcpService,
-            ], 422)->withHeaders($this->corsHeaders());
+            ], 422);
         }
 
-        // Determine scheme - prioritize X-Forwarded-Proto (for proxies like ngrok)
+        // Determine scheme - prioritize X-Forwarded-Proto for proxies
         $scheme = $request->header('X-Forwarded-Proto');
         if (empty($scheme)) {
             $scheme = $request->getScheme();
         }
 
-        // Force HTTPS if any of these conditions are true
+        // Force HTTPS if conditions are met
         $host = $request->getHttpHost();
-        if ($scheme === 'https' ||
-            $request->secure() ||
-            str_starts_with($request->fullUrl(), 'https://')) {
+        if ($scheme === 'https' || $request->secure() || str_starts_with($request->fullUrl(), 'https://')) {
             $scheme = 'https';
         } else {
             $scheme = 'http';
@@ -78,7 +70,7 @@ class McpStreamController extends Controller
         if (!config('mcp.daemon.enabled', false)) {
             return response()->json([
                 'error' => 'MCP daemon is disabled. Please set MCP_DAEMON_ENABLED=true and run the Node daemon.'
-            ], 503)->withHeaders($this->corsHeaders());
+            ], 503);
         }
 
         $client = new McpDaemonClient();
@@ -102,7 +94,7 @@ class McpStreamController extends Controller
                     'code' => -32001,
                     'message' => 'Unauthorized: Bearer token required',
                 ],
-            ], 401)->withHeaders($this->corsHeaders());
+            ], 401);
         }
 
         $bearerToken = substr($authHeader, 7);
@@ -116,43 +108,9 @@ class McpStreamController extends Controller
                     'code' => -32001,
                     'message' => 'Unauthorized: Invalid or expired token',
                 ],
-            ], 401)->withHeaders($this->corsHeaders());
+            ], 401);
         }
 
         return $token->getDfSessionToken();
     }
-
-    private function corsHeaders(): array
-    {
-        return [
-            'Access-Control-Allow-Origin' => '*',
-            'Access-Control-Allow-Methods' => 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id',
-        ];
-    }
-
-    /**
-     * Get service configuration from ServiceManager
-     */
-    private function getServiceConfig(string $mcpService): ?array
-    {
-        try {
-            /** @var \DreamFactory\Core\Services\ServiceManager $serviceManager */
-            $serviceManager = app('df.service');
-            $service = $serviceManager->getService($mcpService);
-
-            if (method_exists($service, 'getConfig')) {
-                $config = $service->getConfig();
-                return $config;
-            }
-        } catch (\Throwable $e) {
-            Log::error('Failed to get service config', [
-                'mcpService' => $mcpService,
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        return null;
-    }
-
 }

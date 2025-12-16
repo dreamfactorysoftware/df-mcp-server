@@ -1,14 +1,6 @@
 <?php
 
 return [
-    'middleware' => [],
-    
-    'route_prefix' => null,
-
-    'server_ttl_seconds' => 1800,
-
-    'mcp_route_prefix' => 'mcp',
-
     // Daemon configuration
     'daemon' => [
         'enabled' => env('MCP_DAEMON_ENABLED', true),
@@ -17,4 +9,3 @@ return [
         'port' => env('MCP_DAEMON_PORT', 8006),
     ],
 ];
-

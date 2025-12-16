@@ -17,7 +17,7 @@ class McpDaemonClient
 
     public function __construct(?string $daemonUrl = null)
     {
-        $this->daemonUrl = $daemonUrl ?? config('mcp.daemon.url', 'http://127.0.0.1:8080');
+        $this->daemonUrl = $daemonUrl ?? config('mcp.daemon.url', 'http://127.0.0.1:8006');
     }
 
     /**
@@ -27,11 +27,10 @@ class McpDaemonClient
     {
         try {
             $client = new \GuzzleHttp\Client([
-                'timeout' => 300, // 5 minutes for long-running SSE streams
-                'stream' => true, // Enable streaming for SSE
+                'timeout' => 300,
+                'stream' => true,
             ]);
 
-            // Prepare headers
             $headers = [
                 'X-Mcp-Config' => json_encode($config),
                 'X-Mcp-Base-Url' => $baseUrl,
@@ -39,7 +38,7 @@ class McpDaemonClient
                 'Accept' => 'application/json, text/event-stream',
             ];
 
-            // Copy relevant headers from original request (excluding Authorization - we use DF session token instead)
+            // Copy relevant headers from original request
             foreach ($request->headers->all() as $key => $values) {
                 $lowerKey = strtolower($key);
                 if (in_array($lowerKey, ['content-type', 'accept', 'mcp-session-id', 'last-event-id'])) {
@@ -47,7 +46,6 @@ class McpDaemonClient
                 }
             }
 
-            // Make request to daemon
             $daemonPath = "/mcp/{$mcpService}";
             $response = $client->request($request->method(), $this->daemonUrl . $daemonPath, [
                 'headers' => $headers,
@@ -57,12 +55,10 @@ class McpDaemonClient
             $status = $response->getStatusCode();
             $contentType = $response->getHeaderLine('Content-Type') ?: 'application/json';
 
-            // Handle SSE streaming
             if (str_contains(strtolower($contentType), 'text/event-stream')) {
                 return $this->streamSseResponse($response, $status, $contentType);
             }
 
-            // Handle regular JSON response
             return $this->buildJsonResponse($response, $status, $contentType);
 
         } catch (\GuzzleHttp\Exception\ClientException $e) {
@@ -125,12 +121,12 @@ class McpDaemonClient
 
     private function streamSseResponse($response, int $status, string $contentType)
     {
-        $headers = array_merge([
+        $headers = [
             'Content-Type' => $contentType,
             'Cache-Control' => 'no-cache',
             'X-Accel-Buffering' => 'no',
             'Connection' => 'keep-alive',
-        ], $this->corsHeaders());
+        ];
 
         // Copy headers from daemon response
         foreach ($response->getHeaders() as $name => $values) {
@@ -163,10 +159,6 @@ class McpDaemonClient
         $resp = response($body, $status)
             ->header('Content-Type', $contentType);
 
-        foreach ($this->corsHeaders() as $name => $value) {
-            $resp->header($name, $value);
-        }
-
         // Copy headers from daemon response
         foreach ($response->getHeaders() as $name => $values) {
             if (strtolower($name) === 'content-type') {
@@ -176,14 +168,5 @@ class McpDaemonClient
         }
 
         return $resp;
-    }
-
-    private function corsHeaders(): array
-    {
-        return [
-            'Access-Control-Allow-Origin' => '*',
-            'Access-Control-Allow-Methods' => 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id',
-        ];
     }
 }

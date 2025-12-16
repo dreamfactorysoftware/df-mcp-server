@@ -6,7 +6,6 @@ use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\Utility\ResourcesWrapper;
-use Illuminate\Http\Request as IlluminateRequest;
 use Illuminate\Support\Str;
 
 class Mcp extends BaseRestService

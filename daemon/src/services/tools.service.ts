@@ -53,15 +53,6 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     const url = sessionConfig?.url ?? process.env.DREAMFACTORY_URL ?? '';
     const sessionToken = sessionConfig?.sessionToken ?? '';
 
-    // DEBUG
-    console.log('[Tools] getSessionConfig:', {
-      sessionId,
-      hasSessionConfig: !!sessionConfig,
-      url: url ? url.substring(0, 50) + '...' : 'none',
-      hasSessionToken: !!sessionToken,
-      sessionTokenPreview: sessionToken ? sessionToken.substring(0, 30) + '...' : 'none',
-    });
-
     if (!url || !sessionToken) {
       throw new Error(
         'DreamFactory session not found. Please authenticate via OAuth.'

@@ -71,12 +71,6 @@ app.all('/mcp/:serviceName', async (req, res) => {
     const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
     // Get DreamFactory session token from header (passed by PHP after OAuth validation)
     const dfSessionToken = req.headers['x-dreamfactory-session-token'];
-    console.log('[MCP] Request received:', {
-        serviceName,
-        sessionIdHeader,
-        hasExistingSession: !!existingSession,
-        hasDfSessionToken: !!dfSessionToken,
-    });
     if (!dfSessionToken) {
         return sendUnauthorized(res);
     }

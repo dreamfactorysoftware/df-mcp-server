@@ -13,6 +13,10 @@ use Illuminate\Support\Facades\Route;
 | BEFORE Laravel routing kicks in. The middleware handles all /mcp/*
 | requests directly to bypass DreamFactory's API routing.
 |
+| The middleware also handles:
+| - CORS headers for all MCP responses
+| - OPTIONS preflight requests
+|
 | These routes serve as:
 | 1. Documentation of available endpoints
 | 2. Fallback if middleware isn't registered
@@ -57,12 +61,10 @@ Route::group(['prefix' => 'mcp', 'middleware' => []], function () {
         ->where('mcpService', '[A-Za-z0-9_\-]+');
     Route::post('{mcpService}/token', [McpOAuthController::class, 'token'])
         ->where('mcpService', '[A-Za-z0-9_\-]+');
-    Route::options('{mcpService}/token', [McpOAuthController::class, 'handleOptions'])
-        ->where('mcpService', '[A-Za-z0-9_\-]+');
 
     // MCP Protocol
-    Route::match(['get', 'post'], '{mcpService}', [McpStreamController::class, 'handlePost'])
+    Route::get('{mcpService}', [McpStreamController::class, 'handleGet'])
         ->where('mcpService', '[A-Za-z0-9_\-]+');
-    Route::options('{mcpService}', [McpStreamController::class, 'handleOptions'])
+    Route::post('{mcpService}', [McpStreamController::class, 'handlePost'])
         ->where('mcpService', '[A-Za-z0-9_\-]+');
 })->withoutMiddleware(['df.api']);
