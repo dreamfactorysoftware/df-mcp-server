@@ -18,6 +18,8 @@ class McpServerConfig extends BaseServiceConfigModel
         'service_id',
         'api_name',
         'api_key',
+        'oauth_client_id',
+        'oauth_client_secret',
     ];
 
     protected $casts = [
@@ -54,7 +56,49 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['label'] = 'API Key';
                 $schema['description'] = 'Dreamfactory API Key.';
                 break;
+            case 'oauth_client_id':
+                $schema['label'] = 'OAuth Client ID (Optional)';
+                $schema['description'] = 'Pre-shared OAuth Client ID. When set, only clients with this exact ID can connect. Leave empty to auto-generate on first save.';
+                break;
+            case 'oauth_client_secret':
+                $schema['label'] = 'OAuth Client Secret (Optional)';
+                $schema['description'] = 'Pre-shared OAuth Client Secret for authentication. Leave empty to auto-generate on first save.';
+                break;
         }
+    }
+
+    /**
+     * Generate a unique OAuth client ID
+     */
+    public static function generateOAuthClientId(): string
+    {
+        return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * Generate an OAuth client secret
+     */
+    public static function generateOAuthClientSecret(): string
+    {
+        return bin2hex(random_bytes(32));
+    }
+
+    /**
+     * Boot method to auto-generate OAuth credentials on create
+     */
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::creating(function ($model) {
+            // Auto-generate OAuth credentials if not provided
+            if (empty($model->oauth_client_id)) {
+                $model->oauth_client_id = self::generateOAuthClientId();
+            }
+            if (empty($model->oauth_client_secret)) {
+                $model->oauth_client_secret = self::generateOAuthClientSecret();
+            }
+        });
     }
 }
 

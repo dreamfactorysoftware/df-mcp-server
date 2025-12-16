@@ -7,6 +7,7 @@ use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\McpServer\Models\McpOAuthAuthorizationCode;
 use DreamFactory\Core\McpServer\Models\McpOAuthClient;
+use DreamFactory\Core\McpServer\Models\McpServerConfig;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
 use Illuminate\Http\Request;
@@ -68,23 +69,30 @@ class McpOAuthController extends Controller
     /**
      * Dynamic Client Registration (RFC 7591)
      * POST /mcp/{service}/register
+     *
+     * Dynamic registration is disabled - clients must use pre-configured credentials
+     * from the MCP service configuration.
      */
     public function register(Request $request, string $mcpService)
     {
-        $data = $request->all();
+        // Dynamic registration is disabled - return the configured client info
+        $serviceConfig = $this->getServiceConfig($mcpService);
 
-        // Auto-generate client_id if not provided
-        if (empty($data['client_id'])) {
-            $data['client_id'] = McpOAuthClient::generateClientId();
+        if (!$serviceConfig || empty($serviceConfig['oauth_client_id'])) {
+            return response()->json([
+                'error' => 'invalid_request',
+                'error_description' => 'Dynamic client registration is disabled. Please use pre-configured OAuth credentials.',
+            ], 400)->withHeaders($this->corsHeaders());
         }
 
-        $client = McpOAuthClient::registerClient($data);
-
+        // Return the pre-configured client info (without the secret)
         return response()->json([
-            'client_id' => $client->client_id,
-            'client_secret' => $client->getAttributes()['client_secret'], // Bypass $hidden
-            'client_name' => $client->name,
-            'redirect_uris' => $client->redirect_uris,
+            'client_id' => $serviceConfig['oauth_client_id'],
+            'client_name' => $mcpService,
+            'redirect_uris' => [],
+            'grant_types' => ['authorization_code', 'refresh_token'],
+            'response_types' => ['code'],
+            'token_endpoint_auth_method' => 'client_secret_post',
         ])->withHeaders($this->corsHeaders());
     }
 
@@ -106,17 +114,41 @@ class McpOAuthController extends Controller
             return $this->errorResponse('unsupported_response_type', 'Only code response type is supported');
         }
 
-        // Validate client
+        // Validate client_id is provided
         if (empty($clientId)) {
             return $this->errorResponse('invalid_request', 'Missing client_id');
         }
 
+        // Get service config and validate client_id matches
+        $serviceConfig = $this->getServiceConfig($mcpService);
+        if (!$serviceConfig) {
+            return $this->errorResponse('server_error', 'MCP service not found');
+        }
+
+        // Validate client_id matches configured OAuth client
+        if (empty($serviceConfig['oauth_client_id'])) {
+            return $this->errorResponse('server_error', 'OAuth not configured for this service');
+        }
+
+        if ($clientId !== $serviceConfig['oauth_client_id']) {
+            Log::warning('MCP OAuth: Invalid client_id', [
+                'provided' => $clientId,
+                'expected' => $serviceConfig['oauth_client_id'],
+                'service' => $mcpService,
+            ]);
+            return $this->errorResponse('invalid_client', 'Invalid client_id');
+        }
+
+        // Ensure client exists in the OAuth clients table (for foreign key constraints)
         $client = McpOAuthClient::findByClientId($clientId);
         if (!$client) {
-            // Auto-register for dynamic clients (like Claude/ChatGPT)
-            $client = McpOAuthClient::registerClient([
+            // Create the client entry for the pre-configured credentials
+            $client = McpOAuthClient::create([
                 'client_id' => $clientId,
+                'client_secret' => $serviceConfig['oauth_client_secret'],
+                'name' => $mcpService,
                 'redirect_uris' => $redirectUri ? [$redirectUri] : [],
+                'is_active' => true,
             ]);
         }
 
@@ -397,15 +429,16 @@ class McpOAuthController extends Controller
             'code' => $request->input('code') ? substr($request->input('code'), 0, 20) . '...' : null,
             'redirect_uri' => $request->input('redirect_uri'),
             'client_id' => $request->input('client_id'),
+            'client_secret' => $request->input('client_secret') ? 'present' : 'missing',
             'code_verifier' => $request->input('code_verifier') ? 'present' : 'missing',
         ]);
 
         $grantType = $request->input('grant_type');
 
         if ($grantType === 'authorization_code') {
-            return $this->handleAuthorizationCodeGrant($request);
+            return $this->handleAuthorizationCodeGrant($request, $mcpService);
         } elseif ($grantType === 'refresh_token') {
-            return $this->handleRefreshTokenGrant($request);
+            return $this->handleRefreshTokenGrant($request, $mcpService);
         }
 
         return $this->tokenErrorResponse('unsupported_grant_type', 'Unsupported grant type');
@@ -422,16 +455,40 @@ class McpOAuthController extends Controller
     /**
      * Handle authorization_code grant
      */
-    private function handleAuthorizationCodeGrant(Request $request)
+    private function handleAuthorizationCodeGrant(Request $request, string $mcpService)
     {
         $code = $request->input('code');
         $redirectUri = $request->input('redirect_uri');
         $clientId = $request->input('client_id');
+        $clientSecret = $request->input('client_secret');
         $codeVerifier = $request->input('code_verifier');
 
         if (empty($code)) {
             Log::warning('OAuth token: Missing code');
             return $this->tokenErrorResponse('invalid_request', 'Missing code');
+        }
+
+        // Get service config and validate client credentials
+        $serviceConfig = $this->getServiceConfig($mcpService);
+        if (!$serviceConfig || empty($serviceConfig['oauth_client_id'])) {
+            return $this->tokenErrorResponse('server_error', 'OAuth not configured for this service');
+        }
+
+        // Validate client_id
+        if (empty($clientId) || $clientId !== $serviceConfig['oauth_client_id']) {
+            Log::warning('OAuth token: Invalid client_id', [
+                'provided' => $clientId,
+                'service' => $mcpService,
+            ]);
+            return $this->tokenErrorResponse('invalid_client', 'Invalid client_id');
+        }
+
+        // Validate client_secret
+        if (empty($clientSecret) || $clientSecret !== $serviceConfig['oauth_client_secret']) {
+            Log::warning('OAuth token: Invalid client_secret', [
+                'service' => $mcpService,
+            ]);
+            return $this->tokenErrorResponse('invalid_client', 'Invalid client_secret');
         }
 
         // Find and validate code
@@ -449,9 +506,9 @@ class McpOAuthController extends Controller
             'has_code_challenge' => !empty($authCode->code_challenge),
         ]);
 
-        // Verify client (only if client_id is provided in request)
-        if (!empty($clientId) && $authCode->client_id !== $clientId) {
-            Log::warning('OAuth token: Client mismatch');
+        // Verify client matches the auth code
+        if ($authCode->client_id !== $clientId) {
+            Log::warning('OAuth token: Client mismatch with auth code');
             $authCode->consume();
             return $this->tokenErrorResponse('invalid_grant', 'Client mismatch');
         }
@@ -500,13 +557,30 @@ class McpOAuthController extends Controller
     /**
      * Handle refresh_token grant
      */
-    private function handleRefreshTokenGrant(Request $request)
+    private function handleRefreshTokenGrant(Request $request, string $mcpService)
     {
         $refreshToken = $request->input('refresh_token');
         $clientId = $request->input('client_id');
+        $clientSecret = $request->input('client_secret');
 
         if (empty($refreshToken)) {
             return $this->tokenErrorResponse('invalid_request', 'Missing refresh_token');
+        }
+
+        // Get service config and validate client credentials
+        $serviceConfig = $this->getServiceConfig($mcpService);
+        if (!$serviceConfig || empty($serviceConfig['oauth_client_id'])) {
+            return $this->tokenErrorResponse('server_error', 'OAuth not configured for this service');
+        }
+
+        // Validate client_id
+        if (empty($clientId) || $clientId !== $serviceConfig['oauth_client_id']) {
+            return $this->tokenErrorResponse('invalid_client', 'Invalid client_id');
+        }
+
+        // Validate client_secret
+        if (empty($clientSecret) || $clientSecret !== $serviceConfig['oauth_client_secret']) {
+            return $this->tokenErrorResponse('invalid_client', 'Invalid client_secret');
         }
 
         $token = McpOAuthAccessToken::findValidRefreshToken($refreshToken);
@@ -514,8 +588,8 @@ class McpOAuthController extends Controller
             return $this->tokenErrorResponse('invalid_grant', 'Invalid or expired refresh token');
         }
 
-        // Verify client
-        if (!empty($clientId) && $token->client_id !== $clientId) {
+        // Verify client matches token
+        if ($token->client_id !== $clientId) {
             return $this->tokenErrorResponse('invalid_grant', 'Client mismatch');
         }
 
@@ -666,6 +740,29 @@ class McpOAuthController extends Controller
         }
 
         return $url;
+    }
+
+    /**
+     * Get service configuration by service name
+     */
+    private function getServiceConfig(string $mcpService): ?array
+    {
+        try {
+            /** @var \DreamFactory\Core\Services\ServiceManager $serviceManager */
+            $serviceManager = app('df.service');
+            $service = $serviceManager->getService($mcpService);
+
+            if (method_exists($service, 'getConfig')) {
+                return $service->getConfig();
+            }
+        } catch (\Throwable $e) {
+            Log::error('Failed to get service config', [
+                'mcpService' => $mcpService,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
     }
 
     /**
