@@ -10,22 +10,25 @@ use Illuminate\Support\Str;
 
 class Mcp extends BaseRestService
 {
-    public function __construct(array $settings = [])
-    {
-        parent::__construct($settings);
-    }
-
-    /**
-     * Get the API name from service config
-     */
     protected function getApiName(): ?string
     {
         return $this->getConfig('api_name');
     }
 
-    protected function getServiceName(): string
+    protected function getMcpEndpoint(): string
     {
-        return $this->name;
+        return url('/mcp/' . $this->name);
+    }
+
+    protected function getValidatedApiName(): string
+    {
+        $apiName = $this->getApiName();
+
+        if (!$apiName) {
+            throw new BadRequestException('API name must be configured for this service.');
+        }
+
+        return $apiName;
     }
 
     protected function handleGET()
@@ -34,33 +37,21 @@ class Mcp extends BaseRestService
             return ResourcesWrapper::wrapResources($this->getAccessList());
         }
 
-        $apiName = $this->getApiName();
-
-        if (!$apiName) {
-            throw new BadRequestException('API name must be configured for this service.');
-        }
-
         return [
             'service_id' => $this->id,
-            'api_name' => $apiName,
-            'mcp_endpoint' => url('/mcp/' . $this->getServiceName()),
+            'api_name' => $this->getValidatedApiName(),
+            'mcp_endpoint' => $this->getMcpEndpoint(),
         ];
     }
 
     protected function handlePOST()
     {
-        $apiName = $this->getApiName();
-
-        if (!$apiName) {
-            throw new BadRequestException('API name must be configured for this service.');
-        }
-
         return [
             'ok' => true,
             'message' => 'MCP server configuration updated successfully',
             'server' => [
-                'api_name' => $apiName,
-                'mcp_endpoint' => url('/mcp/' . $this->getServiceName()),
+                'api_name' => $this->getValidatedApiName(),
+                'mcp_endpoint' => $this->getMcpEndpoint(),
             ],
         ];
     }
@@ -71,7 +62,6 @@ class Mcp extends BaseRestService
     protected function getApiDocPaths(): array
     {
         $studly = Str::studly($this->name ?? 'mcp');
-        $daemonEndpoint = url('/mcp/' . $this->getServiceName());
 
         return [
             '/' => [
@@ -79,7 +69,7 @@ class Mcp extends BaseRestService
                     'summary' => 'Retrieve MCP service configuration',
                     'description' => sprintf(
                         'Returns the configured API name and the MCP endpoint (%s) clients should use.',
-                        $daemonEndpoint
+                        $this->getMcpEndpoint()
                     ),
                     'operationId' => 'get' . $studly . 'McpService',
                     'responses' => [
@@ -97,7 +87,7 @@ class Mcp extends BaseRestService
                     ],
                     'responses' => [
                         '200' => [
-                            '$ref' => '#/components/responses/McpServiceInfoResponse',
+                            '$ref' => '#/components/responses/McpConfigUpdateResponse',
                         ],
                     ],
                 ],
@@ -129,10 +119,18 @@ class Mcp extends BaseRestService
     {
         return [
             'McpServiceInfoResponse' => [
-                'description' => 'MCP service information and endpoint metadata',
+                'description' => 'MCP service configuration details',
                 'content' => [
                     'application/json' => [
                         'schema' => ['$ref' => '#/components/schemas/McpServiceInfo'],
+                    ],
+                ],
+            ],
+            'McpConfigUpdateResponse' => [
+                'description' => 'MCP configuration update confirmation',
+                'content' => [
+                    'application/json' => [
+                        'schema' => ['$ref' => '#/components/schemas/McpConfigUpdateResult'],
                     ],
                 ],
             ],
@@ -144,20 +142,13 @@ class Mcp extends BaseRestService
      */
     protected function getApiDocSchemas(): array
     {
-        $daemonEndpoint = url('/mcp/' . $this->getServiceName());
+        $endpoint = $this->getMcpEndpoint();
 
         return [
             'McpServiceInfo' => [
                 'type' => 'object',
+                'description' => 'MCP service configuration returned by GET request.',
                 'properties' => [
-                    'ok' => [
-                        'type' => 'boolean',
-                        'description' => 'Indicates whether the MCP configuration check succeeded.',
-                    ],
-                    'message' => [
-                        'type' => 'string',
-                        'description' => 'Human readable summary of the MCP service status.',
-                    ],
                     'service_id' => [
                         'type' => 'integer',
                         'format' => 'int32',
@@ -167,18 +158,35 @@ class Mcp extends BaseRestService
                         'type' => 'string',
                         'description' => 'Configured DreamFactory database service name.',
                     ],
-                    'server' => [
-                        '$ref' => '#/components/schemas/McpServerInfo',
-                    ],
                     'mcp_endpoint' => [
                         'type' => 'string',
                         'description' => 'Fully-qualified MCP endpoint URL clients should call.',
-                        'example' => $daemonEndpoint,
+                        'example' => $endpoint,
                     ],
                 ],
+                'required' => ['service_id', 'api_name', 'mcp_endpoint'],
+            ],
+            'McpConfigUpdateResult' => [
+                'type' => 'object',
+                'description' => 'Result of MCP configuration update via POST request.',
+                'properties' => [
+                    'ok' => [
+                        'type' => 'boolean',
+                        'description' => 'Indicates whether the MCP configuration update succeeded.',
+                    ],
+                    'message' => [
+                        'type' => 'string',
+                        'description' => 'Human readable summary of the operation result.',
+                    ],
+                    'server' => [
+                        '$ref' => '#/components/schemas/McpServerInfo',
+                    ],
+                ],
+                'required' => ['ok', 'message', 'server'],
             ],
             'McpServerInfo' => [
                 'type' => 'object',
+                'description' => 'MCP server endpoint information.',
                 'properties' => [
                     'api_name' => [
                         'type' => 'string',
@@ -186,13 +194,15 @@ class Mcp extends BaseRestService
                     ],
                     'mcp_endpoint' => [
                         'type' => 'string',
-                        'description' => 'MCP endpoint for this service.',
-                        'example' => $daemonEndpoint,
+                        'description' => 'MCP endpoint URL for this service.',
+                        'example' => $endpoint,
                     ],
                 ],
+                'required' => ['api_name', 'mcp_endpoint'],
             ],
             'McpConfigRequest' => [
                 'type' => 'object',
+                'description' => 'Optional payload for validating MCP configuration.',
                 'properties' => [
                     'api_name' => [
                         'type' => 'string',
