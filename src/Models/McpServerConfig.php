@@ -53,11 +53,13 @@ class McpServerConfig extends BaseServiceConfigModel
                 break;
             case 'oauth_client_id':
                 $schema['label'] = 'OAuth Client ID';
-                $schema['description'] = 'OAuth Client ID for authentication. Auto-generated on service creation.';
+                $schema['description'] = 'OAuth Client ID for authentication.';
+                $schema['default'] = self::generateOAuthClientId();
                 break;
             case 'oauth_client_secret':
                 $schema['label'] = 'OAuth Client Secret';
-                $schema['description'] = 'OAuth Client Secret for authentication. Auto-generated on service creation.';
+                $schema['description'] = 'OAuth Client Secret for authentication.';
+                $schema['default'] = self::generateOAuthClientSecret();
                 break;
         }
     }
