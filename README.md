@@ -17,19 +17,19 @@ Edit your project’s composer.json to require the following package.
 Save your composer.json and do a "composer update" to install the package.
 
 ### MCP Daemon process
-The Laravel package proxies every MCP request through a persistent Node.js daemon that keeps long-lived MCP server instances warm.  
+The Laravel package proxies every MCP request through a persistent Node.js daemon that keeps long-lived MCP server instances warm.
 
-1. Install dependencies  
+1. Install dependencies
    ```
    cd daemon
    npm install
    ```
-2. Configure the daemon host/port (or use defaults) and point DreamFactory to it by adding the following to your `.env` file:  
+2. Configure the daemon host/port (or use defaults) and point DreamFactory to it by adding the following to your `.env` file:
    ```
    MCP_DAEMON_ENABLED=true
    MCP_DAEMON_URL=http://127.0.0.1:8006
    ```
-3. Start the daemon (choose the mode you need):  
+3. Start the daemon (choose the mode you need):
    ```
    # Development
    npm run dev
@@ -38,7 +38,13 @@ The Laravel package proxies every MCP request through a persistent Node.js daemo
    npm start
    ```
 
-Once the daemon is online, the MCP routes in DreamFactory automatically forward traffic to it. See `daemon/README.md` for advanced options and management endpoints.
+Once the daemon is online, the MCP routes in DreamFactory automatically forward traffic to it.
+
+### Authentication
+
+The MCP service uses OAuth-based authentication. Users must authenticate with DreamFactory via OAuth to obtain a session token. The Laravel controller validates requests and passes the session token to the daemon via the `X-DreamFactory-Session-Token` header.
+
+See `daemon/README.md` for advanced options, available tools, and management endpoints.
 
 ## Feedback and Contributions
 

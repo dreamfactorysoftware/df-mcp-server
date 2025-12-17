@@ -6,8 +6,9 @@ TypeScript implementation of the MCP Daemon Server for DreamFactory. This daemon
 
 - Long-lived process with cached MCP Server instances
 - HTTP API compatible with Laravel's `McpDaemonClient`
-- SSE (Server-Sent Events) support for streaming
+- Streamable HTTP transport with session management
 - Health check and cache management endpoints
+- OAuth-based authentication via DreamFactory session tokens
 - All DreamFactory database tools using MCP SDK's `server.tool()` pattern
 - Comprehensive error handling with user-friendly messages
 - Full support for tables, records, stored procedures, and functions
@@ -40,19 +41,6 @@ npm run dev
 npm start
 ```
 
-## Endpoints
-
-- `GET /health` - Health check with cached services list
-- `GET /ping` - Alias for `/health`
-- `POST /mcp/cache/clear` - Clear cache (body: `{"service": "serviceName"}` or `{}` for all)
-- `GET /mcp/{serviceName}` - SSE endpoint (requires `Accept: text/event-stream`)
-- `POST /mcp/{serviceName}` - JSON-RPC endpoint
-
-### Required Headers
-
-- `X-Mcp-Config`: JSON with `{"api_name": "...", "api_key": "..."}`
-- `X-Mcp-Base-Url`: Base URL for DreamFactory API
-
 ## DreamFactory Configuration
 
 Update DreamFactory `.env`:
@@ -62,5 +50,69 @@ MCP_DAEMON_ENABLED=true
 MCP_DAEMON_URL=http://127.0.0.1:8006
 ```
 
-The Laravel controller will proxy all MCP requests to this Node daemon.
+The Laravel controller will proxy all MCP requests to this Node daemon, passing the authenticated user's session token via the `X-DreamFactory-Session-Token` header.
 
+## Authentication Flow
+
+1. User authenticates with DreamFactory via OAuth
+2. DreamFactory validates the request and obtains a session token
+3. The Laravel controller forwards MCP requests to the daemon with the session token
+4. The daemon uses the session token to make authenticated API calls to DreamFactory
+
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check with active sessions list |
+| `GET` | `/ping` | Alias for `/health` |
+| `POST` | `/mcp/cache/clear` | Clear session cache (body: `{"service": "serviceName"}` or `{}` for all) |
+| `ALL` | `/mcp/{serviceName}` | MCP protocol endpoint (JSON-RPC) |
+
+### Required Headers
+
+| Header | Description |
+|--------|-------------|
+| `X-DreamFactory-Session-Token` | DreamFactory session token (required for authentication) |
+| `X-Mcp-Config` | JSON with `{"api_name": "..."}` |
+| `X-Mcp-Base-Url` | Base URL for DreamFactory API |
+
+### Optional Headers
+
+| Header | Description |
+|--------|-------------|
+| `Mcp-Session-Id` | Session ID for existing MCP sessions |
+
+## Available MCP Tools
+
+The daemon exposes the following tools via the MCP protocol:
+
+### Schema Tools
+| Tool | Description |
+|------|-------------|
+| `get_tables` | List all tables available in the database |
+| `get_table_schema` | Retrieve the full schema of a specific table |
+| `get_table_fields` | Get field definitions for a table |
+| `get_table_relationships` | Get relationship definitions for a table |
+| `get_database_resources` | List all resources available in the database service |
+
+### Data Tools
+| Tool | Description |
+|------|-------------|
+| `get_table_data` | Retrieve table data with filtering, pagination, and sorting |
+| `create_records` | Create one or more records in a table |
+| `update_records` | Update (patch) records in a table |
+| `delete_records` | Delete records from a table |
+
+### Stored Procedures & Functions
+| Tool | Description |
+|------|-------------|
+| `get_stored_procedures` | List stored procedures available in the database |
+| `call_stored_procedure` | Execute a stored procedure with parameters |
+| `get_stored_functions` | List stored functions available in the database |
+| `call_stored_function` | Execute a stored function with parameters |
+
+### Connector Stubs
+| Tool | Description |
+|------|-------------|
+| `search` | Stub search implementation for connectors that require it |
+| `fetch` | Stub fetch implementation for connectors that require it |

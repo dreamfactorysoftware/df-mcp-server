@@ -6,35 +6,29 @@ use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\Utility\ResourcesWrapper;
-use Illuminate\Http\Request as IlluminateRequest;
 use Illuminate\Support\Str;
 
 class Mcp extends BaseRestService
 {
-    public function __construct(array $settings = [])
-    {
-        parent::__construct($settings);
-    }
-
-    /**
-     * Get the API name from service config
-     */
     protected function getApiName(): ?string
     {
         return $this->getConfig('api_name');
     }
 
-    /**
-     * Get the API key from service config
-     */
-    protected function getApiKey(): ?string
+    protected function getMcpEndpoint(): string
     {
-        return $this->getConfig('api_key');
+        return url('/mcp/' . $this->name);
     }
 
-    protected function getServiceName(): string
+    protected function getValidatedApiName(): string
     {
-        return $this->name;
+        $apiName = $this->getApiName();
+
+        if (!$apiName) {
+            throw new BadRequestException('API name must be configured for this service.');
+        }
+
+        return $apiName;
     }
 
     protected function handleGET()
@@ -43,40 +37,21 @@ class Mcp extends BaseRestService
             return ResourcesWrapper::wrapResources($this->getAccessList());
         }
 
-        // Standard GET - return service info
-        $apiName = $this->getApiName();
-        $apiKey = $this->getApiKey();
-
-        if (!$apiName || !$apiKey) {
-            throw new BadRequestException('API name and API key must be configured for this service. Please configure the service with api_name and api_key settings.');
-        }
-
-        $serviceId = $this->id;
-
         return [
-            'service_id' => $serviceId,
-            'api_name' => $apiName,
-            'api_key' => $apiKey,
-            'mcp_endpoint' => url('/mcp/' . $this->getServiceName()),
+            'service_id' => $this->id,
+            'api_name' => $this->getValidatedApiName(),
+            'mcp_endpoint' => $this->getMcpEndpoint(),
         ];
     }
 
     protected function handlePOST()
     {
-        // Standard POST - sync configuration to registry
-        $apiName = $this->getApiName();
-        $apiKey = $this->getApiKey();
-
-        if (!$apiName || !$apiKey) {
-            throw new BadRequestException('API name and API key must be configured for this service. Please configure the service with api_name and api_key settings.');
-        }
-
         return [
             'ok' => true,
             'message' => 'MCP server configuration updated successfully',
             'server' => [
-                'api_name' => $apiName,
-                'mcp_endpoint' => url('/mcp/' . $this->getServiceName()),
+                'api_name' => $this->getValidatedApiName(),
+                'mcp_endpoint' => $this->getMcpEndpoint(),
             ],
         ];
     }
@@ -87,15 +62,14 @@ class Mcp extends BaseRestService
     protected function getApiDocPaths(): array
     {
         $studly = Str::studly($this->name ?? 'mcp');
-        $daemonEndpoint = url('/mcp/' . $this->getServiceName());
 
         return [
             '/' => [
                 'get' => [
                     'summary' => 'Retrieve MCP service configuration',
                     'description' => sprintf(
-                        'Returns the configured API name/key and the daemon endpoint (%s) clients should use for MCP traffic.',
-                        $daemonEndpoint
+                        'Returns the configured API name and the MCP endpoint (%s) clients should use.',
+                        $this->getMcpEndpoint()
                     ),
                     'operationId' => 'get' . $studly . 'McpService',
                     'responses' => [
@@ -105,15 +79,15 @@ class Mcp extends BaseRestService
                     ],
                 ],
                 'post' => [
-                    'summary' => 'Refresh MCP configuration and registry entry',
-                    'description' => 'Validates the stored configuration and returns the daemon endpoint metadata so automation systems can verify connectivity.',
+                    'summary' => 'Refresh MCP configuration',
+                    'description' => 'Validates the stored configuration and returns the MCP endpoint metadata.',
                     'operationId' => 'sync' . $studly . 'McpService',
                     'requestBody' => [
                         '$ref' => '#/components/requestBodies/McpConfigRequest',
                     ],
                     'responses' => [
                         '200' => [
-                            '$ref' => '#/components/responses/McpServiceInfoResponse',
+                            '$ref' => '#/components/responses/McpConfigUpdateResponse',
                         ],
                     ],
                 ],
@@ -145,10 +119,18 @@ class Mcp extends BaseRestService
     {
         return [
             'McpServiceInfoResponse' => [
-                'description' => 'MCP service information and daemon endpoint metadata',
+                'description' => 'MCP service configuration details',
                 'content' => [
                     'application/json' => [
                         'schema' => ['$ref' => '#/components/schemas/McpServiceInfo'],
+                    ],
+                ],
+            ],
+            'McpConfigUpdateResponse' => [
+                'description' => 'MCP configuration update confirmation',
+                'content' => [
+                    'application/json' => [
+                        'schema' => ['$ref' => '#/components/schemas/McpConfigUpdateResult'],
                     ],
                 ],
             ],
@@ -160,20 +142,13 @@ class Mcp extends BaseRestService
      */
     protected function getApiDocSchemas(): array
     {
-        $daemonEndpoint = url('/mcp/' . $this->getServiceName());
+        $endpoint = $this->getMcpEndpoint();
 
         return [
             'McpServiceInfo' => [
                 'type' => 'object',
+                'description' => 'MCP service configuration returned by GET request.',
                 'properties' => [
-                    'ok' => [
-                        'type' => 'boolean',
-                        'description' => 'Indicates whether the MCP configuration check succeeded.',
-                    ],
-                    'message' => [
-                        'type' => 'string',
-                        'description' => 'Human readable summary of the MCP service status.',
-                    ],
                     'service_id' => [
                         'type' => 'integer',
                         'format' => 'int32',
@@ -181,50 +156,60 @@ class Mcp extends BaseRestService
                     ],
                     'api_name' => [
                         'type' => 'string',
-                        'description' => 'Configured DreamFactory service name used when registering with the daemon.',
+                        'description' => 'Configured DreamFactory database service name.',
                     ],
-                    'api_key' => [
+                    'mcp_endpoint' => [
                         'type' => 'string',
-                        'description' => 'API key that allows the daemon to authenticate against DreamFactory.',
+                        'description' => 'Fully-qualified MCP endpoint URL clients should call.',
+                        'example' => $endpoint,
+                    ],
+                ],
+                'required' => ['service_id', 'api_name', 'mcp_endpoint'],
+            ],
+            'McpConfigUpdateResult' => [
+                'type' => 'object',
+                'description' => 'Result of MCP configuration update via POST request.',
+                'properties' => [
+                    'ok' => [
+                        'type' => 'boolean',
+                        'description' => 'Indicates whether the MCP configuration update succeeded.',
+                    ],
+                    'message' => [
+                        'type' => 'string',
+                        'description' => 'Human readable summary of the operation result.',
                     ],
                     'server' => [
                         '$ref' => '#/components/schemas/McpServerInfo',
                     ],
-                    'mcp_endpoint' => [
-                        'type' => 'string',
-                        'description' => 'Fully-qualified daemon URL clients should call.',
-                        'example' => $daemonEndpoint,
-                    ],
                 ],
+                'required' => ['ok', 'message', 'server'],
             ],
             'McpServerInfo' => [
                 'type' => 'object',
+                'description' => 'MCP server endpoint information.',
                 'properties' => [
                     'api_name' => [
                         'type' => 'string',
-                        'description' => 'The API name registered with the daemon.',
+                        'description' => 'The API name for this service.',
                     ],
                     'mcp_endpoint' => [
                         'type' => 'string',
-                        'description' => 'Daemon endpoint for this service.',
-                        'example' => $daemonEndpoint,
+                        'description' => 'MCP endpoint URL for this service.',
+                        'example' => $endpoint,
                     ],
                 ],
+                'required' => ['api_name', 'mcp_endpoint'],
             ],
             'McpConfigRequest' => [
                 'type' => 'object',
+                'description' => 'Optional payload for validating MCP configuration.',
                 'properties' => [
                     'api_name' => [
                         'type' => 'string',
-                        'description' => 'Optional override for the API name to register with the daemon.',
-                    ],
-                    'api_key' => [
-                        'type' => 'string',
-                        'description' => 'Optional override for the API key to send to the daemon.',
+                        'description' => 'Optional override for the API name.',
                     ],
                 ],
             ],
         ];
     }
 }
-

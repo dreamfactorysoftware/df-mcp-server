@@ -23,10 +23,26 @@ const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+/**
+ * Send 401 Unauthorized response
+ */
+function sendUnauthorized(res: Response): void {
+  res.status(401).json({
+    jsonrpc: '2.0',
+    id: null,
+    error: {
+      code: -32001,
+      message: 'Unauthorized: DreamFactory session token required',
+    },
+  });
+}
 
 const sessionManager = new SessionService();
 const sessions = new Map<string, SessionEntry>();
 
+// Health check endpoints
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
@@ -43,6 +59,7 @@ app.get('/ping', (_req, res) => {
   });
 });
 
+// Cache management endpoint
 app.post('/mcp/cache/clear', (req, res) => {
   const service = typeof req.body === 'object' ? req.body?.service : undefined;
   if (service) {
@@ -64,10 +81,21 @@ app.post('/mcp/cache/clear', (req, res) => {
   }
 });
 
+// ============================================================================
+// MCP Protocol Endpoint - Requires DreamFactory session token from PHP
+// ============================================================================
+
 app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
   const { serviceName } = req.params;
   const sessionIdHeader = getSessionId(req);
   const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
+
+  // Get DreamFactory session token from header (passed by PHP after OAuth validation)
+  const dfSessionToken = req.headers['x-dreamfactory-session-token'] as string | undefined;
+
+  if (!dfSessionToken) {
+    return sendUnauthorized(res);
+  }
 
   try {
     if (existingSession) {
@@ -88,13 +116,18 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       return;
     }
 
+    // Build config from headers
     const config = parseConfigFromHeaders(req);
     const server = createServer(serviceName, config.baseUrl, sessionManager);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {
         const sessionId = randomUUID();
-        sessionManager.setConfig(sessionId, { url: config.baseUrl, apiKey: config.apiKey });
+        // Store DF session token for user authentication
+        sessionManager.setConfig(sessionId, {
+          url: config.baseUrl,
+          sessionToken: dfSessionToken
+        });
         return sessionId;
       },
       onsessioninitialized: sessionId => {
@@ -133,7 +166,13 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`MCP Streamable HTTP daemon listening on http://${HOST}:${PORT}`);
+  console.log(`MCP Daemon listening on http://${HOST}:${PORT}`);
+  console.log('');
+  console.log('Endpoints:');
+  console.log(`  GET  /health - Health check`);
+  console.log(`  GET  /ping - Ping`);
+  console.log(`  POST /mcp/cache/clear - Clear session cache`);
+  console.log(`  ALL  /mcp/:serviceName - MCP protocol (requires X-DreamFactory-Session-Token header)`);
 });
 
 process.on('SIGINT', async () => {
@@ -148,4 +187,3 @@ process.on('SIGINT', async () => {
   }
   process.exit(0);
 });
-

@@ -5,7 +5,6 @@ namespace DreamFactory\Core\McpServer\Models;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Models\BaseServiceConfigModel;
 use ServiceManager;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class McpServerConfig extends BaseServiceConfigModel
@@ -17,12 +16,14 @@ class McpServerConfig extends BaseServiceConfigModel
     protected $fillable = [
         'service_id',
         'api_name',
-        'api_key',
+        'oauth_client_id',
+        'oauth_client_secret',
     ];
 
     protected $casts = [
         'service_id' => 'integer'
     ];
+
 
     /**
      * @param array $schema
@@ -50,11 +51,51 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['label'] = 'API Name';
                 $schema['description'] = 'Your Dreamfactory API name.';
                 break;
-            case 'api_key':
-                $schema['label'] = 'API Key';
-                $schema['description'] = 'Dreamfactory API Key.';
+            case 'oauth_client_id':
+                $schema['label'] = 'OAuth Client ID';
+                $schema['description'] = 'OAuth Client ID for authentication.';
+                $schema['default'] = self::generateOAuthClientId();
+                break;
+            case 'oauth_client_secret':
+                $schema['label'] = 'OAuth Client Secret';
+                $schema['description'] = 'OAuth Client Secret for authentication.';
+                $schema['default'] = self::generateOAuthClientSecret();
                 break;
         }
+    }
+
+    /**
+     * Generate a unique OAuth client ID
+     */
+    public static function generateOAuthClientId(): string
+    {
+        return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * Generate an OAuth client secret
+     */
+    public static function generateOAuthClientSecret(): string
+    {
+        return bin2hex(random_bytes(32));
+    }
+
+    /**
+     * Boot method to auto-generate OAuth credentials on create
+     */
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::creating(function ($model) {
+            // Auto-generate OAuth credentials if not provided
+            if (empty($model->oauth_client_id)) {
+                $model->oauth_client_id = self::generateOAuthClientId();
+            }
+            if (empty($model->oauth_client_secret)) {
+                $model->oauth_client_secret = self::generateOAuthClientSecret();
+            }
+        });
     }
 }
 

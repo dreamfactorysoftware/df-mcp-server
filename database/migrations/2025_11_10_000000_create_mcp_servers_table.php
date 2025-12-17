@@ -14,8 +14,9 @@ return new class extends Migration
                 function (Blueprint $table) {
                     $table->integer('service_id')->unsigned()->primary();
                     $table->foreign('service_id')->references('id')->on('service')->onDelete('cascade');
-                    $table->string('api_key', 255)->index();
                     $table->string('api_name', 255)->index();
+                    $table->string('oauth_client_id', 100)->nullable();
+                    $table->string('oauth_client_secret', 255)->nullable();
                     $table->timestamps();
                     $table->softDeletes();
             });
