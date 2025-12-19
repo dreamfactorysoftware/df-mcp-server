@@ -38,6 +38,17 @@ class McpDaemonClient
                 'Accept' => 'application/json, text/event-stream',
             ];
 
+            // Pass API key if configured (required for non-admin users)
+            $appId = $config['app_id'] ?? null;
+            Log::debug('MCP API Key lookup', ['app_id' => $appId, 'config_keys' => array_keys($config)]);
+            if ($appId) {
+                $apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId);
+                Log::debug('MCP API Key result', ['app_id' => $appId, 'api_key_found' => !empty($apiKey)]);
+                if ($apiKey) {
+                    $headers['X-DreamFactory-API-Key'] = $apiKey;
+                }
+            }
+
             // Copy relevant headers from original request
             foreach ($request->headers->all() as $key => $values) {
                 $lowerKey = strtolower($key);

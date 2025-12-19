@@ -16,14 +16,44 @@ class McpServerConfig extends BaseServiceConfigModel
     protected $fillable = [
         'service_id',
         'api_name',
+        'app_id',
         'oauth_client_id',
         'oauth_client_secret',
     ];
 
     protected $casts = [
-        'service_id' => 'integer'
+        'service_id' => 'integer',
+        'app_id' => 'integer',
     ];
 
+    protected $hidden = [
+        'api_key', // Legacy column - hidden from UI
+    ];
+
+    /**
+     * Fields to exclude from config schema (UI) but include in getConfig()
+     */
+    protected static $schemaHiddenFields = [
+        'app_id',
+    ];
+
+
+    /**
+     * Override to exclude schemaHiddenFields from UI
+     */
+    public static function getConfigSchema()
+    {
+        $schema = parent::getConfigSchema();
+
+        if ($schema) {
+            $schema = array_filter($schema, function ($field) {
+                return !in_array($field['name'] ?? '', static::$schemaHiddenFields);
+            });
+            $schema = array_values($schema); // Re-index array
+        }
+
+        return $schema;
+    }
 
     /**
      * @param array $schema
@@ -95,7 +125,20 @@ class McpServerConfig extends BaseServiceConfigModel
             if (empty($model->oauth_client_secret)) {
                 $model->oauth_client_secret = self::generateOAuthClientSecret();
             }
+            // Auto-set admin app if not provided
+            if (empty($model->app_id)) {
+                $model->app_id = self::getAdminAppId();
+            }
         });
+    }
+
+    /**
+     * Get the admin app ID
+     */
+    public static function getAdminAppId(): ?int
+    {
+        $adminApp = \DreamFactory\Core\Models\App::where('name', 'admin')->first();
+        return $adminApp?->id;
     }
 }
 

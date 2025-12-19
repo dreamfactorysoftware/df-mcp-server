@@ -52,6 +52,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
     const url = sessionConfig?.url ?? process.env.DREAMFACTORY_URL ?? '';
     const sessionToken = sessionConfig?.sessionToken ?? '';
+    const apiKey = sessionConfig?.apiKey;
 
     if (!url || !sessionToken) {
       throw new Error(
@@ -61,7 +62,7 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
 
     return {
       url,
-      auth: { sessionToken }
+      auth: { sessionToken, apiKey }
     };
   };
 
