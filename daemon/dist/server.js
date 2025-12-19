@@ -71,6 +71,8 @@ app.all('/mcp/:serviceName', async (req, res) => {
     const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
     // Get DreamFactory session token from header (passed by PHP after OAuth validation)
     const dfSessionToken = req.headers['x-dreamfactory-session-token'];
+    // Get API key (required for non-admin users)
+    const dfApiKey = req.headers['x-dreamfactory-api-key'];
     if (!dfSessionToken) {
         return sendUnauthorized(res);
     }
@@ -97,10 +99,11 @@ app.all('/mcp/:serviceName', async (req, res) => {
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => {
                 const sessionId = randomUUID();
-                // Store DF session token for user authentication
+                // Store DF session token and API key for user authentication
                 sessionManager.setConfig(sessionId, {
                     url: config.baseUrl,
-                    sessionToken: dfSessionToken
+                    sessionToken: dfSessionToken,
+                    apiKey: dfApiKey
                 });
                 return sessionId;
             },

@@ -23,11 +23,12 @@ export function updateSessionConfigFromHeaders(
 
   const baseUrl = req.header('X-Mcp-Base-Url');
   const sessionToken = req.header('X-DreamFactory-Session-Token');
+  const apiKey = req.header('X-DreamFactory-API-Key');
   if (!baseUrl || !sessionToken) {
     return;
   }
 
-  sessionManager.setConfig(sessionId, { url: baseUrl, sessionToken });
+  sessionManager.setConfig(sessionId, { url: baseUrl, sessionToken, apiKey });
 }
 
 export function parseConfigFromHeaders(req: Request) {

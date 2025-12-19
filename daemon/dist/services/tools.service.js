@@ -40,12 +40,13 @@ export function registerDreamFactoryTools(server, sessionManager) {
         const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
         const url = sessionConfig?.url ?? process.env.DREAMFACTORY_URL ?? '';
         const sessionToken = sessionConfig?.sessionToken ?? '';
+        const apiKey = sessionConfig?.apiKey;
         if (!url || !sessionToken) {
             throw new Error('DreamFactory session not found. Please authenticate via OAuth.');
         }
         return {
             url,
-            auth: { sessionToken }
+            auth: { sessionToken, apiKey }
         };
     };
     const tool = (name, title, description, schema, handler) => {
