@@ -6,6 +6,7 @@ use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\McpServer\Models\McpOAuthAuthorizationCode;
 use DreamFactory\Core\McpServer\Models\McpOAuthClient;
+use DreamFactory\Core\McpServer\Models\McpServerConfig;
 use GuzzleHttp\Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -205,7 +206,7 @@ class McpOAuthController extends Controller
         }
 
         // ============================================================
-        // No existing session - redirect to DreamFactory login
+        // No existing session - redirect to login page
         // ============================================================
 
         // Generate internal state for tracking
@@ -222,8 +223,51 @@ class McpOAuthController extends Controller
             'service' => $mcpService,
         ], now()->addMinutes(10));
 
-        // Build the callback URL that DF will redirect to after login
         $baseUrl = $this->getBaseUrl($request);
+
+        // ============================================================
+        // Check for custom login URL configuration
+        // ============================================================
+        if (!empty($serviceConfig['custom_login_url'])) {
+            // Validate the custom login URL
+            if (!McpServerConfig::isValidCustomLoginUrl($serviceConfig['custom_login_url'])) {
+                Log::error('MCP OAuth: Invalid custom login URL', [
+                    'url' => $serviceConfig['custom_login_url'],
+                    'service' => $mcpService,
+                ]);
+                return $this->errorResponse('server_error', 'Invalid custom login URL configuration');
+            }
+
+            // Get available OAuth services to pass to custom login page
+            $oauthServices = $this->getAvailableOAuthServices();
+
+            // Redirect to custom login page with OAuth params
+            $customLoginUrl = $this->buildRedirectUrl($serviceConfig['custom_login_url'], [
+                'client_id' => $clientId,
+                'redirect_uri' => $redirectUri,
+                'state' => $authState,
+                'code_challenge' => $codeChallenge,
+                'code_challenge_method' => $codeChallengeMethod,
+                'original_state' => $state,
+                'service' => $mcpService,
+                'login_url' => "{$baseUrl}/mcp/{$mcpService}/login",
+                'oauth_services' => !empty($oauthServices) ? base64_encode(json_encode($oauthServices)) : '',
+                'oauth_callback_base' => "{$baseUrl}/mcp/{$mcpService}/oauth-complete",
+            ]);
+
+            Log::info('MCP OAuth: Redirecting to custom login page', [
+                'custom_url' => $serviceConfig['custom_login_url'],
+                'service' => $mcpService,
+            ]);
+
+            return redirect($customLoginUrl);
+        }
+
+        // ============================================================
+        // Default: Redirect to DreamFactory login
+        // ============================================================
+
+        // Build the callback URL that DF will redirect to after login
         $callbackUrl = "{$baseUrl}/mcp/{$mcpService}/oauth-callback?auth_state={$authState}";
 
         // Redirect to DreamFactory's main login page with redirect parameter
@@ -363,6 +407,74 @@ class McpOAuthController extends Controller
         }
 
         $redirectUrl = $this->buildRedirectUrl($pending['redirect_uri'], $redirectParams);
+
+        return redirect($redirectUrl);
+    }
+
+    /**
+     * Handle OAuth completion from DreamFactory OAuth redirect
+     * GET /mcp/{service}/oauth-complete
+     *
+     * This endpoint receives the session_token from DF OAuth redirect
+     * and completes the MCP OAuth authorization flow.
+     */
+    public function oauthComplete(Request $request, string $mcpService)
+    {
+        $sessionToken = $request->query('session_token');
+        $state = $request->query('state');
+
+        if (empty($sessionToken)) {
+            return $this->errorResponse('invalid_request', 'Missing session_token from OAuth provider');
+        }
+
+        if (empty($state)) {
+            return $this->errorResponse('invalid_request', 'Missing state parameter');
+        }
+
+        // Retrieve pending authorization from cache
+        $pendingKey = 'mcp_oauth_pending_' . $state;
+        $pending = cache()->get($pendingKey);
+
+        if (!$pending) {
+            return $this->errorResponse('invalid_request', 'Authorization session expired. Please try again.');
+        }
+
+        // Validate session token with DreamFactory
+        try {
+            $dfSession = $this->validateDreamFactorySession($sessionToken);
+            $dfSession['session_token'] = $sessionToken;
+        } catch (\Exception $e) {
+            Log::error('MCP OAuth oauth-complete failed', ['error' => $e->getMessage()]);
+            return $this->errorResponse('access_denied', 'Invalid or expired session token');
+        }
+
+        // Generate authorization code
+        $authCode = McpOAuthAuthorizationCode::createCode([
+            'client_id' => $pending['client_id'],
+            'user_id' => $dfSession['id'],
+            'redirect_uri' => $pending['redirect_uri'],
+            'code_challenge' => $pending['code_challenge'],
+            'code_challenge_method' => $pending['code_challenge_method'] ?? 'S256',
+            'df_session_token' => $sessionToken,
+            'user_email' => $dfSession['email'],
+            'user_name' => $dfSession['name'] ?? $dfSession['first_name'] ?? null,
+        ]);
+
+        // Clean up pending authorization
+        cache()->forget($pendingKey);
+
+        // Build redirect URL back to the original client
+        $redirectParams = ['code' => $authCode->code];
+        if (!empty($pending['state'])) {
+            $redirectParams['state'] = $pending['state'];
+        }
+
+        $redirectUrl = $this->buildRedirectUrl($pending['redirect_uri'], $redirectParams);
+
+        Log::info('MCP OAuth: OAuth complete, redirecting to client', [
+            'redirect_uri' => $pending['redirect_uri'],
+            'user_email' => $dfSession['email'],
+        ]);
 
         return redirect($redirectUrl);
     }
@@ -616,7 +728,26 @@ class McpOAuthController extends Controller
     {
         $client = new Client(['timeout' => 30]);
 
-        $response = $client->post("{$this->dfUrl}/api/v2/user/session", [
+        // Try user session first
+        try {
+            $response = $client->post("{$this->dfUrl}/api/v2/user/session", [
+                'json' => [
+                    'email' => $email,
+                    'password' => $password,
+                ],
+                'headers' => [
+                    'Accept' => 'application/json',
+                ],
+            ]);
+
+            return json_decode($response->getBody()->getContents(), true);
+        } catch (\Exception $e) {
+            // Fall back to admin session endpoint
+            Log::debug('MCP OAuth: User session failed, trying admin session', ['error' => $e->getMessage()]);
+        }
+
+        // Try admin session
+        $response = $client->post("{$this->dfUrl}/api/v2/system/admin/session", [
             'json' => [
                 'email' => $email,
                 'password' => $password,
@@ -769,5 +900,28 @@ class McpOAuthController extends Controller
             'error' => $error,
             'error_description' => $description,
         ], $statusCode);
+    }
+
+    /**
+     * Get available OAuth services from DreamFactory environment
+     */
+    private function getAvailableOAuthServices(): array
+    {
+        try {
+            $client = new Client(['timeout' => 10]);
+
+            $response = $client->get("{$this->dfUrl}/api/v2/system/environment", [
+                'headers' => [
+                    'Accept' => 'application/json',
+                ],
+            ]);
+
+            $env = json_decode($response->getBody()->getContents(), true);
+
+            return $env['authentication']['oauth'] ?? [];
+        } catch (\Exception $e) {
+            Log::debug('MCP OAuth: Failed to fetch OAuth services', ['error' => $e->getMessage()]);
+            return [];
+        }
     }
 }

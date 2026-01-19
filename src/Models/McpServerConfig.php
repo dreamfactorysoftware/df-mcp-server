@@ -19,6 +19,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'app_id',
         'oauth_client_id',
         'oauth_client_secret',
+        'custom_login_url',
     ];
 
     protected $casts = [
@@ -91,6 +92,11 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['description'] = 'OAuth Client Secret for authentication.';
                 $schema['default'] = self::generateOAuthClientSecret();
                 break;
+            case 'custom_login_url':
+                $schema['label'] = 'Custom Login URL';
+                $schema['description'] = 'Optional custom login page URL. If set, users will be redirected here instead of the default DreamFactory login. Must use HTTPS.';
+                $schema['type'] = 'text';
+                break;
         }
     }
 
@@ -108,6 +114,36 @@ class McpServerConfig extends BaseServiceConfigModel
     public static function generateOAuthClientSecret(): string
     {
         return bin2hex(random_bytes(32));
+    }
+
+    /**
+     * Validate custom login URL
+     *
+     * @param string|null $url
+     * @return bool
+     */
+    public static function isValidCustomLoginUrl(?string $url): bool
+    {
+        if (empty($url)) {
+            return true; // Empty is valid (optional field)
+        }
+
+        // Must be a valid URL
+        if (!filter_var($url, FILTER_VALIDATE_URL)) {
+            return false;
+        }
+
+        $parsedUrl = parse_url($url);
+        $scheme = $parsedUrl['scheme'] ?? '';
+        $host = $parsedUrl['host'] ?? '';
+
+        // Allow localhost with HTTP for development
+        if (in_array($host, ['localhost', '127.0.0.1'])) {
+            return in_array($scheme, ['http', 'https']);
+        }
+
+        // Require HTTPS for all other hosts
+        return $scheme === 'https';
     }
 
     /**

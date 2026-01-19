@@ -24,6 +24,7 @@ class McpStreamMiddleware
         'register' => 'register',
         'authorize' => 'authorizeGet',
         'oauth-callback' => 'oauthCallback',
+        'oauth-complete' => 'oauthComplete',
         'login' => 'login',
         'df-callback' => 'dfCallback',
         'token' => 'token',
