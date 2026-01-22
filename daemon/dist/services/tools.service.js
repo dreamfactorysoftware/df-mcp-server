@@ -1,5 +1,6 @@
 import * as z from 'zod/v4';
 import { DreamFactoryService } from './dreamfactory.service.js';
+import { validateAuthCredentials } from '../utils/auth.utils.js';
 // The label is not used in this version due to conflicts with ChatGPT agent response requirements
 const respond = (label, data) => ({
     content: [
@@ -39,10 +40,15 @@ export function registerDreamFactoryTools(server, sessionManager) {
     const getSessionConfig = (sessionId) => {
         const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
         const url = sessionConfig?.url ?? process.env.DREAMFACTORY_URL ?? '';
-        const sessionToken = sessionConfig?.sessionToken ?? '';
+        const sessionToken = sessionConfig?.sessionToken;
         const apiKey = sessionConfig?.apiKey;
-        if (!url || !sessionToken) {
-            throw new Error('DreamFactory session not found. Please authenticate via OAuth.');
+        if (!url) {
+            throw new Error('DreamFactory URL not configured.');
+        }
+        // Use centralized auth validation
+        const authResult = validateAuthCredentials({ sessionToken, apiKey });
+        if (!authResult.valid) {
+            throw new Error(`Authentication error: ${authResult.error}. Please authenticate via OAuth or provide an API key.`);
         }
         return {
             url,
@@ -56,7 +62,9 @@ export function registerDreamFactoryTools(server, sessionManager) {
             inputSchema: schema
         }, async (params, context) => {
             try {
-                return await handler(params ?? {}, context ?? {});
+                // Params are validated by the MCP SDK using the schema before reaching here
+                const validatedParams = (params ?? {});
+                return await handler(validatedParams, context ?? {});
             }
             catch (error) {
                 console.error(`Tool ${name} error:`, error);

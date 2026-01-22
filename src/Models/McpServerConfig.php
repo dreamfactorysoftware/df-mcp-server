@@ -20,11 +20,13 @@ class McpServerConfig extends BaseServiceConfigModel
         'oauth_client_id',
         'oauth_client_secret',
         'custom_login_url',
+        'allow_api_key_auth',
     ];
 
     protected $casts = [
         'service_id' => 'integer',
         'app_id' => 'integer',
+        'allow_api_key_auth' => 'boolean',
     ];
 
     protected $hidden = [
@@ -96,6 +98,12 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['label'] = 'Custom Login URL';
                 $schema['description'] = 'Optional custom login page URL. If set, users will be redirected here instead of the default DreamFactory login. Must use HTTPS.';
                 $schema['type'] = 'text';
+                break;
+            case 'allow_api_key_auth':
+                $schema['label'] = 'Allow API Key Authentication';
+                $schema['description'] = 'Enable API key authentication as an alternative to OAuth. When enabled, clients can authenticate using X-DreamFactory-API-Key header. Optionally include X-DreamFactory-Session-Token for user-specific RBAC.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = false;
                 break;
         }
     }

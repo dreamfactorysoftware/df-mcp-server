@@ -1,6 +1,6 @@
 export type DFAuthConfig = {
-  sessionToken: string;
-  apiKey?: string;
+  sessionToken?: string; // Optional for API-key-only auth
+  apiKey?: string; // Can be used alone if app has a role assigned
 };
 
 export class DreamFactoryService {
@@ -165,8 +165,9 @@ export class DreamFactoryService {
     params?: URLSearchParams,
     body?: Record<string, unknown>
   ): Promise<unknown> {
-    if (!auth.sessionToken) {
-      throw new Error('Session token is required');
+    // Require at least one auth method
+    if (!auth.sessionToken && !auth.apiKey) {
+      throw new Error('Either session token or API key is required');
     }
 
     const target = new URL(url);
@@ -177,9 +178,14 @@ export class DreamFactoryService {
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      'X-DreamFactory-Session-Token': auth.sessionToken,
     };
 
+    // Add session token if available
+    if (auth.sessionToken) {
+      headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+    }
+
+    // Add API key if available
     if (auth.apiKey) {
       headers['X-DreamFactory-API-Key'] = auth.apiKey;
     }
@@ -196,9 +202,63 @@ export class DreamFactoryService {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || response.statusText);
+      // Log full error details server-side for debugging
+      console.error(`DreamFactory API Error [${method} ${target.pathname}]:`, {
+        status: response.status,
+        statusText: response.statusText,
+        body: text
+      });
+
+      // Return sanitized error message to client based on status code
+      // Avoid leaking sensitive details from error responses
+      const safeMessage = this.getSafeErrorMessage(response.status, text);
+      throw new Error(safeMessage);
     }
 
     return response.json();
+  }
+
+  /**
+   * Get a safe, sanitized error message for the client.
+   * Extracts useful info without leaking sensitive details.
+   */
+  private static getSafeErrorMessage(status: number, responseText: string): string {
+    // Try to extract DreamFactory's error message if it's JSON
+    try {
+      const parsed = JSON.parse(responseText);
+      const dfError = parsed?.error?.message;
+      if (dfError && typeof dfError === 'string') {
+        // DreamFactory error messages are generally safe to expose
+        return dfError;
+      }
+    } catch {
+      // Not JSON, use generic message
+    }
+
+    // Map common HTTP status codes to safe messages
+    switch (status) {
+      case 400:
+        return 'Bad request: Invalid parameters provided';
+      case 401:
+        return 'Authentication failed: Invalid or expired credentials';
+      case 403:
+        return 'Access forbidden: Insufficient permissions for this operation';
+      case 404:
+        return 'Resource not found';
+      case 409:
+        return 'Conflict: The operation conflicts with existing data';
+      case 422:
+        return 'Validation error: The provided data is invalid';
+      case 429:
+        return 'Too many requests: Rate limit exceeded';
+      case 500:
+        return 'Server error: DreamFactory encountered an internal error';
+      case 502:
+      case 503:
+      case 504:
+        return 'Service unavailable: DreamFactory is temporarily unavailable';
+      default:
+        return `Request failed with status ${status}`;
+    }
   }
 }

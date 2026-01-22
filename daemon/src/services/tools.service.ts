@@ -2,6 +2,7 @@ import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { DreamFactoryService, type DFAuthConfig } from './dreamfactory.service.js';
 import { SessionService } from './session.service.js';
+import { validateAuthCredentials } from '../utils/auth.utils.js';
 
 type ToolResponse = {
   content: Array<{ type: 'text'; text: string }>;
@@ -51,12 +52,18 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
   const getSessionConfig = (sessionId?: string): { url: string; auth: DFAuthConfig } => {
     const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
     const url = sessionConfig?.url ?? process.env.DREAMFACTORY_URL ?? '';
-    const sessionToken = sessionConfig?.sessionToken ?? '';
+    const sessionToken = sessionConfig?.sessionToken;
     const apiKey = sessionConfig?.apiKey;
 
-    if (!url || !sessionToken) {
+    if (!url) {
+      throw new Error('DreamFactory URL not configured.');
+    }
+
+    // Use centralized auth validation
+    const authResult = validateAuthCredentials({ sessionToken, apiKey });
+    if (!authResult.valid) {
       throw new Error(
-        'DreamFactory session not found. Please authenticate via OAuth.'
+        `Authentication error: ${authResult.error}. Please authenticate via OAuth or provide an API key.`
       );
     }
 
@@ -66,12 +73,12 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
     };
   };
 
-  const tool = (
+  const tool = <T extends Record<string, unknown>>(
     name: string,
     title: string,
     description: string,
-    schema: z.ZodTypeAny,
-    handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>
+    schema: z.ZodType<T>,
+    handler: (params: T, context: { sessionId?: string }) => Promise<ToolResponse>
   ) => {
     server.registerTool(
       name,
@@ -82,7 +89,9 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
       },
       async (params, context) => {
         try {
-          return await handler(params ?? {}, context ?? {});
+          // Params are validated by the MCP SDK using the schema before reaching here
+          const validatedParams = (params ?? {}) as T;
+          return await handler(validatedParams, context ?? {});
         } catch (error) {
           console.error(`Tool ${name} error:`, error);
           return respondError(handleError(error, name));

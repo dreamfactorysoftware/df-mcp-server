@@ -22,8 +22,14 @@ class McpDaemonClient
 
     /**
      * Proxy request to daemon server
+     *
+     * @param Request $request
+     * @param string $mcpService
+     * @param array $config
+     * @param string $baseUrl
+     * @param array $authResult Auth result with keys: auth_type, session_token, api_key, app_id
      */
-    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl, string $dfSessionToken): Response|JsonResponse|StreamedResponse
+    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl, array $authResult): Response|JsonResponse|StreamedResponse
     {
         try {
             $client = new \GuzzleHttp\Client([
@@ -34,18 +40,31 @@ class McpDaemonClient
             $headers = [
                 'X-Mcp-Config' => json_encode($config),
                 'X-Mcp-Base-Url' => $baseUrl,
-                'X-DreamFactory-Session-Token' => $dfSessionToken,
                 'Accept' => 'application/json, text/event-stream',
             ];
 
-            // Pass API key if configured (required for non-admin users)
-            $appId = $config['app_id'] ?? null;
-            Log::debug('MCP API Key lookup', ['app_id' => $appId, 'config_keys' => array_keys($config)]);
-            if ($appId) {
-                $apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId);
-                Log::debug('MCP API Key result', ['app_id' => $appId, 'api_key_found' => !empty($apiKey)]);
-                if ($apiKey) {
-                    $headers['X-DreamFactory-API-Key'] = $apiKey;
+            // Add session token if available (from OAuth or API key + session token auth)
+            $sessionToken = $authResult['session_token'] ?? null;
+            if (!empty($sessionToken)) {
+                $headers['X-DreamFactory-Session-Token'] = $sessionToken;
+            }
+
+            // Handle API key - either from auth result (API key auth) or from config (OAuth with app)
+            $apiKey = $authResult['api_key'] ?? null;
+            if (!empty($apiKey)) {
+                // Use the client-provided API key for API key auth
+                $headers['X-DreamFactory-API-Key'] = $apiKey;
+                Log::debug('MCP using client-provided API key', ['auth_type' => $authResult['auth_type']]);
+            } else {
+                // For OAuth auth, look up API key from configured app_id
+                $appId = $config['app_id'] ?? null;
+                Log::debug('MCP API Key lookup', ['app_id' => $appId, 'config_keys' => array_keys($config)]);
+                if ($appId) {
+                    $configApiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId);
+                    Log::debug('MCP API Key result', ['app_id' => $appId, 'api_key_found' => !empty($configApiKey)]);
+                    if ($configApiKey) {
+                        $headers['X-DreamFactory-API-Key'] = $configApiKey;
+                    }
                 }
             }
 
