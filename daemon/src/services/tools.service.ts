@@ -166,19 +166,22 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
   tool(
     'get_table_data',
     'Get Table Data',
-    'Retrieve table data with filtering, pagination, and sorting. Filter syntax: field=value, field>value, field LIKE %value%. Order syntax: field ASC, field DESC. Use get_api_spec to learn all available filter operators and field names.',
+    'Retrieve table data with filtering, pagination, and sorting.\n' +
+    'IMPORTANT: The API returns max 1000 records per request. For large tables, paginate with limit+offset and set includeCount=true to know the total.\n' +
+    'COUNTING: Use countOnly=true to get just the record count without fetching data. Do NOT try SQL aggregate functions (COUNT, SUM, AVG) in the fields parameter — they are not supported.\n' +
+    'Filter syntax: field=value, field>value, field LIKE %value%. Order syntax: field ASC, field DESC.',
     z.object({
       tableName: z.string(),
       fields: z.array(z.string()).optional(),
       filter: z.string().optional(),
       offset: z.number().optional(),
-      limit: z.number().optional(),
+      limit: z.number().optional().describe('Max records per request (server max: 1000). Use with offset to paginate.'),
       order: z.string().optional(),
       group: z.string().optional(),
       continue: z.boolean().optional(),
-      related: z.string().optional(),
-      countOnly: z.boolean().optional(),
-      includeCount: z.boolean().optional(),
+      related: z.string().optional().describe('Include related records via FK (e.g. "parent_table_by_fk_field"). Check relationships in the data model.'),
+      countOnly: z.boolean().optional().describe('Return only the record count, no data. Use this instead of COUNT() in fields.'),
+      includeCount: z.boolean().optional().describe('Include total record count in response metadata alongside data.'),
       includeSchema: z.boolean().optional(),
       ids: z.array(z.string()).optional()
     }),

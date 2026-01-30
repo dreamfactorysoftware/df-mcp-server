@@ -125,6 +125,8 @@ export function createServer(
     '- Fields: select specific columns to reduce response size',
     '- Related: include related records via foreign keys (e.g., `related=parent_table_by_fk_field`)',
     '- Pagination: use `limit` and `offset`, set `includeCount=true` for total count',
+    '- Counting: use `countOnly=true` to get just the count without data — never use COUNT()/SUM()/AVG() in fields',
+    '- Max page size: 1000 records. Always paginate for tables with more rows.',
     '',
     '## Key Data Modeling Hints',
     '- When a table has a column referencing ITSELF (self-referencing FK), it forms a tree/hierarchy.',
