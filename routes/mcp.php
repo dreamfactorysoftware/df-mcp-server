@@ -41,6 +41,16 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
+
+// RFC 8414 canonical well-known paths (at domain root)
+// Required for spec-compliant OAuth clients like Claude Desktop
+Route::get('.well-known/oauth-protected-resource/mcp/{mcpService}', [McpOAuthController::class, 'protectedResourceMetadata'])
+    ->where('mcpService', '[A-Za-z0-9_\-]+')
+    ->withoutMiddleware(['df.api']);
+Route::get('.well-known/oauth-authorization-server/mcp/{mcpService}', [McpOAuthController::class, 'authorizationServerMetadata'])
+    ->where('mcpService', '[A-Za-z0-9_\-]+')
+    ->withoutMiddleware(['df.api']);
+
 Route::group(['prefix' => 'mcp', 'middleware' => []], function () {
     // OAuth Discovery
     Route::get('{mcpService}/.well-known/oauth-protected-resource', [McpOAuthController::class, 'protectedResourceMetadata'])
