@@ -84,6 +84,20 @@ export class DreamFactoryService {
     static async getDatabaseResources(baseUrl, auth, options = {}) {
         return this.request('GET', baseUrl, auth, this.buildParams(options));
     }
+    /**
+     * Get the OpenAPI spec for this service via _spec endpoint.
+     * Supports compact mode and resource filtering.
+     */
+    static async getApiSpec(baseUrl, auth, options = {}) {
+        const params = new URLSearchParams();
+        if (options.compact) params.set('compact', 'true');
+        if (options.resourceName) params.set('resource_name', options.resourceName);
+        if (options.tables) params.set('tables', 'true');
+        if (options.model) params.set('model', 'true');
+        if (options.refresh) params.set('refresh', 'true');
+        if (options.format) params.set('format', options.format);
+        return this.request('GET', `${baseUrl}/_spec`, auth, params);
+    }
     static buildParams(options) {
         const params = new URLSearchParams();
         Object.entries(options).forEach(([key, value]) => {

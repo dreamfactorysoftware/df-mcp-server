@@ -64,7 +64,38 @@ export function registerDreamFactoryTools(server, sessionManager) {
             }
         });
     };
-    tool('get_tables', 'List Tables', 'Get tables available in the database', z.object({}), async (_args, { sessionId }) => {
+    tool('get_api_spec', 'Get API Spec', 'Get the OpenAPI 3.0 specification for this database service. Returns endpoint descriptions, query parameter syntax (filter operators, order format, field selection), table names with row counts, relationships between tables (including structural patterns like hierarchies), and LLM usage hints. TIP: Use get_data_model instead for a more condensed schema-focused view. Use compact=true (default) for a token-efficient summary. Use tables=true to include full table/field details. Use resourceName to get spec for a specific table only.', z.object({
+        compact: z.boolean().optional().describe('Return compact token-efficient format (default: true)'),
+        resourceName: z.string().optional().describe('Get spec for a specific table/resource only'),
+        tables: z.boolean().optional().describe('Include full table and field details'),
+        refresh: z.boolean().optional().describe('Force refresh cached spec data')
+    }), async (args, { sessionId }) => {
+        const config = getSessionConfig(sessionId);
+        // Default to compact mode for LLM efficiency
+        const options = { compact: true, ...args };
+        const data = await DreamFactoryService.getApiSpec(config.url, config.auth, options);
+        return respond('API Specification:', data);
+    });
+    tool('get_data_model', 'Get Data Model',
+        'Get a condensed data model showing ALL tables, their columns (name + type + foreign keys), ' +
+        'row counts, and structural patterns (hierarchies, junction tables). Returns ~10-20KB — small enough ' +
+        'to read in full. IMPORTANT: This is the best tool to call FIRST. It tells you:\n' +
+        '- Every table and column with types\n' +
+        '- Which columns are foreign keys and what they reference\n' +
+        '- Self-referencing hierarchies (e.g. dept.parent_dept_id → dept = tree structure needing recursive traversal)\n' +
+        '- Junction tables for many-to-many relationships\n' +
+        'Use this to plan your queries before calling get_table_data.',
+        z.object({
+            refresh: z.boolean().optional().describe('Force refresh cached data')
+        }), async (args, { sessionId }) => {
+            const config = getSessionConfig(sessionId);
+            const data = await DreamFactoryService.getApiSpec(config.url, config.auth, {
+                model: true,
+                refresh: args?.refresh
+            });
+            return respond('Data Model:', data);
+        });
+    tool('get_tables', 'List Tables', 'Get tables available in the database. TIP: Use get_data_model first for richer metadata including columns, relationships, and structural patterns.', z.object({}), async (_args, { sessionId }) => {
         const config = getSessionConfig(sessionId);
         const data = await DreamFactoryService.getTables(config.url, config.auth);
         return respond('Tables available in the database:', data);
@@ -74,7 +105,7 @@ export function registerDreamFactoryTools(server, sessionManager) {
         const data = await DreamFactoryService.getTableSchema(tableName, config.url, config.auth);
         return respond(`Schema for table ${tableName}:`, data);
     });
-    tool('get_table_data', 'Get Table Data', 'Retrieve table data with filtering, pagination, and sorting', z.object({
+    tool('get_table_data', 'Get Table Data', 'Retrieve table data with filtering, pagination, and sorting. Filter syntax: field=value, field>value, field LIKE %value%. Order syntax: field ASC, field DESC. Use get_api_spec to learn all available filter operators and field names.', z.object({
         tableName: z.string(),
         fields: z.array(z.string()).optional(),
         filter: z.string().optional(),
@@ -141,7 +172,7 @@ export function registerDreamFactoryTools(server, sessionManager) {
         const data = await DreamFactoryService.getTableFields(tableName, config.url, config.auth, refresh);
         return respond(`Fields for table ${tableName}:`, data);
     });
-    tool('get_table_relationships', 'Get Table Relationships', 'Retrieve relationships definition for a table', z.object({
+    tool('get_table_relationships', 'Get Table Relationships', 'Get foreign key relationships for a table. Shows which columns reference other tables, self-referencing hierarchies (e.g. parent_dept_id → dept for tree structures requiring recursive traversal), and junction tables for many-to-many joins.', z.object({
         tableName: z.string(),
         refresh: z.boolean().optional()
     }), async ({ tableName, refresh }, { sessionId }) => {
