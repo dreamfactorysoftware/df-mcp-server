@@ -12,6 +12,10 @@ use DreamFactory\Core\McpServer\Http\Controllers\McpOAuthController;
  * Middleware to intercept MCP requests before DreamFactory's routing
  * This ensures /mcp/* requests are handled by our controllers, not DF's API routing
  * Also handles CORS for all MCP endpoints and loads service configuration
+ *
+ * Supports both path-relative and RFC 8414 canonical well-known URI formats:
+ *   Path-relative: /mcp/{service}/.well-known/oauth-authorization-server
+ *   RFC 8414:      /.well-known/oauth-authorization-server/mcp/{service}
  */
 class McpStreamMiddleware
 {
@@ -31,6 +35,14 @@ class McpStreamMiddleware
     ];
 
     /**
+     * RFC 8414 well-known endpoint types and their controller methods
+     */
+    private const RFC8414_WELL_KNOWN = [
+        'oauth-authorization-server' => 'authorizationServerMetadata',
+        'oauth-protected-resource' => 'protectedResourceMetadata',
+    ];
+
+    /**
      * CORS headers for MCP endpoints
      */
     private const CORS_HEADERS = [
@@ -46,6 +58,13 @@ class McpStreamMiddleware
     {
         $path = $request->path();
         $method = $request->method();
+
+        // Check for RFC 8414 canonical well-known paths first:
+        //   /.well-known/oauth-authorization-server/mcp/{service}
+        //   /.well-known/oauth-protected-resource/mcp/{service}
+        if (preg_match('#^\.well-known/(oauth-authorization-server|oauth-protected-resource)/mcp/([A-Za-z0-9_\-]+)$#', $path, $wkMatches)) {
+            return $this->handleRfc8414WellKnown($request, $next, $wkMatches[1], $wkMatches[2], $method);
+        }
 
         // Check if this is an MCP path
         $isMcpPath = preg_match('#^mcp/([A-Za-z0-9_\-]+)(?:/(.+))?$#', $path, $matches);
@@ -84,6 +103,36 @@ class McpStreamMiddleware
                 $response->headers->set($key, $value);
             }
             return $response;
+        }
+
+        return $next($request);
+    }
+
+    /**
+     * Handle RFC 8414 canonical well-known paths
+     * e.g., /.well-known/oauth-authorization-server/mcp/{service}
+     */
+    private function handleRfc8414WellKnown(Request $request, Closure $next, string $wellKnownType, string $mcpService, string $method)
+    {
+        if ($method === 'OPTIONS') {
+            return response('', 200)->withHeaders(self::CORS_HEADERS);
+        }
+
+        $controllerMethod = self::RFC8414_WELL_KNOWN[$wellKnownType] ?? null;
+        if ($controllerMethod && $method === 'GET') {
+            $serviceConfig = $this->getServiceConfig($mcpService);
+            $request->attributes->set('mcp_service_name', $mcpService);
+            $request->attributes->set('mcp_service_config', $serviceConfig);
+
+            $controller = new McpOAuthController();
+            $response = $controller->$controllerMethod($request, $mcpService);
+
+            if ($response) {
+                foreach (self::CORS_HEADERS as $key => $value) {
+                    $response->headers->set($key, $value);
+                }
+                return $response;
+            }
         }
 
         return $next($request);
@@ -149,4 +198,3 @@ class McpStreamMiddleware
         return isset(self::OAUTH_PATHS[$subPath]);
     }
 }
-

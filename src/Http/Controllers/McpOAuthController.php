@@ -84,26 +84,79 @@ class McpOAuthController extends Controller
      * Dynamic Client Registration (RFC 7591)
      * POST /mcp/{service}/register
      *
-     * Dynamic registration is disabled - clients must use pre-configured credentials
-     * from the MCP service configuration.
+     * Supports MCP client registration for AI assistants like Claude Desktop.
+     * Returns pre-configured credentials along with client-provided redirect_uris.
      */
     public function register(Request $request, string $mcpService)
     {
-        // Dynamic registration is disabled - return the configured client info
         $serviceConfig = $request->attributes->get('mcp_service_config');
 
         if (!$serviceConfig || empty($serviceConfig['oauth_client_id'])) {
             return response()->json([
                 'error' => 'invalid_request',
-                'error_description' => 'Dynamic client registration is disabled. Please use pre-configured OAuth credentials.',
+                'error_description' => 'OAuth not configured for this MCP service.',
             ], 400);
         }
 
-        // Return the pre-configured client info (without the secret)
+        // Get client-provided redirect_uris from the registration request
+        $requestedRedirectUris = $request->input('redirect_uris', []);
+        $clientName = $request->input('client_name', $mcpService);
+
+        // Validate redirect_uris - must be valid URLs
+        $validatedRedirectUris = [];
+        foreach ($requestedRedirectUris as $uri) {
+            if (!is_string($uri)) {
+                continue;
+            }
+            $parsed = parse_url($uri);
+            // Accept https:// URIs and localhost for development
+            if (!empty($parsed['scheme']) && !empty($parsed['host'])) {
+                if ($parsed['scheme'] === 'https' ||
+                    ($parsed['scheme'] === 'http' && in_array($parsed['host'], ['localhost', '127.0.0.1']))) {
+                    $validatedRedirectUris[] = $uri;
+                }
+            }
+        }
+
+        // Always allow Claude's known redirect URIs for compatibility
+        $claudeRedirectUris = [
+            'https://claude.ai/api/mcp/auth_callback',
+            'https://claude.com/api/mcp/auth_callback',
+        ];
+
+        // Merge with any existing redirect_uris, avoiding duplicates
+        $client = McpOAuthClient::findByClientId($serviceConfig['oauth_client_id']);
+        if ($client) {
+            $existingUris = $client->redirect_uris ?? [];
+            $allUris = array_unique(array_merge($existingUris, $validatedRedirectUris, $claudeRedirectUris));
+            $client->update(['redirect_uris' => array_values($allUris)]);
+            $validatedRedirectUris = $allUris;
+        } else {
+            // Create client entry if it doesn't exist
+            $allUris = array_unique(array_merge($validatedRedirectUris, $claudeRedirectUris));
+            McpOAuthClient::create([
+                'client_id' => $serviceConfig['oauth_client_id'],
+                'client_secret' => $serviceConfig['oauth_client_secret'],
+                'name' => $clientName,
+                'redirect_uris' => array_values($allUris),
+                'is_active' => true,
+            ]);
+            $validatedRedirectUris = $allUris;
+        }
+
+        Log::info('MCP OAuth: Client registration', [
+            'client_name' => $clientName,
+            'redirect_uris' => $validatedRedirectUris,
+            'service' => $mcpService,
+        ]);
+
+        // Return registration response per RFC 7591
+        // Include client_secret for MCP clients (required for token exchange)
         return response()->json([
             'client_id' => $serviceConfig['oauth_client_id'],
-            'client_name' => $mcpService,
-            'redirect_uris' => [],
+            'client_secret' => $serviceConfig['oauth_client_secret'],
+            'client_name' => $clientName,
+            'redirect_uris' => array_values($validatedRedirectUris),
             'grant_types' => ['authorization_code', 'refresh_token'],
             'response_types' => ['code'],
             'token_endpoint_auth_method' => 'client_secret_post',
