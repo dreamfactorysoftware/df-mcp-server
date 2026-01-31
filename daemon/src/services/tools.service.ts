@@ -284,6 +284,33 @@ export function registerDreamFactoryTools(server: McpServer, sessionManager: Ses
   );
 
   tool(
+    'aggregate_data',
+    'Aggregate Data',
+    'Compute server-side aggregations (SUM, COUNT, AVG, MIN, MAX) on table data.\n' +
+    'This tool handles pagination internally — you get results in ONE call instead of paginating manually.\n' +
+    'Supports GROUP BY for breakdowns. Use this instead of fetching all rows to compute totals.\n' +
+    'Examples:\n' +
+    '  - Total revenue: aggregates=[{function:"SUM", field:"totalamount", alias:"total_revenue"}]\n' +
+    '  - Revenue by country: same + groupBy=["country"]\n' +
+    '  - Average order value: aggregates=[{function:"AVG", field:"totalamount", alias:"avg_order"}]',
+    z.object({
+      tableName: z.string().describe('Table to aggregate'),
+      aggregates: z.array(z.object({
+        function: z.enum(['SUM', 'COUNT', 'AVG', 'MIN', 'MAX']).describe('Aggregate function'),
+        field: z.string().describe('Column to aggregate (use "*" for COUNT)'),
+        alias: z.string().optional().describe('Name for the result column')
+      })).describe('List of aggregations to compute'),
+      filter: z.string().optional().describe('Filter rows before aggregating (same syntax as get_table_data)'),
+      groupBy: z.array(z.string()).optional().describe('Group results by these columns')
+    }),
+    async (args, { sessionId }) => {
+      const config = getSessionConfig(sessionId);
+      const data = await DreamFactoryService.aggregateData(config.url, config.auth, args);
+      return respond(`Aggregation results for ${args.tableName}:`, data);
+    }
+  );
+
+  tool(
     'get_stored_procedures',
     'List Stored Procedures',
     'Get stored procedures available in the database',
