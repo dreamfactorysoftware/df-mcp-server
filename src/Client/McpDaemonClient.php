@@ -28,7 +28,6 @@ class McpDaemonClient
         try {
             $client = new \GuzzleHttp\Client([
                 'timeout' => 300,
-                'stream' => true,
             ]);
 
             $headers = [
