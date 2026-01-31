@@ -64,7 +64,12 @@ export function registerDreamFactoryTools(server, sessionManager) {
             }
         });
     };
-    tool('get_api_spec', 'Get API Spec', 'Get the OpenAPI 3.0 specification for this database service. Returns endpoint descriptions, query parameter syntax (filter operators, order format, field selection), table names with row counts, relationships between tables (including structural patterns like hierarchies), and LLM usage hints. TIP: Use get_data_model instead for a more condensed schema-focused view. Use compact=true (default) for a token-efficient summary. Use tables=true to include full table/field details. Use resourceName to get spec for a specific table only.', z.object({
+    tool('get_api_spec', 'Get API Spec', 'Get the OpenAPI 3.0 specification for this database service. Returns endpoint descriptions, ' +
+        'query parameter syntax (filter operators, order format, field selection), table names with row counts, ' +
+        'relationships between tables (including structural patterns like hierarchies), and LLM usage hints. ' +
+        'TIP: Use get_data_model instead for a more condensed schema-focused view. ' +
+        'Use compact=true (default) for a token-efficient summary. Use tables=true to include full table/field details. ' +
+        'Use resourceName to get spec for a specific table only.', z.object({
         compact: z.boolean().optional().describe('Return compact token-efficient format (default: true)'),
         resourceName: z.string().optional().describe('Get spec for a specific table/resource only'),
         tables: z.boolean().optional().describe('Include full table and field details'),
@@ -76,25 +81,23 @@ export function registerDreamFactoryTools(server, sessionManager) {
         const data = await DreamFactoryService.getApiSpec(config.url, config.auth, options);
         return respond('API Specification:', data);
     });
-    tool('get_data_model', 'Get Data Model',
-        'Get a condensed data model showing ALL tables, their columns (name + type + foreign keys), ' +
+    tool('get_data_model', 'Get Data Model', 'Get a condensed data model showing ALL tables, their columns (name + type + foreign keys), ' +
         'row counts, and structural patterns (hierarchies, junction tables). Returns ~10-20KB — small enough ' +
         'to read in full. IMPORTANT: This is the best tool to call FIRST. It tells you:\n' +
         '- Every table and column with types\n' +
         '- Which columns are foreign keys and what they reference\n' +
         '- Self-referencing hierarchies (e.g. dept.parent_dept_id → dept = tree structure needing recursive traversal)\n' +
         '- Junction tables for many-to-many relationships\n' +
-        'Use this to plan your queries before calling get_table_data.',
-        z.object({
-            refresh: z.boolean().optional().describe('Force refresh cached data')
-        }), async (args, { sessionId }) => {
-            const config = getSessionConfig(sessionId);
-            const data = await DreamFactoryService.getApiSpec(config.url, config.auth, {
-                model: true,
-                refresh: args?.refresh
-            });
-            return respond('Data Model:', data);
+        'Use this to plan your queries before calling get_table_data.', z.object({
+        refresh: z.boolean().optional().describe('Force refresh cached data')
+    }), async (args, { sessionId }) => {
+        const config = getSessionConfig(sessionId);
+        const data = await DreamFactoryService.getApiSpec(config.url, config.auth, {
+            model: true,
+            refresh: args?.refresh
         });
+        return respond('Data Model:', data);
+    });
     tool('get_tables', 'List Tables', 'Get tables available in the database. TIP: Use get_data_model first for richer metadata including columns, relationships, and structural patterns.', z.object({}), async (_args, { sessionId }) => {
         const config = getSessionConfig(sessionId);
         const data = await DreamFactoryService.getTables(config.url, config.auth);
@@ -105,18 +108,21 @@ export function registerDreamFactoryTools(server, sessionManager) {
         const data = await DreamFactoryService.getTableSchema(tableName, config.url, config.auth);
         return respond(`Schema for table ${tableName}:`, data);
     });
-    tool('get_table_data', 'Get Table Data', 'Retrieve table data with filtering, pagination, and sorting. Filter syntax: field=value, field>value, field LIKE %value%. Order syntax: field ASC, field DESC. Use get_api_spec to learn all available filter operators and field names.', z.object({
+    tool('get_table_data', 'Get Table Data', 'Retrieve table data with filtering, pagination, and sorting.\n' +
+        'IMPORTANT: The API returns max 1000 records per request. For large tables, paginate with limit+offset and set includeCount=true to know the total.\n' +
+        'COUNTING: Use countOnly=true to get just the record count without fetching data. Do NOT try SQL aggregate functions (COUNT, SUM, AVG) in the fields parameter — they are not supported.\n' +
+        'Filter syntax: field=value, field>value, field LIKE %value%. Order syntax: field ASC, field DESC.', z.object({
         tableName: z.string(),
         fields: z.array(z.string()).optional(),
         filter: z.string().optional(),
         offset: z.number().optional(),
-        limit: z.number().optional(),
+        limit: z.number().optional().describe('Max records per request (server max: 1000). Use with offset to paginate.'),
         order: z.string().optional(),
         group: z.string().optional(),
         continue: z.boolean().optional(),
-        related: z.string().optional(),
-        countOnly: z.boolean().optional(),
-        includeCount: z.boolean().optional(),
+        related: z.string().optional().describe('Include related records via FK (e.g. "parent_table_by_fk_field"). Check relationships in the data model.'),
+        countOnly: z.boolean().optional().describe('Return only the record count, no data. Use this instead of COUNT() in fields.'),
+        includeCount: z.boolean().optional().describe('Include total record count in response metadata alongside data.'),
         includeSchema: z.boolean().optional(),
         ids: z.array(z.string()).optional()
     }), async (args, { sessionId }) => {
@@ -179,6 +185,26 @@ export function registerDreamFactoryTools(server, sessionManager) {
         const config = getSessionConfig(sessionId);
         const data = await DreamFactoryService.getTableRelationships(tableName, config.url, config.auth, refresh);
         return respond(`Relationships for table ${tableName}:`, data);
+    });
+    tool('aggregate_data', 'Aggregate Data', 'Compute server-side aggregations (SUM, COUNT, AVG, MIN, MAX) on table data.\n' +
+        'This tool handles pagination internally — you get results in ONE call instead of paginating manually.\n' +
+        'Supports GROUP BY for breakdowns. Use this instead of fetching all rows to compute totals.\n' +
+        'Examples:\n' +
+        '  - Total revenue: aggregates=[{function:"SUM", field:"totalamount", alias:"total_revenue"}]\n' +
+        '  - Revenue by country: same + groupBy=["country"]\n' +
+        '  - Average order value: aggregates=[{function:"AVG", field:"totalamount", alias:"avg_order"}]', z.object({
+        tableName: z.string().describe('Table to aggregate'),
+        aggregates: z.array(z.object({
+            function: z.enum(['SUM', 'COUNT', 'AVG', 'MIN', 'MAX']).describe('Aggregate function'),
+            field: z.string().describe('Column to aggregate (use "*" for COUNT)'),
+            alias: z.string().optional().describe('Name for the result column')
+        })).describe('List of aggregations to compute'),
+        filter: z.string().optional().describe('Filter rows before aggregating (same syntax as get_table_data)'),
+        groupBy: z.array(z.string()).optional().describe('Group results by these columns')
+    }), async (args, { sessionId }) => {
+        const config = getSessionConfig(sessionId);
+        const data = await DreamFactoryService.aggregateData(config.url, config.auth, args);
+        return respond(`Aggregation results for ${args.tableName}:`, data);
     });
     tool('get_stored_procedures', 'List Stored Procedures', 'Get stored procedures available in the database', z.object({}), async (_args, { sessionId }) => {
         const config = getSessionConfig(sessionId);

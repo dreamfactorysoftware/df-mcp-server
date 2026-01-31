@@ -120,7 +120,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
 
     // Build config from headers
     const config = parseConfigFromHeaders(req);
-    const server = createServer(serviceName, config.baseUrl, sessionManager);
+    const server = createServer(serviceName as string, config.baseUrl, sessionManager);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {
@@ -134,7 +134,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
         return sessionId;
       },
       onsessioninitialized: sessionId => {
-        sessions.set(sessionId, { server, transport, serviceName });
+        sessions.set(sessionId, { server, transport, serviceName: serviceName as string });
       },
       onsessionclosed: sessionId => {
         if (sessionId) {

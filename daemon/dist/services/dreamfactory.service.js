@@ -85,17 +85,108 @@ export class DreamFactoryService {
         return this.request('GET', baseUrl, auth, this.buildParams(options));
     }
     /**
+     * Server-side aggregation: fetches all matching rows (paginated internally)
+     * and computes SUM, COUNT, AVG, MIN, MAX on specified fields.
+     */
+    static async aggregateData(baseUrl, auth, options) {
+        const { tableName, aggregates, filter, groupBy } = options;
+        const PAGE_SIZE = 1000;
+        const neededFields = new Set();
+        for (const agg of aggregates) {
+            if (agg.field && agg.field !== '*')
+                neededFields.add(agg.field);
+        }
+        if (groupBy) {
+            for (const g of groupBy)
+                neededFields.add(g);
+        }
+        const fieldsParam = neededFields.size > 0 ? Array.from(neededFields) : undefined;
+        let allRows = [];
+        let offset = 0;
+        let totalCount = null;
+        while (true) {
+            const params = { tableName, limit: PAGE_SIZE, offset };
+            if (fieldsParam)
+                params.fields = fieldsParam;
+            if (filter)
+                params.filter = filter;
+            if (offset === 0)
+                params.includeCount = true;
+            const data = await this.getTableData(baseUrl, auth, params);
+            const rows = (data?.resource ?? []);
+            if (totalCount === null && data?.meta?.count !== undefined) {
+                totalCount = data.meta.count;
+            }
+            allRows = allRows.concat(rows);
+            if (rows.length < PAGE_SIZE)
+                break;
+            offset += PAGE_SIZE;
+            if (offset >= 100000)
+                break;
+        }
+        const computeAgg = (rows, aggs) => {
+            const result = {};
+            for (const agg of aggs) {
+                const fn = (agg.function || '').toUpperCase();
+                const field = agg.field || '*';
+                const alias = agg.alias || `${fn}_${field}`;
+                if (fn === 'COUNT') {
+                    result[alias] = field === '*' ? rows.length : rows.filter(r => r[field] != null).length;
+                }
+                else {
+                    const values = rows.map(r => parseFloat(String(r[field]))).filter(v => !isNaN(v));
+                    if (values.length === 0) {
+                        result[alias] = null;
+                        continue;
+                    }
+                    if (fn === 'SUM')
+                        result[alias] = Math.round(values.reduce((a, b) => a + b, 0) * 100) / 100;
+                    else if (fn === 'AVG')
+                        result[alias] = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100) / 100;
+                    else if (fn === 'MIN')
+                        result[alias] = Math.min(...values);
+                    else if (fn === 'MAX')
+                        result[alias] = Math.max(...values);
+                    else
+                        result[alias] = null;
+                }
+            }
+            return result;
+        };
+        if (groupBy && groupBy.length > 0) {
+            const groups = {};
+            for (const row of allRows) {
+                const key = groupBy.map(g => String(row[g] ?? 'NULL')).join('|');
+                if (!groups[key]) {
+                    groups[key] = { _key: {}, _rows: [] };
+                    for (const g of groupBy)
+                        groups[key]._key[g] = row[g];
+                }
+                groups[key]._rows.push(row);
+            }
+            const results = Object.values(groups).map(g => ({ ...g._key, ...computeAgg(g._rows, aggregates) }));
+            return { results, rows_scanned: allRows.length, total_count: totalCount };
+        }
+        return { results: [computeAgg(allRows, aggregates)], rows_scanned: allRows.length, total_count: totalCount };
+    }
+    /**
      * Get the OpenAPI spec for this service via _spec endpoint.
-     * Supports compact mode and resource filtering.
+     * Supports compact mode, resource filtering, and model mode.
      */
     static async getApiSpec(baseUrl, auth, options = {}) {
         const params = new URLSearchParams();
-        if (options.compact) params.set('compact', 'true');
-        if (options.resourceName) params.set('resource_name', options.resourceName);
-        if (options.tables) params.set('tables', 'true');
-        if (options.model) params.set('model', 'true');
-        if (options.refresh) params.set('refresh', 'true');
-        if (options.format) params.set('format', options.format);
+        if (options.compact)
+            params.set('compact', 'true');
+        if (options.resourceName)
+            params.set('resource_name', options.resourceName);
+        if (options.tables)
+            params.set('tables', 'true');
+        if (options.model)
+            params.set('model', 'true');
+        if (options.refresh)
+            params.set('refresh', 'true');
+        if (options.format)
+            params.set('format', options.format);
         return this.request('GET', `${baseUrl}/_spec`, auth, params);
     }
     static buildParams(options) {

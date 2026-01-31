@@ -108,7 +108,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
                 return sessionId;
             },
             onsessioninitialized: sessionId => {
-                sessions.set(sessionId, { server, transport, serviceName });
+                sessions.set(sessionId, { server, transport, serviceName: serviceName });
             },
             onsessionclosed: sessionId => {
                 if (sessionId) {
@@ -116,7 +116,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
                     sessionManager.clearConfig(sessionId);
                 }
             },
-            enableJsonResponse: false
+            enableJsonResponse: true
         });
         transport.onclose = () => {
             const sid = transport.sessionId;
