@@ -3,7 +3,7 @@ import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
-import { createServer, getSessionId, parseConfigFromHeaders, updateSessionConfigFromHeaders } from './utils/utils.js';
+import { createServer, getSessionId, parseConfigFromHeaders, updateSessionConfigFromHeaders, discoverServices } from './utils/utils.js';
 const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
@@ -95,20 +95,41 @@ app.all('/mcp/:serviceName', async (req, res) => {
         }
         // Build config from headers
         const config = parseConfigFromHeaders(req);
-        const server = createServer(serviceName, config.baseUrl, sessionManager);
+        // Discover all services from DreamFactory (databases + files)
+        const apiConfigs = await discoverServices(config.baseUrl, {
+            sessionToken: dfSessionToken,
+            apiKey: dfApiKey
+        });
+        if (apiConfigs.length === 0) {
+            res.status(400).json({
+                jsonrpc: '2.0',
+                error: {
+                    code: -32000,
+                    message: 'No supported services found in DreamFactory'
+                },
+                id: null
+            });
+            return;
+        }
+        const dbCount = apiConfigs.filter(c => c.category === 'database').length;
+        const fileCount = apiConfigs.filter(c => c.category === 'file').length;
+        console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file`);
+        console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
+        const server = createServer(serviceName, apiConfigs, sessionManager);
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => {
                 const sessionId = randomUUID();
-                // Store DF session token and API key for user authentication
+                // Store DF session token, API key, and discovered API configs
                 sessionManager.setConfig(sessionId, {
                     url: config.baseUrl,
                     sessionToken: dfSessionToken,
-                    apiKey: dfApiKey
+                    apiKey: dfApiKey,
+                    apiConfigs
                 });
                 return sessionId;
             },
             onsessioninitialized: sessionId => {
-                sessions.set(sessionId, { server, transport, serviceName });
+                sessions.set(sessionId, { server, transport, serviceName, apiConfigs });
             },
             onsessionclosed: sessionId => {
                 if (sessionId) {

@@ -3,7 +3,175 @@ export type DFAuthConfig = {
   apiKey?: string;
 };
 
+export type DFService = {
+  name: string;
+  label: string;
+  type: string;
+};
+
+// Known DreamFactory database service types
+const DATABASE_SERVICE_TYPES = new Set([
+  'sqlite',
+  'mysql',
+  'mariadb',
+  'pgsql',
+  'sqlsrv',
+  'oracle',
+  'ibmdb2',
+  'informix',
+  'firebird',
+  'mongodb',
+  'couchdb',
+  'dynamodb',
+  'hana',
+  'databricks',
+  'salesforce_db',
+  'aws_redshift',
+  'snowflake',
+]);
+
+// Known DreamFactory file service types
+const FILE_SERVICE_TYPES = new Set([
+  'local_file',
+  'aws_s3',
+  'azure_blob',
+  'rackspace_cloud_files',
+  'openstack_object_storage',
+  'ftp_file',
+  'sftp_file',
+  'webdav_file',
+]);
+
 export class DreamFactoryService {
+  /**
+   * Get all available services from DreamFactory.
+   * Call this with the base DreamFactory URL (e.g., http://localhost/api/v2)
+   */
+  static async getServices(baseUrl: string, auth: DFAuthConfig): Promise<DFService[]> {
+    const url = `${baseUrl}/system/service`;
+    console.log('[DreamFactoryService.getServices] Fetching from:', url);
+    const response = await this.request('GET', url, auth) as { resource?: DFService[] };
+    console.log('[DreamFactoryService.getServices] Full response:', JSON.stringify(response, null, 2));
+    console.log('[DreamFactoryService.getServices] Response resource count:', response.resource?.length ?? 0);
+    return response.resource ?? [];
+  }
+
+  /**
+   * Get database services only (filtered by known database types)
+   */
+  static async getDatabaseServices(baseUrl: string, auth: DFAuthConfig): Promise<DFService[]> {
+    const services = await this.getServices(baseUrl, auth);
+    console.log('[DreamFactoryService.getDatabaseServices] All services with all fields:');
+    services.forEach((s, i) => {
+      console.log(`  [${i}] name="${s.name}" label="${s.label}" type="${s.type}"`);
+    });
+    const dbServices = services.filter(service => DATABASE_SERVICE_TYPES.has(service.type));
+    console.log('[DreamFactoryService.getDatabaseServices] Filtered database services:', dbServices.map(s => `${s.name} (${s.type})`));
+    return dbServices;
+  }
+
+  /**
+   * Get file services only (filtered by known file types)
+   */
+  static async getFileServices(baseUrl: string, auth: DFAuthConfig): Promise<DFService[]> {
+    const services = await this.getServices(baseUrl, auth);
+    const fileServices = services.filter(service => FILE_SERVICE_TYPES.has(service.type));
+    console.log('[DreamFactoryService.getFileServices] Filtered file services:', fileServices.map(s => `${s.name} (${s.type})`));
+    return fileServices;
+  }
+
+  // ============================================================================
+  // File API Methods
+  // ============================================================================
+
+  /**
+   * List files and folders in a container/path
+   */
+  static async listFiles(
+    baseUrl: string,
+    auth: DFAuthConfig,
+    path: string = '',
+    options: Record<string, unknown> = {}
+  ): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (options.includeFiles !== undefined) params.set('include_files', String(options.includeFiles));
+    if (options.includeFolders !== undefined) params.set('include_folders', String(options.includeFolders));
+    if (options.fullTree !== undefined) params.set('full_tree', String(options.fullTree));
+    if (options.zip !== undefined) params.set('zip', String(options.zip));
+
+    const encodedPath = path ? encodeURIComponent(path).replace(/%2F/g, '/') : '';
+    return this.request('GET', `${baseUrl}/${encodedPath}`, auth, params);
+  }
+
+  /**
+   * Get file content
+   */
+  static async getFileContent(
+    baseUrl: string,
+    auth: DFAuthConfig,
+    filePath: string
+  ): Promise<unknown> {
+    const encodedPath = encodeURIComponent(filePath).replace(/%2F/g, '/');
+    return this.request('GET', `${baseUrl}/${encodedPath}`, auth);
+  }
+
+  /**
+   * Create a folder
+   */
+  static async createFolder(
+    baseUrl: string,
+    auth: DFAuthConfig,
+    folderPath: string
+  ): Promise<unknown> {
+    const encodedPath = encodeURIComponent(folderPath).replace(/%2F/g, '/');
+    const url = `${baseUrl}/${encodedPath}/`;
+    return this.request('POST', url, auth, undefined, { folder: { name: folderPath.split('/').pop() } });
+  }
+
+  /**
+   * Delete a file or folder
+   */
+  static async deleteFile(
+    baseUrl: string,
+    auth: DFAuthConfig,
+    path: string,
+    options: Record<string, unknown> = {}
+  ): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (options.force !== undefined) params.set('force', String(options.force));
+
+    const encodedPath = encodeURIComponent(path).replace(/%2F/g, '/');
+    return this.request('DELETE', `${baseUrl}/${encodedPath}`, auth, params);
+  }
+
+  /**
+   * Get file/folder properties
+   */
+  static async getFileProperties(
+    baseUrl: string,
+    auth: DFAuthConfig,
+    path: string
+  ): Promise<unknown> {
+    const params = new URLSearchParams();
+    params.set('include_properties', 'true');
+
+    const encodedPath = encodeURIComponent(path).replace(/%2F/g, '/');
+    return this.request('GET', `${baseUrl}/${encodedPath}`, auth, params);
+  }
+
+  /**
+   * Create a file with the given content
+   */
+  static async createFile(
+    baseUrl: string,
+    auth: DFAuthConfig,
+    filePath: string,
+    content: string
+  ): Promise<unknown> {
+    const encodedPath = encodeURIComponent(filePath).replace(/%2F/g, '/');
+    return this.request('POST', `${baseUrl}/${encodedPath}`, auth, undefined, content);
+  }
+
   static async getTables(baseUrl: string, auth: DFAuthConfig): Promise<unknown> {
     return this.request('GET', `${baseUrl}/_schema`, auth);
   }
@@ -163,7 +331,7 @@ export class DreamFactoryService {
     url: string,
     auth: DFAuthConfig,
     params?: URLSearchParams,
-    body?: Record<string, unknown>
+    body?: Record<string, unknown> | string
   ): Promise<unknown> {
     if (!auth.sessionToken) {
       throw new Error('Session token is required');
@@ -185,17 +353,22 @@ export class DreamFactoryService {
     }
 
     if (body) {
-      headers['Content-Type'] = 'application/json';
+      headers['Content-Type'] = typeof body === 'string' ? 'text/plain' : 'application/json';
     }
+
+    console.log(`[DreamFactoryService.request] ${method} ${target.toString()}`);
 
     const response = await fetch(target, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined
+      body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
     });
+
+    console.log(`[DreamFactoryService.request] Response status: ${response.status} ${response.statusText}`);
 
     if (!response.ok) {
       const text = await response.text();
+      console.error(`[DreamFactoryService.request] Error response:`, text);
       throw new Error(text || response.statusText);
     }
 
