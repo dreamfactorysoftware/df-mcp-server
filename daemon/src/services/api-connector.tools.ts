@@ -1,33 +1,9 @@
 import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { DreamFactoryService, type DFAuthConfig } from './dreamfactory.service.js';
+import { DreamFactoryService } from './dreamfactory.service.js';
 import { SessionService } from './session.service.js';
 import type { ApiConfig } from '../types.js';
-
-type ToolResponse = {
-  content: Array<{ type: 'text'; text: string }>;
-  isError?: boolean;
-};
-
-const respond = (data: unknown): ToolResponse => ({
-  content: [{ type: 'text', text: JSON.stringify(data, null, 2) }]
-});
-
-const respondError = (message: string): ToolResponse => ({
-  content: [{ type: 'text', text: message }],
-  isError: true
-});
-
-/**
- * Sanitize API name for use as a tool prefix.
- */
-function sanitizeApiName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '');
-}
+import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
 
 /**
  * Register API connector tools that work across all databases.
@@ -37,39 +13,7 @@ export function registerApiConnectorTools(
   sessionManager: SessionService,
   apiConfigs: ApiConfig[]
 ) {
-  const getAuth = (sessionId?: string): DFAuthConfig => {
-    const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
-    const sessionToken = sessionConfig?.sessionToken ?? '';
-    const apiKey = sessionConfig?.apiKey;
-
-    if (!sessionToken) {
-      throw new Error('DreamFactory session not found. Please authenticate via OAuth.');
-    }
-
-    return { sessionToken, apiKey };
-  };
-
-  const registerTool = (
-    name: string,
-    title: string,
-    description: string,
-    schema: z.ZodTypeAny,
-    handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>
-  ) => {
-    server.registerTool(
-      name,
-      { title, description, inputSchema: schema },
-      async (params, context) => {
-        try {
-          return await handler(params ?? {}, context ?? {});
-        } catch (error) {
-          console.error(`Tool ${name} error:`, error);
-          const message = error instanceof Error ? error.message : String(error);
-          return respondError(`Error in ${name}: ${message}`);
-        }
-      }
-    );
-  };
+  const registerTool = createToolRegistrar(server);
 
   // List all available APIs
   registerTool(
@@ -94,7 +38,7 @@ export function registerApiConnectorTools(
     'Retrieve tables from all connected database services in one call',
     z.object({}),
     async (_args, { sessionId }) => {
-      const auth = getAuth(sessionId);
+      const auth = getAuth(sessionManager, sessionId);
       const results: Record<string, unknown> = {};
 
       await Promise.all(
@@ -122,7 +66,7 @@ export function registerApiConnectorTools(
       tableName: z.string().describe('The table name to search for')
     }),
     async ({ tableName }, { sessionId }) => {
-      const auth = getAuth(sessionId);
+      const auth = getAuth(sessionManager, sessionId);
       const results: Record<string, unknown> = {};
 
       await Promise.all(
@@ -156,7 +100,7 @@ export function registerApiConnectorTools(
     'Retrieve stored procedures from all connected database services',
     z.object({}),
     async (_args, { sessionId }) => {
-      const auth = getAuth(sessionId);
+      const auth = getAuth(sessionManager, sessionId);
       const results: Record<string, unknown> = {};
 
       await Promise.all(
@@ -182,7 +126,7 @@ export function registerApiConnectorTools(
     'Retrieve stored functions from all connected database services',
     z.object({}),
     async (_args, { sessionId }) => {
-      const auth = getAuth(sessionId);
+      const auth = getAuth(sessionManager, sessionId);
       const results: Record<string, unknown> = {};
 
       await Promise.all(
@@ -208,7 +152,7 @@ export function registerApiConnectorTools(
     'Retrieve all available resources from all connected database services',
     z.object({}),
     async (_args, { sessionId }) => {
-      const auth = getAuth(sessionId);
+      const auth = getAuth(sessionManager, sessionId);
       const results: Record<string, unknown> = {};
 
       await Promise.all(

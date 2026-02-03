@@ -3,11 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { DreamFactoryService, type DFAuthConfig } from './dreamfactory.service.js';
 import { SessionService } from './session.service.js';
 import type { ApiConfig } from '../types.js';
-
-type ToolResponse = {
-  content: Array<{ type: 'text'; text: string }>;
-  isError?: boolean;
-};
+import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
 
 type FileToolDefinition = {
   name: string;
@@ -21,33 +17,6 @@ type FileToolDefinition = {
     auth: DFAuthConfig
   ) => Promise<ToolResponse>;
 };
-
-const respond = (data: unknown): ToolResponse => ({
-  content: [{ type: 'text', text: JSON.stringify(data, null, 2) }]
-});
-
-const respondError = (message: string): ToolResponse => ({
-  content: [{ type: 'text', text: message }],
-  isError: true
-});
-
-const handleError = (error: unknown, operation: string): string => {
-  if (!(error instanceof Error)) {
-    return `Unknown error during ${operation}: ${String(error)}`;
-  }
-  return `Error during ${operation}: ${error.message}`;
-};
-
-/**
- * Sanitize API name for use as a tool prefix.
- */
-function sanitizeApiName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '');
-}
 
 /**
  * Base file tool definitions that will be registered for each file API.
@@ -149,38 +118,7 @@ export function registerFileApiTools(
 
   console.log('[registerFileApiTools] Registering tools for file services:', fileConfigs.map(c => c.name));
 
-  const getAuth = (sessionId?: string): DFAuthConfig => {
-    const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
-    const sessionToken = sessionConfig?.sessionToken ?? '';
-    const apiKey = sessionConfig?.apiKey;
-
-    if (!sessionToken) {
-      throw new Error('DreamFactory session not found. Please authenticate via OAuth.');
-    }
-
-    return { sessionToken, apiKey };
-  };
-
-  const registerTool = (
-    name: string,
-    title: string,
-    description: string,
-    schema: z.ZodTypeAny,
-    handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>
-  ) => {
-    server.registerTool(
-      name,
-      { title, description, inputSchema: schema },
-      async (params, context) => {
-        try {
-          return await handler(params ?? {}, context ?? {});
-        } catch (error) {
-          console.error(`Tool ${name} error:`, error);
-          return respondError(handleError(error, name));
-        }
-      }
-    );
-  };
+  const registerTool = createToolRegistrar(server);
 
   // Register prefixed tools for each file API
   for (const apiConfig of fileConfigs) {
@@ -197,7 +135,7 @@ export function registerFileApiTools(
         prefixedDescription,
         tool.schema,
         async (params, context) => {
-          const auth = getAuth(context.sessionId);
+          const auth = getAuth(sessionManager, context.sessionId);
           return tool.handler(params, context, apiConfig, auth);
         }
       );
@@ -213,7 +151,7 @@ export function registerFileApiTools(
       path: z.string().optional().describe('Path to list (empty for root)')
     }),
     async ({ path }, { sessionId }) => {
-      const auth = getAuth(sessionId);
+      const auth = getAuth(sessionManager, sessionId);
       const results: Record<string, unknown> = {};
 
       await Promise.all(
