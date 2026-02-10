@@ -1,47 +1,11 @@
 import * as z from 'zod/v4';
 import { DreamFactoryService } from './dreamfactory.service.js';
-const respond = (data) => ({
-    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }]
-});
-const respondError = (message) => ({
-    content: [{ type: 'text', text: message }],
-    isError: true
-});
-/**
- * Sanitize API name for use as a tool prefix.
- */
-function sanitizeApiName(name) {
-    return name
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '_')
-        .replace(/_+/g, '_')
-        .replace(/^_|_$/g, '');
-}
+import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
 /**
  * Register API connector tools that work across all databases.
  */
 export function registerApiConnectorTools(server, sessionManager, apiConfigs) {
-    const getAuth = (sessionId) => {
-        const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
-        const sessionToken = sessionConfig?.sessionToken ?? '';
-        const apiKey = sessionConfig?.apiKey;
-        if (!sessionToken) {
-            throw new Error('DreamFactory session not found. Please authenticate via OAuth.');
-        }
-        return { sessionToken, apiKey };
-    };
-    const registerTool = (name, title, description, schema, handler) => {
-        server.registerTool(name, { title, description, inputSchema: schema }, async (params, context) => {
-            try {
-                return await handler(params ?? {}, context ?? {});
-            }
-            catch (error) {
-                console.error(`Tool ${name} error:`, error);
-                const message = error instanceof Error ? error.message : String(error);
-                return respondError(`Error in ${name}: ${message}`);
-            }
-        });
-    };
+    const registerTool = createToolRegistrar(server);
     // List all available APIs
     registerTool('list_apis', 'List Available APIs', 'List all available database APIs and their tool prefixes', z.object({}), async () => {
         const apis = apiConfigs.map(api => ({
@@ -53,7 +17,7 @@ export function registerApiConnectorTools(server, sessionManager, apiConfigs) {
     });
     // Get tables from all databases
     registerTool('all_get_tables', 'Get Tables from All Databases', 'Retrieve tables from all connected database services in one call', z.object({}), async (_args, { sessionId }) => {
-        const auth = getAuth(sessionId);
+        const auth = getAuth(sessionManager, sessionId);
         const results = {};
         await Promise.all(apiConfigs.map(async (api) => {
             try {
@@ -71,7 +35,7 @@ export function registerApiConnectorTools(server, sessionManager, apiConfigs) {
     registerTool('all_find_table', 'Find Table Across All Databases', 'Search for a table by name across all connected databases and return its schema if found', z.object({
         tableName: z.string().describe('The table name to search for')
     }), async ({ tableName }, { sessionId }) => {
-        const auth = getAuth(sessionId);
+        const auth = getAuth(sessionManager, sessionId);
         const results = {};
         await Promise.all(apiConfigs.map(async (api) => {
             try {
@@ -95,7 +59,7 @@ export function registerApiConnectorTools(server, sessionManager, apiConfigs) {
     });
     // Get stored procedures from all databases
     registerTool('all_get_stored_procedures', 'Get Stored Procedures from All Databases', 'Retrieve stored procedures from all connected database services', z.object({}), async (_args, { sessionId }) => {
-        const auth = getAuth(sessionId);
+        const auth = getAuth(sessionManager, sessionId);
         const results = {};
         await Promise.all(apiConfigs.map(async (api) => {
             try {
@@ -111,7 +75,7 @@ export function registerApiConnectorTools(server, sessionManager, apiConfigs) {
     });
     // Get stored functions from all databases
     registerTool('all_get_stored_functions', 'Get Stored Functions from All Databases', 'Retrieve stored functions from all connected database services', z.object({}), async (_args, { sessionId }) => {
-        const auth = getAuth(sessionId);
+        const auth = getAuth(sessionManager, sessionId);
         const results = {};
         await Promise.all(apiConfigs.map(async (api) => {
             try {
@@ -127,7 +91,7 @@ export function registerApiConnectorTools(server, sessionManager, apiConfigs) {
     });
     // Get database resources from all databases
     registerTool('all_get_resources', 'Get Resources from All Databases', 'Retrieve all available resources from all connected database services', z.object({}), async (_args, { sessionId }) => {
-        const auth = getAuth(sessionId);
+        const auth = getAuth(sessionManager, sessionId);
         const results = {};
         await Promise.all(apiConfigs.map(async (api) => {
             try {

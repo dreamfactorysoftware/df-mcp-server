@@ -1,27 +1,15 @@
 import * as z from 'zod/v4';
 import { DreamFactoryService } from './dreamfactory.service.js';
-const respond = (data) => ({
-    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }]
-});
-const respondError = (message) => ({
-    content: [{ type: 'text', text: message }],
-    isError: true
-});
-const handleError = (error, operation) => {
-    if (!(error instanceof Error)) {
-        return `Unknown error during ${operation}: ${String(error)}`;
+import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
+function fileContentToToolResponse(result) {
+    switch (result.kind) {
+        case 'image':
+            return { content: [{ type: 'image', data: result.data, mimeType: result.mimeType }] };
+        case 'audio':
+            return { content: [{ type: 'audio', data: result.data, mimeType: result.mimeType }] };
+        case 'text':
+            return { content: [{ type: 'text', text: result.content }] };
     }
-    return `Error during ${operation}: ${error.message}`;
-};
-/**
- * Sanitize API name for use as a tool prefix.
- */
-function sanitizeApiName(name) {
-    return name
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '_')
-        .replace(/_+/g, '_')
-        .replace(/^_|_$/g, '');
 }
 /**
  * Base file tool definitions that will be registered for each file API.
@@ -50,7 +38,20 @@ const FILE_TOOLS = [
             path: z.string().describe('Path to the file')
         }),
         handler: async ({ path }, _context, apiConfig, auth) => {
-            const data = await DreamFactoryService.getFileContent(apiConfig.baseUrl, auth, path);
+            const result = await DreamFactoryService.getFileContent(apiConfig.baseUrl, auth, path);
+            return fileContentToToolResponse(result);
+        }
+    },
+    {
+        name: 'create_file',
+        title: 'Create File',
+        description: 'Create a new file with the given content',
+        schema: z.object({
+            path: z.string().describe('Path for the new file (e.g. folder/filename.txt)'),
+            content: z.string().describe('Content to write to the file')
+        }),
+        handler: async ({ path, content }, _context, apiConfig, auth) => {
+            const data = await DreamFactoryService.createFile(apiConfig.baseUrl, auth, path, content);
             return respond(data);
         }
     },
@@ -102,26 +103,7 @@ export function registerFileApiTools(server, sessionManager, apiConfigs) {
         return;
     }
     console.log('[registerFileApiTools] Registering tools for file services:', fileConfigs.map(c => c.name));
-    const getAuth = (sessionId) => {
-        const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
-        const sessionToken = sessionConfig?.sessionToken ?? '';
-        const apiKey = sessionConfig?.apiKey;
-        if (!sessionToken) {
-            throw new Error('DreamFactory session not found. Please authenticate via OAuth.');
-        }
-        return { sessionToken, apiKey };
-    };
-    const registerTool = (name, title, description, schema, handler) => {
-        server.registerTool(name, { title, description, inputSchema: schema }, async (params, context) => {
-            try {
-                return await handler(params ?? {}, context ?? {});
-            }
-            catch (error) {
-                console.error(`Tool ${name} error:`, error);
-                return respondError(handleError(error, name));
-            }
-        });
-    };
+    const registerTool = createToolRegistrar(server);
     // Register prefixed tools for each file API
     for (const apiConfig of fileConfigs) {
         const prefix = sanitizeApiName(apiConfig.name);
@@ -130,7 +112,7 @@ export function registerFileApiTools(server, sessionManager, apiConfigs) {
             const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
             const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
             registerTool(prefixedName, prefixedTitle, prefixedDescription, tool.schema, async (params, context) => {
-                const auth = getAuth(context.sessionId);
+                const auth = getAuth(sessionManager, context.sessionId);
                 return tool.handler(params, context, apiConfig, auth);
             });
         }
@@ -139,7 +121,7 @@ export function registerFileApiTools(server, sessionManager, apiConfigs) {
     registerTool('all_list_files', 'List Files from All Storage Services', 'List root files and folders from all connected file storage services', z.object({
         path: z.string().optional().describe('Path to list (empty for root)')
     }), async ({ path }, { sessionId }) => {
-        const auth = getAuth(sessionId);
+        const auth = getAuth(sessionManager, sessionId);
         const results = {};
         await Promise.all(fileConfigs.map(async (api) => {
             try {

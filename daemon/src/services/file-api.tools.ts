@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { DreamFactoryService, type DFAuthConfig } from './dreamfactory.service.js';
+import { DreamFactoryService, type DFAuthConfig, type FileContentResult } from './dreamfactory.service.js';
 import { SessionService } from './session.service.js';
 import type { ApiConfig } from '../types.js';
 import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
@@ -17,6 +17,17 @@ type FileToolDefinition = {
     auth: DFAuthConfig
   ) => Promise<ToolResponse>;
 };
+
+function fileContentToToolResponse(result: FileContentResult): ToolResponse {
+  switch (result.kind) {
+    case 'image':
+      return { content: [{ type: 'image', data: result.data, mimeType: result.mimeType }] };
+    case 'audio':
+      return { content: [{ type: 'audio', data: result.data, mimeType: result.mimeType }] };
+    case 'text':
+      return { content: [{ type: 'text', text: result.content }] };
+  }
+}
 
 /**
  * Base file tool definitions that will be registered for each file API.
@@ -45,8 +56,8 @@ const FILE_TOOLS: FileToolDefinition[] = [
       path: z.string().describe('Path to the file')
     }),
     handler: async ({ path }, _context, apiConfig, auth) => {
-      const data = await DreamFactoryService.getFileContent(apiConfig.baseUrl, auth, path);
-      return respond(data);
+      const result = await DreamFactoryService.getFileContent(apiConfig.baseUrl, auth, path);
+      return fileContentToToolResponse(result);
     }
   },
   {

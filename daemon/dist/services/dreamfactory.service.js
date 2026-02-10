@@ -84,11 +84,25 @@ export class DreamFactoryService {
         return this.request('GET', `${baseUrl}/${encodedPath}`, auth, params);
     }
     /**
-     * Get file content
+     * Get file content, returning typed results based on the response content type.
      */
     static async getFileContent(baseUrl, auth, filePath) {
         const encodedPath = encodeURIComponent(filePath).replace(/%2F/g, '/');
-        return this.request('GET', `${baseUrl}/${encodedPath}`, auth);
+        const url = `${baseUrl}/${encodedPath}`;
+        const response = await this.requestRaw('GET', url, auth);
+        const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
+        const mimeType = contentType.split(';')[0].trim();
+        if (mimeType.startsWith('image/')) {
+            const buffer = Buffer.from(await response.arrayBuffer());
+            return { kind: 'image', mimeType, data: buffer.toString('base64') };
+        }
+        if (mimeType.startsWith('audio/')) {
+            const buffer = Buffer.from(await response.arrayBuffer());
+            return { kind: 'audio', mimeType, data: buffer.toString('base64') };
+        }
+        // Text-like types: text/*, application/json, application/xml, etc.
+        const text = await response.text();
+        return { kind: 'text', content: text };
     }
     /**
      * Create a folder
@@ -116,6 +130,13 @@ export class DreamFactoryService {
         params.set('include_properties', 'true');
         const encodedPath = encodeURIComponent(path).replace(/%2F/g, '/');
         return this.request('GET', `${baseUrl}/${encodedPath}`, auth, params);
+    }
+    /**
+     * Create a file with the given content
+     */
+    static async createFile(baseUrl, auth, filePath, content) {
+        const encodedPath = encodeURIComponent(filePath).replace(/%2F/g, '/');
+        return this.request('POST', `${baseUrl}/${encodedPath}`, auth, undefined, content);
     }
     static async getTables(baseUrl, auth) {
         return this.request('GET', `${baseUrl}/_schema`, auth);
@@ -217,6 +238,30 @@ export class DreamFactoryService {
         });
         return params;
     }
+    static async requestRaw(method, url, auth, params) {
+        if (!auth.sessionToken) {
+            throw new Error('Session token is required');
+        }
+        const target = new URL(url);
+        if (params) {
+            params.forEach((value, key) => target.searchParams.set(key, value));
+        }
+        const headers = {
+            'X-DreamFactory-Session-Token': auth.sessionToken,
+        };
+        if (auth.apiKey) {
+            headers['X-DreamFactory-API-Key'] = auth.apiKey;
+        }
+        console.log(`[DreamFactoryService.requestRaw] ${method} ${target.toString()}`);
+        const response = await fetch(target, { method, headers });
+        console.log(`[DreamFactoryService.requestRaw] Response status: ${response.status} ${response.statusText}`);
+        if (!response.ok) {
+            const text = await response.text();
+            console.error(`[DreamFactoryService.requestRaw] Error response:`, text);
+            throw new Error(text || response.statusText);
+        }
+        return response;
+    }
     static async request(method, url, auth, params, body) {
         if (!auth.sessionToken) {
             throw new Error('Session token is required');
@@ -233,13 +278,13 @@ export class DreamFactoryService {
             headers['X-DreamFactory-API-Key'] = auth.apiKey;
         }
         if (body) {
-            headers['Content-Type'] = 'application/json';
+            headers['Content-Type'] = typeof body === 'string' ? 'text/plain' : 'application/json';
         }
         console.log(`[DreamFactoryService.request] ${method} ${target.toString()}`);
         const response = await fetch(target, {
             method,
             headers,
-            body: body ? JSON.stringify(body) : undefined
+            body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
         });
         console.log(`[DreamFactoryService.request] Response status: ${response.status} ${response.statusText}`);
         if (!response.ok) {

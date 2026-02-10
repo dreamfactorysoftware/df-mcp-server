@@ -2,51 +2,7 @@ import * as z from 'zod/v4';
 import { DreamFactoryService } from './dreamfactory.service.js';
 import { registerApiConnectorTools } from './api-connector.tools.js';
 import { registerFileApiTools } from './file-api.tools.js';
-const respond = (label, data) => ({
-    content: [
-        { type: 'text', text: JSON.stringify(data, null, 2) }
-    ]
-});
-const respondError = (message) => ({
-    content: [{ type: 'text', text: message }],
-    isError: true
-});
-const handleError = (error, operation) => {
-    if (!(error instanceof Error)) {
-        return `Unknown error during ${operation}: ${String(error)}`;
-    }
-    const message = error.message;
-    if (message.includes('Authentication failed') || message.includes('401')) {
-        return `Authentication Error: ${message}`;
-    }
-    if (message.includes('Network error') || message.includes('Unable to connect')) {
-        return `Connection Error: ${message}`;
-    }
-    if (message.includes('Access forbidden') || message.includes('403')) {
-        return `Permission Error: ${message}`;
-    }
-    if (message.includes('Resource not found') || message.includes('404')) {
-        return `Resource Error: ${message}`;
-    }
-    if (message.includes('Validation error') || message.includes('422')) {
-        return `Validation Error: ${message}`;
-    }
-    if (message.includes('Server error') || message.includes('500')) {
-        return `Server Error: ${message}`;
-    }
-    return `Error during ${operation}: ${message}`;
-};
-/**
- * Sanitize API name for use as a tool prefix.
- * Converts to lowercase, replaces non-alphanumeric chars with underscores.
- */
-function sanitizeApiName(name) {
-    return name
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '_')
-        .replace(/_+/g, '_')
-        .replace(/^_|_$/g, '');
-}
+import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
 /**
  * Base tool definitions that will be registered for each API.
  * The handler receives the API config and auth, so it knows which API to target.
@@ -59,7 +15,7 @@ const BASE_TOOLS = [
         schema: z.object({}),
         handler: async (_args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTables(apiConfig.baseUrl, auth);
-            return respond('Tables available in the database:', data);
+            return respond(data);
         }
     },
     {
@@ -69,7 +25,7 @@ const BASE_TOOLS = [
         schema: z.object({ tableName: z.string() }),
         handler: async ({ tableName }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableSchema(tableName, apiConfig.baseUrl, auth);
-            return respond(`Schema for table ${tableName}:`, data);
+            return respond(data);
         }
     },
     {
@@ -93,7 +49,7 @@ const BASE_TOOLS = [
         }),
         handler: async (args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableData(apiConfig.baseUrl, auth, args);
-            return respond(`Data for table ${args.tableName}:`, data);
+            return respond(data);
         }
     },
     {
@@ -110,7 +66,7 @@ const BASE_TOOLS = [
         }),
         handler: async ({ tableName, records, ...options }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.createRecords(tableName, apiConfig.baseUrl, auth, records, options);
-            return respond(`Records created in table ${tableName}:`, data);
+            return respond(data);
         }
     },
     {
@@ -129,7 +85,7 @@ const BASE_TOOLS = [
         }),
         handler: async ({ tableName, records, ...options }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.updateRecords(tableName, apiConfig.baseUrl, auth, records, options);
-            return respond(`Records updated in table ${tableName}:`, data);
+            return respond(data);
         }
     },
     {
@@ -148,7 +104,7 @@ const BASE_TOOLS = [
         }),
         handler: async ({ tableName, ...options }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.deleteRecords(tableName, apiConfig.baseUrl, auth, options);
-            return respond(`Records deleted from table ${tableName}:`, data);
+            return respond(data);
         }
     },
     {
@@ -161,7 +117,7 @@ const BASE_TOOLS = [
         }),
         handler: async ({ tableName, refresh }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableFields(tableName, apiConfig.baseUrl, auth, refresh);
-            return respond(`Fields for table ${tableName}:`, data);
+            return respond(data);
         }
     },
     {
@@ -174,7 +130,7 @@ const BASE_TOOLS = [
         }),
         handler: async ({ tableName, refresh }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableRelationships(tableName, apiConfig.baseUrl, auth, refresh);
-            return respond(`Relationships for table ${tableName}:`, data);
+            return respond(data);
         }
     },
     {
@@ -184,7 +140,7 @@ const BASE_TOOLS = [
         schema: z.object({}),
         handler: async (_args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getStoredProcedures(apiConfig.baseUrl, auth);
-            return respond('Stored procedures available:', data);
+            return respond(data);
         }
     },
     {
@@ -199,7 +155,7 @@ const BASE_TOOLS = [
         }),
         handler: async ({ procedureName, parameters, wrapper, returns }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.callStoredProcedure(procedureName, apiConfig.baseUrl, auth, parameters, wrapper, returns);
-            return respond(`Stored procedure ${procedureName} called successfully:`, data);
+            return respond(data);
         }
     },
     {
@@ -209,7 +165,7 @@ const BASE_TOOLS = [
         schema: z.object({}),
         handler: async (_args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getStoredFunctions(apiConfig.baseUrl, auth);
-            return respond('Stored functions available:', data);
+            return respond(data);
         }
     },
     {
@@ -223,7 +179,7 @@ const BASE_TOOLS = [
         }),
         handler: async ({ functionName, parameters, returns }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.callStoredFunction(functionName, apiConfig.baseUrl, auth, parameters, returns);
-            return respond(`Stored function ${functionName} called successfully:`, data);
+            return respond(data);
         }
     },
     {
@@ -239,35 +195,12 @@ const BASE_TOOLS = [
         }),
         handler: async (args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getDatabaseResources(apiConfig.baseUrl, auth, args);
-            return respond('Database resources:', data);
+            return respond(data);
         }
     }
 ];
 export function registerDreamFactoryTools(server, sessionManager, apiConfigs) {
-    const getAuth = (sessionId) => {
-        const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
-        const sessionToken = sessionConfig?.sessionToken ?? '';
-        const apiKey = sessionConfig?.apiKey;
-        if (!sessionToken) {
-            throw new Error('DreamFactory session not found. Please authenticate via OAuth.');
-        }
-        return { sessionToken, apiKey };
-    };
-    const registerTool = (name, title, description, schema, handler) => {
-        server.registerTool(name, {
-            title,
-            description,
-            inputSchema: schema
-        }, async (params, context) => {
-            try {
-                return await handler(params ?? {}, context ?? {});
-            }
-            catch (error) {
-                console.error(`Tool ${name} error:`, error);
-                return respondError(handleError(error, name));
-            }
-        });
-    };
+    const registerTool = createToolRegistrar(server);
     // Register API connector tools (list_apis, all_get_tables, etc.)
     registerApiConnectorTools(server, sessionManager, apiConfigs);
     // Register file API tools
@@ -282,7 +215,7 @@ export function registerDreamFactoryTools(server, sessionManager, apiConfigs) {
             const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
             const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
             registerTool(prefixedName, prefixedTitle, prefixedDescription, tool.schema, async (params, context) => {
-                const auth = getAuth(context.sessionId);
+                const auth = getAuth(sessionManager, context.sessionId);
                 return tool.handler(params, context, apiConfig, auth);
             });
         }

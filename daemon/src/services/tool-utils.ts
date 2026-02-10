@@ -3,8 +3,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { DFAuthConfig } from './dreamfactory.service.js';
 import type { SessionService } from './session.service.js';
 
+type TextBlock = { type: 'text'; text: string };
+type ImageBlock = { type: 'image'; data: string; mimeType: string };
+type AudioBlock = { type: 'audio'; data: string; mimeType: string };
+
 export type ToolResponse = {
-  content: Array<{ type: 'text'; text: string }>;
+  content: Array<TextBlock | ImageBlock | AudioBlock>;
   isError?: boolean;
 };
 
