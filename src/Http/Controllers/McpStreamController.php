@@ -6,7 +6,6 @@ use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 
 class McpStreamController extends Controller
 {
@@ -42,15 +41,6 @@ class McpStreamController extends Controller
             ], 404);
         }
 
-        $apiName = $config['api_name'] ?? null;
-        if (empty($apiName)) {
-            Log::error('MCP service missing api_name', ['mcpService' => $mcpService]);
-            return response()->json([
-                'error' => 'MCP service misconfigured: api_name is required',
-                'service' => $mcpService,
-            ], 422);
-        }
-
         // Determine scheme - prioritize X-Forwarded-Proto for proxies
         $scheme = $request->header('X-Forwarded-Proto');
         if (empty($scheme)) {
@@ -65,7 +55,7 @@ class McpStreamController extends Controller
             $scheme = 'http';
         }
 
-        $baseUrl = $scheme . '://' . $host . '/api/v2/' . $apiName;
+        $baseUrl = $scheme . '://' . $host . '/api/v2';
 
         if (!config('mcp.daemon.enabled', false)) {
             return response()->json([

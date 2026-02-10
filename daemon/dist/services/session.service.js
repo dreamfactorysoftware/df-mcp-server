@@ -9,6 +9,10 @@ export class SessionService {
         }
         return this.configs.get(sessionId);
     }
+    getApiConfigs(sessionId) {
+        const config = this.getConfig(sessionId);
+        return config?.apiConfigs ?? [];
+    }
     clearConfig(sessionId) {
         this.configs.delete(sessionId);
     }

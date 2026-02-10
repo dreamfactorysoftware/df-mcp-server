@@ -8,13 +8,16 @@ import {
   createServer,
   getSessionId,
   parseConfigFromHeaders,
-  updateSessionConfigFromHeaders
+  updateSessionConfigFromHeaders,
+  discoverServices,
+  type ApiConfig
 } from './utils/utils.js';
 
 type SessionEntry = {
   server: McpServer;
   transport: StreamableHTTPServerTransport;
   serviceName: string;
+  apiConfigs: ApiConfig[];
 };
 
 const app = express();
@@ -120,21 +123,46 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
 
     // Build config from headers
     const config = parseConfigFromHeaders(req);
-    const server = createServer(serviceName, config.baseUrl, sessionManager);
+
+    // Discover all services from DreamFactory (databases + files)
+    const apiConfigs = await discoverServices(config.baseUrl, {
+      sessionToken: dfSessionToken,
+      apiKey: dfApiKey
+    });
+
+    if (apiConfigs.length === 0) {
+      res.status(400).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: 'No supported services found in DreamFactory'
+        },
+        id: null
+      });
+      return;
+    }
+
+    const dbCount = apiConfigs.filter(c => c.category === 'database').length;
+    const fileCount = apiConfigs.filter(c => c.category === 'file').length;
+    console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file`);
+    console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
+
+    const server = createServer(serviceName, apiConfigs, sessionManager);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {
         const sessionId = randomUUID();
-        // Store DF session token and API key for user authentication
+        // Store DF session token, API key, and discovered API configs
         sessionManager.setConfig(sessionId, {
           url: config.baseUrl,
           sessionToken: dfSessionToken,
-          apiKey: dfApiKey
+          apiKey: dfApiKey,
+          apiConfigs
         });
         return sessionId;
       },
       onsessioninitialized: sessionId => {
-        sessions.set(sessionId, { server, transport, serviceName });
+        sessions.set(sessionId, { server, transport, serviceName, apiConfigs });
       },
       onsessionclosed: sessionId => {
         if (sessionId) {
