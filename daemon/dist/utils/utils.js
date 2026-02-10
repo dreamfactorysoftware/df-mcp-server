@@ -22,79 +22,22 @@ export function updateSessionConfigFromHeaders(req, sessionManager, sessionId) {
     sessionManager.setConfig(sessionId, { url: baseUrl, sessionToken, apiKey });
 }
 export function parseConfigFromHeaders(req) {
-    const configHeader = req.header('X-Mcp-Config');
     const baseUrl = req.header('X-Mcp-Base-Url');
-    if (!configHeader) {
-        throw new Error('X-Mcp-Config header required for initialization requests');
-    }
     if (!baseUrl) {
         throw new Error('X-Mcp-Base-Url header required for initialization requests');
     }
-    const configObject = resolveConfig(JSON.parse(configHeader));
-    const apiName = extractApiName(configObject);
-    if (!apiName) {
-        throw new Error('api_name is required for MCP service');
-    }
     return {
-        apiName,
         baseUrl
     };
-}
-function resolveConfig(payload) {
-    if (!isRecord(payload)) {
-        throw new Error('X-Mcp-Config header must be a JSON object');
-    }
-    const nested = payload.config;
-    if (isRecord(nested)) {
-        return nested;
-    }
-    return payload;
-}
-function extractApiName(config) {
-    return extractString(config?.api_name, config?.apiName);
-}
-function extractString(...values) {
-    for (const value of values) {
-        if (typeof value === 'string') {
-            const trimmed = value.trim();
-            if (trimmed.length > 0) {
-                return trimmed;
-            }
-        }
-    }
-    return undefined;
-}
-function isRecord(value) {
-    return typeof value === 'object' && value !== null;
-}
-/**
- * Extract the DreamFactory root API URL from a service-specific URL.
- * e.g., "http://localhost/api/v2/db" -> "http://localhost/api/v2"
- */
-function getDreamFactoryRootUrl(serviceUrl) {
-    console.log('[discoverDatabaseServices] Input serviceUrl:', serviceUrl);
-    const url = new URL(serviceUrl);
-    const pathParts = url.pathname.split('/').filter(Boolean);
-    console.log('[discoverDatabaseServices] Path parts:', pathParts);
-    // Remove the last segment (service name) to get the root API path
-    if (pathParts.length > 0) {
-        pathParts.pop();
-    }
-    url.pathname = '/' + pathParts.join('/');
-    const rootUrl = url.toString().replace(/\/$/, '');
-    console.log('[discoverDatabaseServices] Computed rootUrl:', rootUrl);
-    return rootUrl;
 }
 /**
  * Discover all supported services from DreamFactory and build API configs
  */
-export async function discoverServices(serviceBaseUrl, auth) {
+export async function discoverServices(rootUrl, auth) {
     console.log('[discoverServices] Starting discovery...');
-    console.log('[discoverServices] serviceBaseUrl:', serviceBaseUrl);
+    console.log('[discoverServices] rootUrl:', rootUrl);
     console.log('[discoverServices] auth.sessionToken:', auth.sessionToken ? `${auth.sessionToken.substring(0, 10)}...` : 'MISSING');
     console.log('[discoverServices] auth.apiKey:', auth.apiKey ? `${auth.apiKey.substring(0, 10)}...` : 'not provided');
-    const rootUrl = getDreamFactoryRootUrl(serviceBaseUrl);
-    console.log('[discoverServices] Root URL:', rootUrl);
     try {
         // Discover database services
         const dbServices = await DreamFactoryService.getDatabaseServices(rootUrl, auth);
@@ -122,13 +65,6 @@ export async function discoverServices(serviceBaseUrl, auth) {
         console.error('[discoverServices] Error during discovery:', error);
         throw error;
     }
-}
-/**
- * @deprecated Use discoverServices instead
- */
-export async function discoverDatabaseServices(serviceBaseUrl, auth) {
-    const all = await discoverServices(serviceBaseUrl, auth);
-    return all.filter(c => c.category === 'database');
 }
 export function createServer(serviceName, apiConfigs, sessionManager) {
     const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);

@@ -4,31 +4,14 @@ namespace DreamFactory\Core\McpServer\Services;
 
 use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Services\BaseRestService;
-use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use Illuminate\Support\Str;
 
 class Mcp extends BaseRestService
 {
-    protected function getApiName(): ?string
-    {
-        return $this->getConfig('api_name');
-    }
-
     protected function getMcpEndpoint(): string
     {
         return url('/mcp/' . $this->name);
-    }
-
-    protected function getValidatedApiName(): string
-    {
-        $apiName = $this->getApiName();
-
-        if (!$apiName) {
-            throw new BadRequestException('API name must be configured for this service.');
-        }
-
-        return $apiName;
     }
 
     protected function handleGET()
@@ -39,7 +22,6 @@ class Mcp extends BaseRestService
 
         return [
             'service_id' => $this->id,
-            'api_name' => $this->getValidatedApiName(),
             'mcp_endpoint' => $this->getMcpEndpoint(),
         ];
     }
@@ -50,7 +32,6 @@ class Mcp extends BaseRestService
             'ok' => true,
             'message' => 'MCP server configuration updated successfully',
             'server' => [
-                'api_name' => $this->getValidatedApiName(),
                 'mcp_endpoint' => $this->getMcpEndpoint(),
             ],
         ];
@@ -68,7 +49,7 @@ class Mcp extends BaseRestService
                 'get' => [
                     'summary' => 'Retrieve MCP service configuration',
                     'description' => sprintf(
-                        'Returns the configured API name and the MCP endpoint (%s) clients should use.',
+                        'Returns the MCP endpoint (%s) clients should use.',
                         $this->getMcpEndpoint()
                     ),
                     'operationId' => 'get' . $studly . 'McpService',
@@ -154,17 +135,13 @@ class Mcp extends BaseRestService
                         'format' => 'int32',
                         'description' => 'Internal DreamFactory service identifier.',
                     ],
-                    'api_name' => [
-                        'type' => 'string',
-                        'description' => 'Configured DreamFactory database service name.',
-                    ],
                     'mcp_endpoint' => [
                         'type' => 'string',
                         'description' => 'Fully-qualified MCP endpoint URL clients should call.',
                         'example' => $endpoint,
                     ],
                 ],
-                'required' => ['service_id', 'api_name', 'mcp_endpoint'],
+                'required' => ['service_id', 'mcp_endpoint'],
             ],
             'McpConfigUpdateResult' => [
                 'type' => 'object',
@@ -188,27 +165,18 @@ class Mcp extends BaseRestService
                 'type' => 'object',
                 'description' => 'MCP server endpoint information.',
                 'properties' => [
-                    'api_name' => [
-                        'type' => 'string',
-                        'description' => 'The API name for this service.',
-                    ],
                     'mcp_endpoint' => [
                         'type' => 'string',
                         'description' => 'MCP endpoint URL for this service.',
                         'example' => $endpoint,
                     ],
                 ],
-                'required' => ['api_name', 'mcp_endpoint'],
+                'required' => ['mcp_endpoint'],
             ],
             'McpConfigRequest' => [
                 'type' => 'object',
                 'description' => 'Optional payload for validating MCP configuration.',
-                'properties' => [
-                    'api_name' => [
-                        'type' => 'string',
-                        'description' => 'Optional override for the API name.',
-                    ],
-                ],
+                'properties' => [],
             ],
         ];
     }

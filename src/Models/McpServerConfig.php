@@ -2,9 +2,7 @@
 
 namespace DreamFactory\Core\McpServer\Models;
 
-use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Models\BaseServiceConfigModel;
-use ServiceManager;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class McpServerConfig extends BaseServiceConfigModel
@@ -15,7 +13,6 @@ class McpServerConfig extends BaseServiceConfigModel
 
     protected $fillable = [
         'service_id',
-        'api_name',
         'app_id',
         'oauth_client_id',
         'oauth_client_secret',
@@ -25,10 +22,6 @@ class McpServerConfig extends BaseServiceConfigModel
     protected $casts = [
         'service_id' => 'integer',
         'app_id' => 'integer',
-    ];
-
-    protected $hidden = [
-        'api_key', // Legacy column - hidden from UI
     ];
 
     /**
@@ -64,24 +57,6 @@ class McpServerConfig extends BaseServiceConfigModel
         parent::prepareConfigSchemaField($schema);
 
         switch ($schema['name']) {
-            case 'api_name':
-                $services = ServiceManager::getServiceListByGroup(ServiceTypeGroups::DATABASE, ['name'], true);
-
-                $apinSvcList = [
-                    [
-                        'label' => '',
-                        'name'  => null
-                    ]
-                ];
-                foreach ($services as $service) {
-                    $apinSvcList[] = ['label' => array_get($service, 'name'), 'name' => array_get($service, 'name')];
-                }
-
-                $schema['type'] = 'picklist';
-                $schema['values'] = $apinSvcList;
-                $schema['label'] = 'API Name';
-                $schema['description'] = 'Your Dreamfactory API name.';
-                break;
             case 'oauth_client_id':
                 $schema['label'] = 'OAuth Client ID';
                 $schema['description'] = 'OAuth Client ID for authentication.';
