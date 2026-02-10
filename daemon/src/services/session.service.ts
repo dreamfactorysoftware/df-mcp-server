@@ -1,7 +1,10 @@
+import type { ApiConfig } from '../types.js';
+
 export type SessionConfig = {
   url: string;
   sessionToken: string; // DF JWT for user authentication
   apiKey?: string; // DF API key (required for non-admin users)
+  apiConfigs?: ApiConfig[]; // Discovered database API configurations
 };
 
 export class SessionService {
@@ -16,6 +19,11 @@ export class SessionService {
       return undefined;
     }
     return this.configs.get(sessionId);
+  }
+
+  getApiConfigs(sessionId?: string): ApiConfig[] {
+    const config = this.getConfig(sessionId);
+    return config?.apiConfigs ?? [];
   }
 
   clearConfig(sessionId: string): void {

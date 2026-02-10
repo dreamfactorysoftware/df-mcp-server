@@ -73,8 +73,7 @@ The Laravel controller will proxy all MCP requests to this Node daemon, passing 
 | Header | Description |
 |--------|-------------|
 | `X-DreamFactory-Session-Token` | DreamFactory session token (required for authentication) |
-| `X-Mcp-Config` | JSON with `{"api_name": "..."}` |
-| `X-Mcp-Base-Url` | Base URL for DreamFactory API |
+| `X-Mcp-Base-Url` | Base URL for DreamFactory API (e.g., `https://host/api/v2`) |
 
 ### Optional Headers
 
