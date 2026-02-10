@@ -55,7 +55,13 @@ class McpStreamController extends Controller
             $scheme = 'http';
         }
 
-        $baseUrl = $scheme . '://' . $host . '/api/v2';
+        // Use internal base URL when configured (e.g. Docker where external port differs from internal)
+        $internalBase = config('mcp.daemon.internal_base_url');
+        if (!empty($internalBase)) {
+            $baseUrl = rtrim($internalBase, '/') . '/api/v2';
+        } else {
+            $baseUrl = $scheme . '://' . $host . '/api/v2';
+        }
 
         if (!config('mcp.daemon.enabled', false)) {
             return response()->json([
