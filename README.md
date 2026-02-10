@@ -11,7 +11,7 @@ DreamFactory is a secure, self-hosted enterprise data access platform that provi
 Edit your project’s composer.json to require the following package.
 
 	“require”:{
-		"dreamfactory/df-mcp-server": "~0.1.0"
+		"dreamfactory/df-mcp-server": "~1.1.0"
 	}
 
 Save your composer.json and do a "composer update" to install the package.
