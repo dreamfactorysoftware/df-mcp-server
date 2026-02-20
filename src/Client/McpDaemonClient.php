@@ -22,8 +22,10 @@ class McpDaemonClient
 
     /**
      * Proxy request to daemon server
+     *
+     * @param array $availableServices Pre-resolved list of available services (bypasses RBAC)
      */
-    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl, string $dfSessionToken): Response|JsonResponse|StreamedResponse
+    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl, string $dfSessionToken, array $availableServices = []): Response|JsonResponse|StreamedResponse
     {
         try {
             $client = new \GuzzleHttp\Client([
@@ -36,6 +38,11 @@ class McpDaemonClient
                 'X-DreamFactory-Session-Token' => $dfSessionToken,
                 'Accept' => 'application/json, text/event-stream',
             ];
+
+            // Pass pre-resolved service list so daemon skips GET /api/v2/system/service
+            if (!empty($availableServices)) {
+                $headers['X-Mcp-Available-Services'] = json_encode($availableServices);
+            }
 
             // Pass API key if configured (required for non-admin users)
             $appId = $config['app_id'] ?? null;

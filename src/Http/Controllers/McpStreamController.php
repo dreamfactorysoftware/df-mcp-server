@@ -5,7 +5,9 @@ namespace DreamFactory\Core\McpServer\Http\Controllers;
 use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
+use DreamFactory\Core\Enums\ServiceTypeGroups;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class McpStreamController extends Controller
 {
@@ -69,8 +71,39 @@ class McpStreamController extends Controller
             ], 503);
         }
 
+        // Resolve available services server-side so the daemon doesn't need
+        // to call GET /api/v2/system/service (which requires system permissions).
+        $availableServices = $this->getAvailableServices();
+
         $client = new McpDaemonClient();
-        return $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken);
+        return $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
+    }
+
+    /**
+     * Get available database and file services using ServiceManager (bypasses RBAC).
+     *
+     * @return array List of services with name, label, and type
+     */
+    private function getAvailableServices(): array
+    {
+        try {
+            /** @var \DreamFactory\Core\Services\ServiceManager $serviceManager */
+            $serviceManager = app('df.service');
+            $fields = ['name', 'label', 'type'];
+
+            $dbServices = $serviceManager->getServiceListByGroup(ServiceTypeGroups::DATABASE, $fields, true);
+            $fileServices = $serviceManager->getServiceListByGroup(ServiceTypeGroups::FILE, $fields, true);
+
+            return array_merge(
+                array_map(fn($s) => array_merge($s, ['category' => 'database']), $dbServices),
+                array_map(fn($s) => array_merge($s, ['category' => 'file']), $fileServices)
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Failed to resolve available services for MCP daemon', [
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
     }
 
     /**

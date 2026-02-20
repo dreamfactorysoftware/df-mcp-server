@@ -48,16 +48,64 @@ export function parseConfigFromHeaders(req: Request) {
 }
 
 /**
- * Discover all supported services from DreamFactory and build API configs
+ * Parse pre-resolved services from the X-Mcp-Available-Services header.
+ * The PHP layer resolves these via ServiceManager (bypasses RBAC), so the
+ * daemon never needs GET system/service permission.
+ */
+function parseAvailableServicesHeader(req: Request, rootUrl: string): ApiConfig[] | null {
+  const header = req.header('X-Mcp-Available-Services');
+  if (!header) {
+    return null;
+  }
+
+  try {
+    const services = JSON.parse(header) as Array<{
+      name: string;
+      label?: string;
+      type: string;
+      category?: string;
+    }>;
+
+    if (!Array.isArray(services) || services.length === 0) {
+      return null;
+    }
+
+    return services.map(s => ({
+      name: s.name,
+      baseUrl: `${rootUrl}/${s.name}`,
+      category: (s.category ?? 'database') as 'database' | 'file',
+      type: s.type,
+    }));
+  } catch (e) {
+    console.warn('[parseAvailableServicesHeader] Failed to parse header:', e);
+    return null;
+  }
+}
+
+/**
+ * Discover all supported services from DreamFactory and build API configs.
+ *
+ * Prefers pre-resolved services from the PHP layer (X-Mcp-Available-Services
+ * header) to avoid requiring system/service GET permission. Falls back to
+ * the DreamFactory API only if the header is absent.
  */
 export async function discoverServices(
   rootUrl: string,
-  auth: DFAuthConfig
+  auth: DFAuthConfig,
+  req?: Request
 ): Promise<ApiConfig[]> {
-  console.log('[discoverServices] Starting discovery...');
+  // Prefer pre-resolved services from PHP (bypasses RBAC)
+  if (req) {
+    const preResolved = parseAvailableServicesHeader(req, rootUrl);
+    if (preResolved && preResolved.length > 0) {
+      console.log('[discoverServices] Using pre-resolved services from PHP:', preResolved.map(s => s.name));
+      return preResolved;
+    }
+  }
+
+  // Fallback: call the API directly (requires system/service GET permission)
+  console.log('[discoverServices] No pre-resolved services, falling back to API discovery...');
   console.log('[discoverServices] rootUrl:', rootUrl);
-  console.log('[discoverServices] auth.sessionToken:', auth.sessionToken ? `${auth.sessionToken.substring(0, 10)}...` : 'MISSING');
-  console.log('[discoverServices] auth.apiKey:', auth.apiKey ? `${auth.apiKey.substring(0, 10)}...` : 'not provided');
 
   try {
     // Discover database services
