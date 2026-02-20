@@ -295,18 +295,22 @@ const BASE_TOOLS: ToolDefinition[] = [
   }
 ];
 
+/** Base tool names for database services. */
+export const DB_TOOL_NAMES = BASE_TOOLS.map(t => t.name);
+
 export function registerDreamFactoryTools(
   server: McpServer,
   sessionManager: SessionService,
-  apiConfigs: ApiConfig[]
+  apiConfigs: ApiConfig[],
+  disabledTools?: Set<string>
 ) {
-  const registerTool = createToolRegistrar(server);
+  const registerTool = createToolRegistrar(server, disabledTools);
 
   // Register API connector tools (list_apis, all_get_tables, etc.)
-  registerApiConnectorTools(server, sessionManager, apiConfigs);
+  registerApiConnectorTools(server, sessionManager, apiConfigs, disabledTools);
 
   // Register file API tools
-  registerFileApiTools(server, sessionManager, apiConfigs);
+  registerFileApiTools(server, sessionManager, apiConfigs, disabledTools);
 
   // Filter to database services only for database tools
   const dbConfigs = apiConfigs.filter(c => c.category === 'database');

@@ -93,7 +93,8 @@ export async function discoverServices(
 export function createServer(
   serviceName: string,
   apiConfigs: ApiConfig[],
-  sessionManager: SessionService
+  sessionManager: SessionService,
+  disabledTools?: Set<string>
 ): McpServer {
   const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);
   const fileApis = apiConfigs.filter(c => c.category === 'file').map(c => c.name);
@@ -162,6 +163,6 @@ export function createServer(
     }
   );
 
-  registerDreamFactoryTools(server, sessionManager, apiConfigs);
+  registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
   return server;
 }

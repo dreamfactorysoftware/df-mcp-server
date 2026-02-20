@@ -66,7 +66,7 @@ export async function discoverServices(rootUrl, auth) {
         throw error;
     }
 }
-export function createServer(serviceName, apiConfigs, sessionManager) {
+export function createServer(serviceName, apiConfigs, sessionManager, disabledTools) {
     const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);
     const fileApis = apiConfigs.filter(c => c.category === 'file').map(c => c.name);
     const dbPrefixes = dbApis.map(name => name.replace(/[^a-zA-Z0-9]/g, '_'));
@@ -127,6 +127,6 @@ export function createServer(serviceName, apiConfigs, sessionManager) {
     }, {
         instructions
     });
-    registerDreamFactoryTools(server, sessionManager, apiConfigs);
+    registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
     return server;
 }

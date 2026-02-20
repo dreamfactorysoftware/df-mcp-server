@@ -147,7 +147,20 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file`);
     console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
 
-    const server = createServer(serviceName, apiConfigs, sessionManager);
+    // Parse disabled tools from service config
+    let disabledTools: Set<string> | undefined;
+    const mcpConfigHeader = req.headers['x-mcp-config'] as string | undefined;
+    if (mcpConfigHeader) {
+      try {
+        const mcpConfig = JSON.parse(mcpConfigHeader);
+        if (Array.isArray(mcpConfig.disabled_tools) && mcpConfig.disabled_tools.length > 0) {
+          disabledTools = new Set(mcpConfig.disabled_tools);
+          console.log(`Disabled tools (${disabledTools.size}):`, [...disabledTools]);
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {

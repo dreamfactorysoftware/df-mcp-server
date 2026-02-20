@@ -50,8 +50,11 @@ export function getAuth(sessionManager, sessionId) {
     }
     return { sessionToken, apiKey };
 }
-export function createToolRegistrar(server) {
+export function createToolRegistrar(server, disabledTools) {
     return (name, title, description, schema, handler) => {
+        if (disabledTools?.has(name)) {
+            return;
+        }
         server.registerTool(name, { title, description, inputSchema: schema }, async (params, context) => {
             try {
                 return await handler(params ?? {}, context ?? {});
