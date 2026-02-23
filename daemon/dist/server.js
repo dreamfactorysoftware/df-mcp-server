@@ -4,8 +4,6 @@ import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
 import { createServer, getSessionId, parseConfigFromHeaders, updateSessionConfigFromHeaders, discoverServices } from './utils/utils.js';
-import { DB_TOOL_META } from './services/tools.service.js';
-import { FILE_TOOL_META } from './services/file-api.tools.js';
 const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
@@ -63,13 +61,6 @@ app.post('/mcp/cache/clear', (req, res) => {
         sessions.clear();
         res.json({ message: 'All cache cleared' });
     }
-});
-// Tool definitions endpoint - returns base tool templates per category (no auth needed)
-app.get('/mcp/tool-definitions', (_req, res) => {
-    res.json({
-        database: DB_TOOL_META,
-        file: FILE_TOOL_META,
-    });
 });
 // ============================================================================
 // MCP Protocol Endpoint - Requires DreamFactory session token from PHP
