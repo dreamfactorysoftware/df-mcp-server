@@ -72,7 +72,7 @@ export function getAuth(sessionManager: SessionService, sessionId?: string): DFA
   return { sessionToken, apiKey };
 }
 
-export function createToolRegistrar(server: McpServer) {
+export function createToolRegistrar(server: McpServer, disabledTools?: Set<string>) {
   return (
     name: string,
     title: string,
@@ -80,6 +80,9 @@ export function createToolRegistrar(server: McpServer) {
     schema: z.ZodTypeAny,
     handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>
   ) => {
+    if (disabledTools?.has(name)) {
+      return;
+    }
     server.registerTool(
       name,
       { title, description, inputSchema: schema },

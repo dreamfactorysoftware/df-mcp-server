@@ -17,11 +17,13 @@ class McpServerConfig extends BaseServiceConfigModel
         'oauth_client_id',
         'oauth_client_secret',
         'custom_login_url',
+        'disabled_tools',
     ];
 
     protected $casts = [
         'service_id' => 'integer',
         'app_id' => 'integer',
+        'disabled_tools' => 'array',
     ];
 
     /**
@@ -29,6 +31,7 @@ class McpServerConfig extends BaseServiceConfigModel
      */
     protected static $schemaHiddenFields = [
         'app_id',
+        'disabled_tools',
     ];
 
 
