@@ -1,6 +1,7 @@
 import * as z from 'zod/v4';
 import { respond, respondError, createToolRegistrar } from './tool-utils.js';
 const MAX_RESPONSE_SIZE = 1_048_576; // 1 MB
+const REQUEST_TIMEOUT_MS = 30_000; // 30 seconds
 /**
  * Build a Zod object schema from custom tool parameter definitions.
  */
@@ -76,35 +77,30 @@ export async function executeCustomToolRequest(toolDef, params) {
     };
     if (jsonBody && toolDef.http_method !== 'GET') {
         fetchOptions.body = JSON.stringify(jsonBody);
-        if (!headers['Content-Type'] && !headers['content-type']) {
+        if (!Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) {
             headers['Content-Type'] = 'application/json';
         }
     }
-    try {
-        const response = await fetch(url, fetchOptions);
-        const contentLength = response.headers.get('content-length');
-        if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_SIZE) {
-            return respondError(`Response too large (${contentLength} bytes). Maximum allowed: ${MAX_RESPONSE_SIZE} bytes.`);
-        }
-        const text = await response.text();
-        if (text.length > MAX_RESPONSE_SIZE) {
-            return respondError(`Response too large (${text.length} bytes). Maximum allowed: ${MAX_RESPONSE_SIZE} bytes.`);
-        }
-        if (!response.ok) {
-            return respondError(`HTTP ${response.status} ${response.statusText}: ${text}`);
-        }
-        // Try to parse as JSON for pretty-printing
-        try {
-            const json = JSON.parse(text);
-            return respond(json);
-        }
-        catch {
-            return respond(text);
-        }
+    fetchOptions.signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const response = await fetch(url, fetchOptions);
+    const contentLength = response.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_SIZE) {
+        return respondError(`Response too large (${contentLength} bytes). Maximum allowed: ${MAX_RESPONSE_SIZE} bytes.`);
     }
-    catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return respondError(`Request failed: ${message}`);
+    const text = await response.text();
+    if (text.length > MAX_RESPONSE_SIZE) {
+        return respondError(`Response too large (${text.length} bytes). Maximum allowed: ${MAX_RESPONSE_SIZE} bytes.`);
+    }
+    if (!response.ok) {
+        return respondError(`HTTP ${response.status} ${response.statusText}: ${text}`);
+    }
+    // Try to parse as JSON for pretty-printing
+    try {
+        const json = JSON.parse(text);
+        return respond(json);
+    }
+    catch {
+        return { content: [{ type: 'text', text }] };
     }
 }
 /**

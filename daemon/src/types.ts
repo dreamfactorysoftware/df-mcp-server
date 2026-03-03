@@ -18,7 +18,7 @@ export type CustomToolParameter = {
 export type CustomToolDefinition = {
   name: string;
   description: string;
-  http_method: string;
+  http_method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   url: string;
   parameters: CustomToolParameter[];
   headers: Record<string, string>;

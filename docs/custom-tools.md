@@ -153,7 +153,7 @@ Static headers are merged with any dynamic headers from parameters. Dynamic head
 
 ## Admin UI
 
-The Custom Tools section appears on the MCP service edit page as an expansion panel below the MCP Tools panel. It is only visible when editing (not creating) an MCP service.
+The Custom Tools section appears on the MCP service edit page as an expansion panel below the Built-in Tools panel. It is only visible when editing (not creating) an MCP service.
 
 ### Tools Table
 

@@ -71,7 +71,6 @@ class McpServerConfig extends BaseServiceConfigModel
         }
     }
 
-
     /**
      * Override to exclude schemaHiddenFields from UI
      */

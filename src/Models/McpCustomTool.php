@@ -57,28 +57,26 @@ class McpCustomTool extends BaseModel
      */
     public static function syncToolsForService(int $serviceId, array $tools): void
     {
-        $existingIds = static::where('service_id', $serviceId)->pluck('id')->all();
+        $existing = static::where('service_id', $serviceId)->get()->keyBy('id');
         $receivedIds = [];
 
         foreach ($tools as $toolData) {
             $toolData['service_id'] = $serviceId;
 
-            if (!empty($toolData['id'])) {
-                $tool = static::find($toolData['id']);
-                if ($tool && $tool->service_id === $serviceId) {
-                    $tool->update($toolData);
-                    $receivedIds[] = $tool->id;
-                }
+            if (!empty($toolData['id']) && $existing->has($toolData['id'])) {
+                $tool = $existing->get($toolData['id']);
+                $tool->update($toolData);
+                $receivedIds[] = $tool->id;
             } else {
                 $tool = static::create($toolData);
                 $receivedIds[] = $tool->id;
             }
         }
 
-        // Soft-delete tools not in the received list
-        $toDelete = array_diff($existingIds, $receivedIds);
+        // Force-delete tools not in the received list (avoids soft-delete + unique constraint conflict)
+        $toDelete = $existing->keys()->diff($receivedIds)->all();
         if (!empty($toDelete)) {
-            static::whereIn('id', $toDelete)->delete();
+            static::whereIn('id', $toDelete)->forceDelete();
         }
     }
 
