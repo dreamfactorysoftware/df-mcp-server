@@ -89,7 +89,7 @@ app.post('/mcp/cache/clear', (req, res) => {
 // ============================================================================
 
 app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
-  const { serviceName } = req.params;
+  const serviceName = req.params.serviceName as string;
   const sessionIdHeader = getSessionId(req);
   const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
 
@@ -125,10 +125,11 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     const config = parseConfigFromHeaders(req);
 
     // Discover all services from DreamFactory (databases + files)
+    // Prefers pre-resolved services from PHP header to avoid system/service permission requirement
     const apiConfigs = await discoverServices(config.baseUrl, {
       sessionToken: dfSessionToken,
       apiKey: dfApiKey
-    });
+    }, req);
 
     if (apiConfigs.length === 0) {
       res.status(400).json({
