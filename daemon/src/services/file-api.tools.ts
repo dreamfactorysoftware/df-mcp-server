@@ -112,13 +112,17 @@ const FILE_TOOLS: FileToolDefinition[] = [
   }
 ];
 
+/** Base tool names for file services. */
+export const FILE_TOOL_NAMES = FILE_TOOLS.map(t => t.name);
+
 /**
  * Register file API tools for each file service.
  */
 export function registerFileApiTools(
   server: McpServer,
   sessionManager: SessionService,
-  apiConfigs: ApiConfig[]
+  apiConfigs: ApiConfig[],
+  disabledTools?: Set<string>
 ) {
   const fileConfigs = apiConfigs.filter(c => c.category === 'file');
 
@@ -129,7 +133,7 @@ export function registerFileApiTools(
 
   console.log('[registerFileApiTools] Registering tools for file services:', fileConfigs.map(c => c.name));
 
-  const registerTool = createToolRegistrar(server);
+  const registerTool = createToolRegistrar(server, disabledTools);
 
   // Register prefixed tools for each file API
   for (const apiConfig of fileConfigs) {

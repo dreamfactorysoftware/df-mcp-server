@@ -197,4 +197,5 @@ class McpStreamMiddleware
     {
         return isset(self::OAUTH_PATHS[$subPath]);
     }
+
 }

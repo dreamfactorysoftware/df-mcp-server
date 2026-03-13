@@ -17,11 +17,13 @@ class McpServerConfig extends BaseServiceConfigModel
         'oauth_client_id',
         'oauth_client_secret',
         'custom_login_url',
+        'disabled_tools',
     ];
 
     protected $casts = [
         'service_id' => 'integer',
         'app_id' => 'integer',
+        'disabled_tools' => 'array',
     ];
 
     /**
@@ -29,8 +31,45 @@ class McpServerConfig extends BaseServiceConfigModel
      */
     protected static $schemaHiddenFields = [
         'app_id',
+        'disabled_tools',
+        'custom_tools',
     ];
 
+    /**
+     * Override to include custom tools from the mcp_custom_tools table.
+     */
+    public static function getConfig($id, $local_config = null, $protect = true)
+    {
+        $config = parent::getConfig($id, $local_config, $protect);
+
+        try {
+            $config['custom_tools'] = McpCustomTool::getAllForService($id);
+        } catch (\Exception $e) {
+            // Table may not exist yet if migration hasn't run
+            $config['custom_tools'] = [];
+        }
+
+        return $config;
+    }
+
+    /**
+     * Override to handle custom_tools sync on save.
+     */
+    public static function setConfig($id, $config, $local_config = null)
+    {
+        $customTools = $config['custom_tools'] ?? null;
+        unset($config['custom_tools']);
+
+        parent::setConfig($id, $config, $local_config);
+
+        if (is_array($customTools)) {
+            try {
+                McpCustomTool::syncToolsForService($id, $customTools);
+            } catch (\Exception $e) {
+                // Table may not exist yet if migration hasn't run
+            }
+        }
+    }
 
     /**
      * Override to exclude schemaHiddenFields from UI

@@ -12,6 +12,7 @@ import {
   discoverServices,
   type ApiConfig
 } from './utils/utils.js';
+import type { CustomToolDefinition } from './types.js';
 
 type SessionEntry = {
   server: McpServer;
@@ -148,7 +149,38 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file`);
     console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
 
-    const server = createServer(serviceName, apiConfigs, sessionManager);
+    // Parse disabled tools and custom tools from service config
+    let disabledTools: Set<string> | undefined;
+    let customTools: CustomToolDefinition[] | undefined;
+    const mcpConfigHeader = req.headers['x-mcp-config'] as string | undefined;
+    if (mcpConfigHeader) {
+      try {
+        const mcpConfig = JSON.parse(mcpConfigHeader);
+        if (Array.isArray(mcpConfig.disabled_tools) && mcpConfig.disabled_tools.length > 0) {
+          disabledTools = new Set(mcpConfig.disabled_tools);
+          console.log(`Disabled tools (${disabledTools.size}):`, [...disabledTools]);
+        }
+        if (Array.isArray(mcpConfig.custom_tools) && mcpConfig.custom_tools.length > 0) {
+          customTools = (mcpConfig.custom_tools as any[])
+            .filter((t: any) => t.enabled !== false && t.enabled !== 0)
+            .map((t: any): CustomToolDefinition => ({
+              name: t.name,
+              description: t.description ?? '',
+              tool_type: t.tool_type ?? 'api',
+              http_method: t.http_method ?? undefined,
+              url: t.url ?? undefined,
+              parameters: Array.isArray(t.parameters) ? t.parameters : [],
+              headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
+              function: t.function ?? undefined,
+            }));
+          if (customTools.length > 0) {
+            console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
+          }
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {

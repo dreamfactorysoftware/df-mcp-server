@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerDreamFactoryTools } from '../services/tools.service.js';
+import { registerCustomTools } from '../services/custom-tools.service.js';
 import { DreamFactoryService } from '../services/dreamfactory.service.js';
 import packageJson from '../../package.json' with { type: 'json' };
 export function getSessionId(req) {
@@ -104,7 +105,7 @@ export async function discoverServices(rootUrl, auth, req) {
         throw error;
     }
 }
-export function createServer(serviceName, apiConfigs, sessionManager) {
+export function createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools) {
     const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);
     const fileApis = apiConfigs.filter(c => c.category === 'file').map(c => c.name);
     const dbPrefixes = dbApis.map(name => name.replace(/[^a-zA-Z0-9]/g, '_'));
@@ -157,7 +158,24 @@ export function createServer(serviceName, apiConfigs, sessionManager) {
         '- When you see amount + paid_amount columns, compute outstanding = amount - paid_amount.',
         '  An invoice with status "paid" but paid_amount < amount still has an outstanding balance.',
         '',
-        'All tools operate against the DreamFactory REST API using the authenticated user session.'
+        'All tools operate against the DreamFactory REST API using the authenticated user session.',
+        ...(customTools && customTools.length > 0
+            ? (() => {
+                const hasApi = customTools.some(t => t.tool_type !== 'function');
+                const hasFunction = customTools.some(t => t.tool_type === 'function');
+                const typeDesc = hasApi && hasFunction
+                    ? 'These tools make HTTP requests to external APIs or execute server-side functions.'
+                    : hasFunction
+                        ? 'These tools execute server-side functions.'
+                        : 'These tools make HTTP requests to external APIs.';
+                return [
+                    '',
+                    '## Custom Tools',
+                    `The following custom tools are available: ${customTools.map(t => t.name).join(', ')}.`,
+                    `${typeDesc} Use them as described in their tool descriptions.`
+                ];
+            })()
+            : [])
     ].filter(Boolean).join('\n');
     const server = new McpServer({
         name: `DreamFactory MCP (${serviceName})`,
@@ -165,6 +183,9 @@ export function createServer(serviceName, apiConfigs, sessionManager) {
     }, {
         instructions
     });
-    registerDreamFactoryTools(server, sessionManager, apiConfigs);
+    registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
+    if (customTools && customTools.length > 0) {
+        registerCustomTools(server, customTools, disabledTools);
+    }
     return server;
 }

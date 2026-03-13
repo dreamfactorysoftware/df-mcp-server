@@ -4,6 +4,8 @@ import { DreamFactoryService } from './dreamfactory.service.js';
 import { SessionService } from './session.service.js';
 import type { ApiConfig } from '../types.js';
 import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
+import { DB_TOOL_NAMES } from './tools.service.js';
+import { FILE_TOOL_NAMES } from './file-api.tools.js';
 
 /**
  * Register API connector tools that work across all databases.
@@ -11,22 +13,31 @@ import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-u
 export function registerApiConnectorTools(
   server: McpServer,
   sessionManager: SessionService,
-  apiConfigs: ApiConfig[]
+  apiConfigs: ApiConfig[],
+  disabledTools?: Set<string>
 ) {
-  const registerTool = createToolRegistrar(server);
+  const registerTool = createToolRegistrar(server, disabledTools);
 
-  // List all available APIs
+  // List all available APIs (excludes services where all tools are disabled)
   registerTool(
     'list_apis',
     'List Available APIs',
     'List all available database APIs and their tool prefixes',
     z.object({}),
     async () => {
-      const apis = apiConfigs.map(api => ({
-        name: api.name,
-        prefix: sanitizeApiName(api.name),
-        baseUrl: api.baseUrl
-      }));
+      const apis = apiConfigs
+        .filter(api => {
+          if (!disabledTools || disabledTools.size === 0) return true;
+          const prefix = sanitizeApiName(api.name);
+          const baseNames = api.category === 'file' ? FILE_TOOL_NAMES : DB_TOOL_NAMES;
+          return baseNames.some(name => !disabledTools.has(`${prefix}_${name}`));
+        })
+        .map(api => ({
+          name: api.name,
+          prefix: sanitizeApiName(api.name),
+          baseUrl: api.baseUrl,
+          category: api.category
+        }));
       return respond({ apis, count: apis.length });
     }
   );

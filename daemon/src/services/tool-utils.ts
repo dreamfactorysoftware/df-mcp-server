@@ -12,9 +12,15 @@ export type ToolResponse = {
   isError?: boolean;
 };
 
-export const respond = (data: unknown): ToolResponse => ({
-  content: [{ type: 'text', text: JSON.stringify(data, null, 2) }]
-});
+export const respond = (data: unknown): ToolResponse => {
+  let text: string;
+  try {
+    text = JSON.stringify(data, null, 2) ?? 'null';
+  } catch {
+    text = String(data);
+  }
+  return { content: [{ type: 'text', text }] };
+};
 
 export const respondError = (message: string): ToolResponse => ({
   content: [{ type: 'text', text: message }],
@@ -26,7 +32,7 @@ export const handleError = (error: unknown, operation: string): string => {
     return `Unknown error during ${operation}: ${String(error)}`;
   }
 
-  const message = error.message;
+  const message = error.message ?? '';
   if (message.includes('Authentication failed') || message.includes('401')) {
     return `Authentication Error: ${message}`;
   }
@@ -72,7 +78,7 @@ export function getAuth(sessionManager: SessionService, sessionId?: string): DFA
   return { sessionToken, apiKey };
 }
 
-export function createToolRegistrar(server: McpServer) {
+export function createToolRegistrar(server: McpServer, disabledTools?: Set<string>) {
   return (
     name: string,
     title: string,
@@ -80,14 +86,20 @@ export function createToolRegistrar(server: McpServer) {
     schema: z.ZodTypeAny,
     handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>
   ) => {
+    if (disabledTools?.has(name)) {
+      return;
+    }
     server.registerTool(
       name,
       { title, description, inputSchema: schema },
       async (params, context) => {
+        console.log(`[tool] ${name} called`);
         try {
-          return await handler(params ?? {}, context ?? {});
+          const result = await handler(params ?? {}, context ?? {});
+          console.log(`[tool] ${name} completed, isError=${result?.isError ?? false}`);
+          return result;
         } catch (error) {
-          console.error(`Tool ${name} error:`, error);
+          console.error(`[tool] ${name} unhandled error:`, error);
           return respondError(handleError(error, name));
         }
       }
