@@ -18,8 +18,10 @@ export type CustomToolParameter = {
 export type CustomToolDefinition = {
   name: string;
   description: string;
-  http_method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  url: string;
+  tool_type?: 'api' | 'function';
+  http_method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  url?: string;
   parameters: CustomToolParameter[];
-  headers: Record<string, string>;
+  headers?: Record<string, string>;
+  function?: string;
 };

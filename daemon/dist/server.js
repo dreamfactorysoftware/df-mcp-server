@@ -127,7 +127,18 @@ app.all('/mcp/:serviceName', async (req, res) => {
                     console.log(`Disabled tools (${disabledTools.size}):`, [...disabledTools]);
                 }
                 if (Array.isArray(mcpConfig.custom_tools) && mcpConfig.custom_tools.length > 0) {
-                    customTools = mcpConfig.custom_tools.filter((t) => t.enabled !== false && t.enabled !== 0);
+                    customTools = mcpConfig.custom_tools
+                        .filter((t) => t.enabled !== false && t.enabled !== 0)
+                        .map((t) => ({
+                        name: t.name,
+                        description: t.description ?? '',
+                        tool_type: t.tool_type ?? 'api',
+                        http_method: t.http_method ?? undefined,
+                        url: t.url ?? undefined,
+                        parameters: Array.isArray(t.parameters) ? t.parameters : [],
+                        headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
+                        function: t.function ?? undefined,
+                    }));
                     if (customTools.length > 0) {
                         console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
                     }

@@ -13,12 +13,14 @@ class McpCustomTool extends BaseModel
 
     protected $fillable = [
         'service_id',
+        'tool_type',
         'name',
         'description',
         'http_method',
         'url',
         'parameters',
         'headers',
+        'function',
         'enabled',
     ];
 
@@ -88,10 +90,12 @@ class McpCustomTool extends BaseModel
         return [
             'name' => $this->name,
             'description' => $this->description,
+            'tool_type' => $this->tool_type ?? 'api',
             'http_method' => $this->http_method,
             'url' => $this->url,
             'parameters' => $this->parameters ?? [],
             'headers' => $this->headers ?? (object)[],
+            'function' => $this->getAttribute('function'),
         ];
     }
 }

@@ -122,12 +122,21 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
         '',
         'All tools operate against the DreamFactory REST API using the authenticated user session.',
         ...(customTools && customTools.length > 0
-            ? [
-                '',
-                '## Custom Tools',
-                `The following custom tools are available: ${customTools.map(t => t.name).join(', ')}.`,
-                'These tools make HTTP requests to external APIs. Use them as described in their tool descriptions.'
-            ]
+            ? (() => {
+                const hasApi = customTools.some(t => t.tool_type !== 'function');
+                const hasFunction = customTools.some(t => t.tool_type === 'function');
+                const typeDesc = hasApi && hasFunction
+                    ? 'These tools make HTTP requests to external APIs or execute server-side functions.'
+                    : hasFunction
+                        ? 'These tools execute server-side functions.'
+                        : 'These tools make HTTP requests to external APIs.';
+                return [
+                    '',
+                    '## Custom Tools',
+                    `The following custom tools are available: ${customTools.map(t => t.name).join(', ')}.`,
+                    `${typeDesc} Use them as described in their tool descriptions.`
+                ];
+            })()
             : [])
     ].filter(Boolean).join('\n');
     const server = new McpServer({
