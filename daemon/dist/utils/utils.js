@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerDreamFactoryTools } from '../services/tools.service.js';
+import { registerCustomTools } from '../services/custom-tools.service.js';
 import { DreamFactoryService } from '../services/dreamfactory.service.js';
 import packageJson from '../../package.json' with { type: 'json' };
 export function getSessionId(req) {
@@ -31,13 +32,51 @@ export function parseConfigFromHeaders(req) {
     };
 }
 /**
- * Discover all supported services from DreamFactory and build API configs
+ * Parse pre-resolved services from the X-Mcp-Available-Services header.
+ * The PHP layer resolves these via ServiceManager (bypasses RBAC), so the
+ * daemon never needs GET system/service permission.
  */
-export async function discoverServices(rootUrl, auth) {
-    console.log('[discoverServices] Starting discovery...');
+function parseAvailableServicesHeader(req, rootUrl) {
+    const header = req.header('X-Mcp-Available-Services');
+    if (!header) {
+        return null;
+    }
+    try {
+        const services = JSON.parse(header);
+        if (!Array.isArray(services) || services.length === 0) {
+            return null;
+        }
+        return services.map(s => ({
+            name: s.name,
+            baseUrl: `${rootUrl}/${s.name}`,
+            category: (s.category ?? 'database'),
+            type: s.type,
+        }));
+    }
+    catch (e) {
+        console.warn('[parseAvailableServicesHeader] Failed to parse header:', e);
+        return null;
+    }
+}
+/**
+ * Discover all supported services from DreamFactory and build API configs.
+ *
+ * Prefers pre-resolved services from the PHP layer (X-Mcp-Available-Services
+ * header) to avoid requiring system/service GET permission. Falls back to
+ * the DreamFactory API only if the header is absent.
+ */
+export async function discoverServices(rootUrl, auth, req) {
+    // Prefer pre-resolved services from PHP (bypasses RBAC)
+    if (req) {
+        const preResolved = parseAvailableServicesHeader(req, rootUrl);
+        if (preResolved && preResolved.length > 0) {
+            console.log('[discoverServices] Using pre-resolved services from PHP:', preResolved.map(s => s.name));
+            return preResolved;
+        }
+    }
+    // Fallback: call the API directly (requires system/service GET permission)
+    console.log('[discoverServices] No pre-resolved services, falling back to API discovery...');
     console.log('[discoverServices] rootUrl:', rootUrl);
-    console.log('[discoverServices] auth.sessionToken:', auth.sessionToken ? `${auth.sessionToken.substring(0, 10)}...` : 'MISSING');
-    console.log('[discoverServices] auth.apiKey:', auth.apiKey ? `${auth.apiKey.substring(0, 10)}...` : 'not provided');
     try {
         // Discover database services
         const dbServices = await DreamFactoryService.getDatabaseServices(rootUrl, auth);
@@ -66,7 +105,7 @@ export async function discoverServices(rootUrl, auth) {
         throw error;
     }
 }
-export function createServer(serviceName, apiConfigs, sessionManager, disabledTools) {
+export function createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools) {
     const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);
     const fileApis = apiConfigs.filter(c => c.category === 'file').map(c => c.name);
     const dbPrefixes = dbApis.map(name => name.replace(/[^a-zA-Z0-9]/g, '_'));
@@ -119,7 +158,24 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
         '- When you see amount + paid_amount columns, compute outstanding = amount - paid_amount.',
         '  An invoice with status "paid" but paid_amount < amount still has an outstanding balance.',
         '',
-        'All tools operate against the DreamFactory REST API using the authenticated user session.'
+        'All tools operate against the DreamFactory REST API using the authenticated user session.',
+        ...(customTools && customTools.length > 0
+            ? (() => {
+                const hasApi = customTools.some(t => t.tool_type !== 'function');
+                const hasFunction = customTools.some(t => t.tool_type === 'function');
+                const typeDesc = hasApi && hasFunction
+                    ? 'These tools make HTTP requests to external APIs or execute server-side functions.'
+                    : hasFunction
+                        ? 'These tools execute server-side functions.'
+                        : 'These tools make HTTP requests to external APIs.';
+                return [
+                    '',
+                    '## Custom Tools',
+                    `The following custom tools are available: ${customTools.map(t => t.name).join(', ')}.`,
+                    `${typeDesc} Use them as described in their tool descriptions.`
+                ];
+            })()
+            : [])
     ].filter(Boolean).join('\n');
     const server = new McpServer({
         name: `DreamFactory MCP (${serviceName})`,
@@ -128,5 +184,8 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
         instructions
     });
     registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
+    if (customTools && customTools.length > 0) {
+        registerCustomTools(server, customTools, disabledTools);
+    }
     return server;
 }

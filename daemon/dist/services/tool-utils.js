@@ -1,6 +1,13 @@
-export const respond = (data) => ({
-    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }]
-});
+export const respond = (data) => {
+    let text;
+    try {
+        text = JSON.stringify(data, null, 2) ?? 'null';
+    }
+    catch {
+        text = String(data);
+    }
+    return { content: [{ type: 'text', text }] };
+};
 export const respondError = (message) => ({
     content: [{ type: 'text', text: message }],
     isError: true
@@ -9,7 +16,7 @@ export const handleError = (error, operation) => {
     if (!(error instanceof Error)) {
         return `Unknown error during ${operation}: ${String(error)}`;
     }
-    const message = error.message;
+    const message = error.message ?? '';
     if (message.includes('Authentication failed') || message.includes('401')) {
         return `Authentication Error: ${message}`;
     }
@@ -56,11 +63,14 @@ export function createToolRegistrar(server, disabledTools) {
             return;
         }
         server.registerTool(name, { title, description, inputSchema: schema }, async (params, context) => {
+            console.log(`[tool] ${name} called`);
             try {
-                return await handler(params ?? {}, context ?? {});
+                const result = await handler(params ?? {}, context ?? {});
+                console.log(`[tool] ${name} completed, isError=${result?.isError ?? false}`);
+                return result;
             }
             catch (error) {
-                console.error(`Tool ${name} error:`, error);
+                console.error(`[tool] ${name} unhandled error:`, error);
                 return respondError(handleError(error, name));
             }
         });

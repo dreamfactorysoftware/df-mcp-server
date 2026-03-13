@@ -12,6 +12,7 @@ import {
   discoverServices,
   type ApiConfig
 } from './utils/utils.js';
+import type { CustomToolDefinition } from './types.js';
 
 type SessionEntry = {
   server: McpServer;
@@ -89,7 +90,7 @@ app.post('/mcp/cache/clear', (req, res) => {
 // ============================================================================
 
 app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
-  const { serviceName } = req.params;
+  const serviceName = req.params.serviceName as string;
   const sessionIdHeader = getSessionId(req);
   const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
 
@@ -125,10 +126,11 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     const config = parseConfigFromHeaders(req);
 
     // Discover all services from DreamFactory (databases + files)
+    // Prefers pre-resolved services from PHP header to avoid system/service permission requirement
     const apiConfigs = await discoverServices(config.baseUrl, {
       sessionToken: dfSessionToken,
       apiKey: dfApiKey
-    });
+    }, req);
 
     if (apiConfigs.length === 0) {
       res.status(400).json({
@@ -147,8 +149,9 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file`);
     console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
 
-    // Parse disabled tools from service config
+    // Parse disabled tools and custom tools from service config
     let disabledTools: Set<string> | undefined;
+    let customTools: CustomToolDefinition[] | undefined;
     const mcpConfigHeader = req.headers['x-mcp-config'] as string | undefined;
     if (mcpConfigHeader) {
       try {
@@ -157,10 +160,27 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
           disabledTools = new Set(mcpConfig.disabled_tools);
           console.log(`Disabled tools (${disabledTools.size}):`, [...disabledTools]);
         }
+        if (Array.isArray(mcpConfig.custom_tools) && mcpConfig.custom_tools.length > 0) {
+          customTools = (mcpConfig.custom_tools as any[])
+            .filter((t: any) => t.enabled !== false && t.enabled !== 0)
+            .map((t: any): CustomToolDefinition => ({
+              name: t.name,
+              description: t.description ?? '',
+              tool_type: t.tool_type ?? 'api',
+              http_method: t.http_method ?? undefined,
+              url: t.url ?? undefined,
+              parameters: Array.isArray(t.parameters) ? t.parameters : [],
+              headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
+              function: t.function ?? undefined,
+            }));
+          if (customTools.length > 0) {
+            console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
+          }
+        }
       } catch { /* ignore parse errors */ }
     }
 
-    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools);
+    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {
