@@ -33,16 +33,10 @@ class McpDaemonClient
             ]);
 
             $headers = [
-                'X-Mcp-Config' => json_encode($config),
                 'X-Mcp-Base-Url' => $baseUrl,
                 'X-DreamFactory-Session-Token' => $dfSessionToken,
                 'Accept' => 'application/json, text/event-stream',
             ];
-
-            // Pass pre-resolved service list so daemon skips GET /api/v2/system/service
-            if (!empty($availableServices)) {
-                $headers['X-Mcp-Available-Services'] = json_encode($availableServices);
-            }
 
             // Pass API key if configured (required for non-admin users)
             $appId = $config['app_id'] ?? null;
@@ -63,10 +57,38 @@ class McpDaemonClient
                 }
             }
 
+            // Build the request body: merge the original MCP JSON-RPC payload with
+            // config metadata.  For POST initialisation requests the original body is
+            // a JSON-RPC object; we wrap it so the daemon can extract both the MCP
+            // payload and the DreamFactory-specific metadata from the body instead of
+            // oversized HTTP headers (Node.js enforces a 16 KB total-header limit).
+            $originalBody = $request->getContent();
+            $body = $originalBody;
+
+            // Only wrap the body for POST requests (MCP protocol init / tool calls).
+            // GET/DELETE requests don't carry a JSON body.
+            if ($request->method() === 'POST') {
+                $envelope = [
+                    '_mcpPayload' => json_decode($originalBody, true),
+                    '_mcpConfig' => $config,
+                    '_mcpAvailableServices' => $availableServices ?: [],
+                ];
+                $body = json_encode($envelope);
+                // Override Content-Type since we're wrapping the payload
+                $headers['content-type'] = 'application/json';
+            } else {
+                // For non-POST requests, pass config via headers (these are smaller
+                // requests like session resumption that don't carry disabled_tools).
+                $headers['X-Mcp-Config'] = json_encode($config);
+                if (!empty($availableServices)) {
+                    $headers['X-Mcp-Available-Services'] = json_encode($availableServices);
+                }
+            }
+
             $daemonPath = "/mcp/{$mcpService}";
             $response = $client->request($request->method(), $this->daemonUrl . $daemonPath, [
                 'headers' => $headers,
-                'body' => $request->getContent(),
+                'body' => $body,
             ]);
 
             $status = $response->getStatusCode();
@@ -80,6 +102,11 @@ class McpDaemonClient
 
         } catch (\GuzzleHttp\Exception\ClientException $e) {
             $body = (string) $e->getResponse()?->getBody();
+            Log::error('MCP daemon client error', [
+                'mcpService' => $mcpService,
+                'status' => $e->getResponse()?->getStatusCode(),
+                'body' => $body,
+            ]);
 
             return response()->json([
                 'jsonrpc' => '2.0',
