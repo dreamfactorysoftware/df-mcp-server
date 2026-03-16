@@ -103,6 +103,24 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     return sendUnauthorized(res);
   }
 
+  // Extract config and MCP payload from body envelope (POST) or headers (GET/DELETE).
+  // The PHP proxy wraps the original MCP JSON-RPC payload + DreamFactory config into
+  // a single JSON body to avoid exceeding Node.js's 16 KB HTTP header limit.
+  let mcpPayload = req.body;
+  let mcpConfig: Record<string, unknown> | undefined;
+  let availableServicesFromBody: unknown[] | undefined;
+
+  if (req.method === 'POST' && req.body?._mcpPayload !== undefined) {
+    // Unwrap the envelope created by McpDaemonClient
+    mcpPayload = req.body._mcpPayload;
+    mcpConfig = req.body._mcpConfig ?? undefined;
+    availableServicesFromBody = Array.isArray(req.body._mcpAvailableServices)
+      ? req.body._mcpAvailableServices
+      : undefined;
+    // Replace req.body with the original MCP payload so the transport sees it
+    req.body = mcpPayload;
+  }
+
   try {
     if (existingSession) {
       updateSessionConfigFromHeaders(req, sessionManager, sessionIdHeader);
@@ -126,11 +144,11 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     const config = parseConfigFromHeaders(req);
 
     // Discover all services from DreamFactory (databases + files)
-    // Prefers pre-resolved services from PHP header to avoid system/service permission requirement
+    // Prefers pre-resolved services from PHP (body or header) to avoid system/service permission requirement
     const apiConfigs = await discoverServices(config.baseUrl, {
       sessionToken: dfSessionToken,
       apiKey: dfApiKey
-    }, req);
+    }, req, availableServicesFromBody);
 
     if (apiConfigs.length === 0) {
       res.status(400).json({
@@ -149,35 +167,42 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file`);
     console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
 
-    // Parse disabled tools and custom tools from service config
+    // Parse disabled tools and custom tools from service config (body envelope or header fallback)
     let disabledTools: Set<string> | undefined;
     let customTools: CustomToolDefinition[] | undefined;
-    const mcpConfigHeader = req.headers['x-mcp-config'] as string | undefined;
-    if (mcpConfigHeader) {
+    const mcpConfigData = mcpConfig ?? (() => {
+      const header = req.headers['x-mcp-config'] as string | undefined;
+      if (!header) return undefined;
       try {
-        const mcpConfig = JSON.parse(mcpConfigHeader);
-        if (Array.isArray(mcpConfig.disabled_tools) && mcpConfig.disabled_tools.length > 0) {
-          disabledTools = new Set(mcpConfig.disabled_tools);
-          console.log(`Disabled tools (${disabledTools.size}):`, [...disabledTools]);
+        return JSON.parse(header);
+      } catch (e) {
+        console.warn('[config] Failed to parse X-Mcp-Config header:', e instanceof Error ? e.message : e);
+        return undefined;
+      }
+    })();
+
+    if (mcpConfigData) {
+      if (Array.isArray(mcpConfigData.disabled_tools) && mcpConfigData.disabled_tools.length > 0) {
+        disabledTools = new Set(mcpConfigData.disabled_tools as string[]);
+        console.log(`Disabled tools (${disabledTools.size}):`, [...disabledTools]);
+      }
+      if (Array.isArray(mcpConfigData.custom_tools) && mcpConfigData.custom_tools.length > 0) {
+        customTools = (mcpConfigData.custom_tools as any[])
+          .filter((t: any) => t.enabled !== false && t.enabled !== 0)
+          .map((t: any): CustomToolDefinition => ({
+            name: t.name,
+            description: t.description ?? '',
+            tool_type: t.tool_type ?? 'api',
+            http_method: t.http_method ?? undefined,
+            url: t.url ?? undefined,
+            parameters: Array.isArray(t.parameters) ? t.parameters : [],
+            headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
+            function: t.function ?? undefined,
+          }));
+        if (customTools.length > 0) {
+          console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
         }
-        if (Array.isArray(mcpConfig.custom_tools) && mcpConfig.custom_tools.length > 0) {
-          customTools = (mcpConfig.custom_tools as any[])
-            .filter((t: any) => t.enabled !== false && t.enabled !== 0)
-            .map((t: any): CustomToolDefinition => ({
-              name: t.name,
-              description: t.description ?? '',
-              tool_type: t.tool_type ?? 'api',
-              http_method: t.http_method ?? undefined,
-              url: t.url ?? undefined,
-              parameters: Array.isArray(t.parameters) ? t.parameters : [],
-              headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
-              function: t.function ?? undefined,
-            }));
-          if (customTools.length > 0) {
-            console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
-          }
-        }
-      } catch { /* ignore parse errors */ }
+      }
     }
 
     const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools);
