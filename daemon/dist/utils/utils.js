@@ -36,6 +36,30 @@ export function parseConfigFromHeaders(req) {
  * The PHP layer resolves these via ServiceManager (bypasses RBAC), so the
  * daemon never needs GET system/service permission.
  */
+/**
+ * Parse a pre-resolved services array (from the request body envelope).
+ */
+function parseAvailableServicesList(services, rootUrl) {
+    try {
+        const typed = services;
+        if (typed.length === 0) {
+            return null;
+        }
+        return typed.map(s => ({
+            name: s.name,
+            baseUrl: `${rootUrl}/${s.name}`,
+            category: (s.category ?? 'database'),
+            type: s.type,
+        }));
+    }
+    catch (e) {
+        console.warn('[parseAvailableServicesList] Failed to parse services:', e);
+        return null;
+    }
+}
+/**
+ * Parse pre-resolved services from the X-Mcp-Available-Services header (legacy).
+ */
 function parseAvailableServicesHeader(req, rootUrl) {
     const header = req.header('X-Mcp-Available-Services');
     if (!header) {
@@ -61,16 +85,24 @@ function parseAvailableServicesHeader(req, rootUrl) {
 /**
  * Discover all supported services from DreamFactory and build API configs.
  *
- * Prefers pre-resolved services from the PHP layer (X-Mcp-Available-Services
- * header) to avoid requiring system/service GET permission. Falls back to
- * the DreamFactory API only if the header is absent.
+ * Prefers pre-resolved services from the PHP layer (body envelope or
+ * X-Mcp-Available-Services header) to avoid requiring system/service GET
+ * permission. Falls back to the DreamFactory API only if neither is present.
  */
-export async function discoverServices(rootUrl, auth, req) {
-    // Prefer pre-resolved services from PHP (bypasses RBAC)
+export async function discoverServices(rootUrl, auth, req, availableServicesFromBody) {
+    // Prefer pre-resolved services from body envelope (new path)
+    if (availableServicesFromBody && availableServicesFromBody.length > 0) {
+        const parsed = parseAvailableServicesList(availableServicesFromBody, rootUrl);
+        if (parsed && parsed.length > 0) {
+            console.log('[discoverServices] Using pre-resolved services from body:', parsed.map(s => s.name));
+            return parsed;
+        }
+    }
+    // Fallback: pre-resolved services from header (legacy path)
     if (req) {
         const preResolved = parseAvailableServicesHeader(req, rootUrl);
         if (preResolved && preResolved.length > 0) {
-            console.log('[discoverServices] Using pre-resolved services from PHP:', preResolved.map(s => s.name));
+            console.log('[discoverServices] Using pre-resolved services from header:', preResolved.map(s => s.name));
             return preResolved;
         }
     }
