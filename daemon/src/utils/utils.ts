@@ -226,6 +226,7 @@ export function createServer(
     fileApis.length > 0 ? 'File tools: list_files, get_file_content, create_folder, delete_file (also prefixed per file API).\n' : '',
     '## Query Syntax Quick Reference',
     '- Filter: `field=value`, `field>10`, `field LIKE %text%`, `field IN (1,2,3)`, `field BETWEEN 1 AND 10`, `field IS NULL`',
+    '- IMPORTANT: Use field names exactly as they appear in the schema — do NOT add quotes, brackets, backticks, or URL-encoding around field names. Spaces in field names are valid as-is. Example: `Production Day=2026-03-16` (NOT `[Production Day]`, NOT `"Production Day"`, NOT `Production%20Day`)',
     '- Combine filters: `(field1=value1) AND (field2>value2)`, `(f1=v1) OR (f2=v2)`',
     '- Order: `field ASC`, `field DESC`, `field1 ASC, field2 DESC`',
     '- Fields: select specific columns to reduce response size',
