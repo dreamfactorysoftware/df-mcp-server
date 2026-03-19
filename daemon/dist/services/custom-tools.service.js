@@ -1,5 +1,5 @@
 import * as z from 'zod/v4';
-import { respond, respondError, createToolRegistrar } from './tool-utils.js';
+import { respond, respondError, createToolRegistrar, getAuth } from './tool-utils.js';
 const MAX_RESPONSE_SIZE = 1_048_576; // 1 MB
 const REQUEST_TIMEOUT_MS = 30_000; // 30 seconds
 const FUNCTION_TIMEOUT_MS = 30_000; // 30 seconds
@@ -89,7 +89,7 @@ export async function executeFunctionToolRequest(toolDef, params) {
 /**
  * Execute an HTTP request for a custom tool definition with the given parameters.
  */
-export async function executeCustomToolRequest(toolDef, params) {
+export async function executeCustomToolRequest(toolDef, params, auth) {
     console.log(`[custom-tool] Executing API tool "${toolDef.name}", method=${toolDef.http_method}, url=${toolDef.url}, params:`, safeStringify(params));
     if (!toolDef.url) {
         console.error(`[custom-tool] API tool "${toolDef.name}" has no URL configured`);
@@ -129,6 +129,15 @@ export async function executeCustomToolRequest(toolDef, params) {
         ...(toolDef.headers ?? {}),
         ...dynamicHeaders,
     };
+    // Inject DreamFactory auth headers if available and not already set
+    if (auth) {
+        if (auth.sessionToken && !Object.keys(headers).some(k => k.toLowerCase() === 'x-dreamfactory-session-token')) {
+            headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+        }
+        if (auth.apiKey && !Object.keys(headers).some(k => k.toLowerCase() === 'x-dreamfactory-api-key')) {
+            headers['X-DreamFactory-API-Key'] = auth.apiKey;
+        }
+    }
     const method = toolDef.http_method;
     const fetchOptions = {
         method,
@@ -168,17 +177,24 @@ export async function executeCustomToolRequest(toolDef, params) {
 /**
  * Register custom tools on the MCP server.
  */
-export function registerCustomTools(server, customTools, disabledTools) {
+export function registerCustomTools(server, customTools, sessionManager, disabledTools) {
     const registerTool = createToolRegistrar(server, disabledTools);
     for (const toolDef of customTools) {
         const schema = buildZodSchema(toolDef.parameters);
         const isFunction = toolDef.tool_type === 'function' || (!toolDef.url && !!toolDef.function);
         console.log(`[custom-tool] Registering "${toolDef.name}" — tool_type=${toolDef.tool_type}, isFunction=${isFunction}, url=${toolDef.url ?? '(none)'}`);
-        registerTool(toolDef.name, toolDef.name, toolDef.description, schema, async (params) => {
+        registerTool(toolDef.name, toolDef.name, toolDef.description, schema, async (params, context) => {
             if (isFunction) {
                 return executeFunctionToolRequest(toolDef, params);
             }
-            return executeCustomToolRequest(toolDef, params);
+            let auth;
+            try {
+                auth = getAuth(sessionManager, context.sessionId);
+            }
+            catch {
+                // Auth not available — custom tool will run without DF headers
+            }
+            return executeCustomToolRequest(toolDef, params, auth);
         });
     }
 }

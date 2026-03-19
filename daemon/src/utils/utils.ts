@@ -275,7 +275,7 @@ export function createServer(
   registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
 
   if (customTools && customTools.length > 0) {
-    registerCustomTools(server, customTools, disabledTools);
+    registerCustomTools(server, customTools, sessionManager, disabledTools);
   }
 
   return server;
