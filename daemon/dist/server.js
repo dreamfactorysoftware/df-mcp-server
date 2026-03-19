@@ -69,24 +69,6 @@ app.all('/mcp/:serviceName', async (req, res) => {
     const serviceName = req.params.serviceName;
     const sessionIdHeader = getSessionId(req);
     const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
-    // DEBUG: Log incoming request details
-    console.log(`\n=== INCOMING REQUEST ===`);
-    console.log(`Method: ${req.method}`);
-    console.log(`URL: ${req.url}`);
-    console.log(`Accept: ${req.headers['accept']}`);
-    console.log(`Content-Type: ${req.headers['content-type']}`);
-    console.log(`Mcp-Session-Id: ${req.headers['mcp-session-id'] || 'none'}`);
-    console.log(`Has _mcpPayload: ${req.body?._mcpPayload !== undefined}`);
-    console.log(`Body keys: ${req.body ? Object.keys(req.body).join(', ') : 'none'}`);
-    if (req.body?._mcpPayload) {
-        console.log(`Payload method: ${req.body._mcpPayload.method}`);
-    }
-    else if (req.body?.method) {
-        console.log(`Body method: ${req.body.method}`);
-    }
-    console.log(`Existing session: ${!!existingSession}`);
-    console.log(`Session ID header: ${sessionIdHeader || 'none'}`);
-    console.log(`=== END REQUEST ===\n`);
     // Get DreamFactory session token from header (passed by PHP after OAuth validation)
     const dfSessionToken = req.headers['x-dreamfactory-session-token'];
     // Get API key (required for non-admin users)
