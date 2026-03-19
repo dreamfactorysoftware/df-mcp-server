@@ -68,12 +68,12 @@ class McpDaemonClient
             // Only wrap the body for POST requests (MCP protocol init / tool calls).
             // GET/DELETE requests don't carry a JSON body.
             if ($request->method() === 'POST') {
-                $envelope = [
-                    '_mcpPayload' => json_decode($originalBody, true),
-                    '_mcpConfig' => $config,
-                    '_mcpAvailableServices' => $availableServices ?: [],
-                ];
-                $body = json_encode($envelope);
+                // Build envelope by splicing raw JSON to avoid PHP's json_decode/encode
+                // round-trip which converts empty objects {} to arrays [], breaking the
+                // MCP SDK's Zod schema validation (e.g. capabilities: {} → []).
+                $configJson = json_encode($config);
+                $servicesJson = json_encode($availableServices ?: []);
+                $body = '{"_mcpPayload":' . $originalBody . ',"_mcpConfig":' . $configJson . ',"_mcpAvailableServices":' . $servicesJson . '}';
                 // Override Content-Type since we're wrapping the payload
                 $headers['content-type'] = 'application/json';
             } else {

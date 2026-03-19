@@ -93,7 +93,8 @@ const BASE_TOOLS: ToolDefinition[] = [
     title: 'Get Table Data',
     description: 'Retrieve table data with filtering, pagination, and sorting.\n' +
       'IMPORTANT: The API returns max 1000 records per request. For large tables, paginate with limit+offset and set includeCount=true to know the total.\n' +
-      'COUNTING: Use countOnly=true to get just the record count without fetching data. Do NOT try SQL aggregate functions (COUNT, SUM, AVG) in the fields parameter — they are not supported.\n' +
+      'COUNTING: Use countOnly=true to get just the record count without fetching data.\n' +
+      'AGGREGATION: For SUM, COUNT, AVG, MIN, MAX — use the aggregate_data tool instead. It handles server-side aggregation in a single call.\n' +
       'Filter syntax: field=value, field>value, field LIKE %value%. Order syntax: field ASC, field DESC.',
     schema: z.object({
       tableName: z.string(),
@@ -271,13 +272,14 @@ const BASE_TOOLS: ToolDefinition[] = [
   {
     name: 'aggregate_data',
     title: 'Aggregate Data',
-    description: 'Compute server-side aggregations (SUM, COUNT, AVG, MIN, MAX) on table data.\n' +
-      'This tool handles pagination internally — you get results in ONE call instead of paginating manually.\n' +
-      'Supports GROUP BY for breakdowns. Use this instead of fetching all rows to compute totals.\n' +
+    description: 'Compute aggregations (SUM, COUNT, AVG, MIN, MAX) by pushing the computation to the database server.\n' +
+      'Returns results in a single call — no pagination needed. Always use this instead of fetching rows to compute totals.\n' +
+      'IMPORTANT: Always provide groupBy for efficient server-side aggregation. Without groupBy, falls back to slow client-side pagination.\n' +
       'Examples:\n' +
-      '  - Total revenue: aggregates=[{function:"SUM", field:"totalamount", alias:"total_revenue"}]\n' +
-      '  - Revenue by country: same + groupBy=["country"]\n' +
-      '  - Average order value: aggregates=[{function:"AVG", field:"totalamount", alias:"avg_order"}]',
+      '  - Total revenue by currency: aggregates=[{function:"SUM", field:"totalamount"}], groupBy=["currency"]\n' +
+      '  - Revenue by country: aggregates=[{function:"SUM", field:"totalamount"}], groupBy=["country"]\n' +
+      '  - Average order value by status: aggregates=[{function:"AVG", field:"totalamount"}], groupBy=["status"]\n' +
+      '  - Row count by category: aggregates=[{function:"COUNT", field:"*"}], groupBy=["category"]',
     schema: z.object({
       tableName: z.string().describe('Table to aggregate'),
       aggregates: z.array(z.object({
