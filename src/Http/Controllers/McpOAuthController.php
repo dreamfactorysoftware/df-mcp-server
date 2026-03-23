@@ -706,13 +706,18 @@ class McpOAuthController extends Controller
         // Consume the authorization code
         $authCode->consume();
 
-        return response()->json([
+        $tokenResponse = [
             'access_token' => $accessToken->access_token,
             'token_type' => 'Bearer',
             'expires_in' => McpOAuthAccessToken::ACCESS_TOKEN_LIFETIME_HOURS * 3600,
             'refresh_token' => $accessToken->refresh_token,
-            'scope' => $accessToken->scope,
-        ]);
+        ];
+
+        if (!empty($accessToken->scope)) {
+            $tokenResponse['scope'] = $accessToken->scope;
+        }
+
+        return response()->json($tokenResponse);
     }
 
     /**
@@ -765,13 +770,18 @@ class McpOAuthController extends Controller
         // Refresh the token
         $token->refresh();
 
-        return response()->json([
+        $tokenResponse = [
             'access_token' => $token->access_token,
             'token_type' => 'Bearer',
             'expires_in' => McpOAuthAccessToken::ACCESS_TOKEN_LIFETIME_HOURS * 3600,
             'refresh_token' => $token->refresh_token,
-            'scope' => $token->scope,
-        ]);
+        ];
+
+        if (!empty($token->scope)) {
+            $tokenResponse['scope'] = $token->scope;
+        }
+
+        return response()->json($tokenResponse);
     }
 
     /**
