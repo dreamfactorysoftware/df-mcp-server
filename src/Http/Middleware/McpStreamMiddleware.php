@@ -47,8 +47,9 @@ class McpStreamMiddleware
      */
     private const CORS_HEADERS = [
         'Access-Control-Allow-Origin' => '*',
-        'Access-Control-Allow-Methods' => 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Methods' => 'GET, POST, DELETE, OPTIONS',
         'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id',
+        'Access-Control-Expose-Headers' => 'WWW-Authenticate',
     ];
 
     /**
@@ -171,6 +172,7 @@ class McpStreamMiddleware
         return match ($method) {
             'GET' => $controller->handleGet($request, $mcpService),
             'POST' => $controller->handlePost($request, $mcpService),
+            'DELETE' => $controller->handleDelete($request, $mcpService),
             default => null,
         };
     }
