@@ -79,4 +79,6 @@ Route::group(['prefix' => 'mcp', 'middleware' => []], function () {
         ->where('mcpService', '[A-Za-z0-9_\-]+');
     Route::post('{mcpService}', [McpStreamController::class, 'handlePost'])
         ->where('mcpService', '[A-Za-z0-9_\-]+');
+    Route::delete('{mcpService}', [McpStreamController::class, 'handleDelete'])
+        ->where('mcpService', '[A-Za-z0-9_\-]+');
 })->withoutMiddleware(['df.api']);

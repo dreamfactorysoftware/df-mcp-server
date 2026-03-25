@@ -176,6 +176,7 @@ class McpOAuthController extends Controller
         $codeChallenge = $request->query('code_challenge');
         $codeChallengeMethod = $request->query('code_challenge_method', 'plain');
         $responseType = $request->query('response_type', 'code');
+        $scope = $request->query('scope', 'mcp:tools mcp:resources mcp:prompts');
 
         // Validate response_type
         if ($responseType !== 'code') {
@@ -243,6 +244,7 @@ class McpOAuthController extends Controller
                 'redirect_uri' => $redirectUri,
                 'code_challenge' => $codeChallenge,
                 'code_challenge_method' => $codeChallengeMethod ?: 'S256',
+                'scope' => $scope,
                 'df_session_token' => $existingSession['session_token'],
                 'user_email' => $existingSession['email'],
                 'user_name' => $existingSession['name'] ?? $existingSession['first_name'] ?? null,
@@ -275,6 +277,7 @@ class McpOAuthController extends Controller
             'state' => $state,
             'code_challenge' => $codeChallenge,
             'code_challenge_method' => $codeChallengeMethod,
+            'scope' => $scope,
             'service' => $mcpService,
         ], now()->addMinutes(10));
 
@@ -303,6 +306,7 @@ class McpOAuthController extends Controller
                 'state' => $authState,
                 'code_challenge' => $codeChallenge,
                 'code_challenge_method' => $codeChallengeMethod,
+                'scope' => $scope,
                 'original_state' => $state,
                 'service' => $mcpService,
                 'login_url' => "{$baseUrl}/mcp/{$mcpService}/login",
@@ -345,6 +349,7 @@ class McpOAuthController extends Controller
         $redirectUri = $request->input('redirect_uri');
         $codeChallenge = $request->input('code_challenge');
         $codeChallengeMethod = $request->input('code_challenge_method', 'S256');
+        $scope = $request->input('scope', 'mcp:tools mcp:resources mcp:prompts');
 
         if (empty($email) || empty($password)) {
             return $this->errorResponse('invalid_request', 'Email and password are required');
@@ -365,6 +370,7 @@ class McpOAuthController extends Controller
             'redirect_uri' => $redirectUri,
             'code_challenge' => $codeChallenge,
             'code_challenge_method' => $codeChallengeMethod,
+            'scope' => $scope,
             'df_session_token' => $dfSession['session_token'],
             'user_email' => $dfSession['email'],
             'user_name' => $dfSession['name'] ?? null,
@@ -448,6 +454,7 @@ class McpOAuthController extends Controller
             'redirect_uri' => $pending['redirect_uri'],
             'code_challenge' => $pending['code_challenge'],
             'code_challenge_method' => $pending['code_challenge_method'] ?: 'S256',
+            'scope' => $pending['scope'] ?? 'mcp:tools mcp:resources mcp:prompts',
             'df_session_token' => $existingSession['session_token'],
             'user_email' => $existingSession['email'],
             'user_name' => $existingSession['name'] ?? $existingSession['first_name'] ?? null,
@@ -512,6 +519,7 @@ class McpOAuthController extends Controller
             'redirect_uri' => $pending['redirect_uri'],
             'code_challenge' => $pending['code_challenge'],
             'code_challenge_method' => $pending['code_challenge_method'] ?? 'S256',
+            'scope' => $pending['scope'] ?? 'mcp:tools mcp:resources mcp:prompts',
             'df_session_token' => $sessionToken,
             'user_email' => $dfSession['email'],
             'user_name' => $dfSession['name'] ?? $dfSession['first_name'] ?? null,
@@ -549,6 +557,7 @@ class McpOAuthController extends Controller
         $redirectUri = $request->input('redirect_uri');
         $codeChallenge = $request->input('code_challenge');
         $originalState = $request->input('original_state');
+        $scope = $request->input('scope', 'mcp:tools mcp:resources mcp:prompts');
 
         if (empty($sessionToken)) {
             return response()->json([
@@ -575,6 +584,7 @@ class McpOAuthController extends Controller
             'redirect_uri' => $redirectUri,
             'code_challenge' => $codeChallenge,
             'code_challenge_method' => 'S256',
+            'scope' => $scope,
             'df_session_token' => $sessionToken,
             'user_email' => $dfSession['email'],
             'user_name' => $dfSession['name'] ?? null,
@@ -706,7 +716,7 @@ class McpOAuthController extends Controller
             'df_session_token' => $authCode->df_session_token,
             'user_email' => $authCode->user_email,
             'user_name' => $authCode->user_name,
-            'scope' => $authCode->scope,
+            'scope' => $authCode->scope ?? 'mcp:tools mcp:resources mcp:prompts',
         ]);
 
         // Consume the authorization code
@@ -717,7 +727,7 @@ class McpOAuthController extends Controller
             'token_type' => 'Bearer',
             'expires_in' => McpOAuthAccessToken::ACCESS_TOKEN_LIFETIME_HOURS * 3600,
             'refresh_token' => $accessToken->refresh_token,
-            'scope' => $accessToken->scope,
+            'scope' => $accessToken->scope ?? 'mcp:tools mcp:resources mcp:prompts',
         ]);
     }
 
@@ -776,7 +786,7 @@ class McpOAuthController extends Controller
             'token_type' => 'Bearer',
             'expires_in' => McpOAuthAccessToken::ACCESS_TOKEN_LIFETIME_HOURS * 3600,
             'refresh_token' => $token->refresh_token,
-            'scope' => $token->scope,
+            'scope' => $token->scope ?? 'mcp:tools mcp:resources mcp:prompts',
         ]);
     }
 
