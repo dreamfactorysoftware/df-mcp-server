@@ -76,8 +76,7 @@ const BASE_TOOLS = [
         title: 'Get Table Data',
         description: 'Retrieve table data with filtering, pagination, and sorting.\n' +
             'IMPORTANT: The API returns max 1000 records per request. For large tables, paginate with limit+offset and set includeCount=true to know the total.\n' +
-            'COUNTING: Use countOnly=true to get just the record count without fetching data.\n' +
-            'STOP — AGGREGATION: If you need SUM, COUNT, AVG, MIN, MAX, totals, or GROUP BY — do NOT use this tool. Use aggregate_data instead. This tool CANNOT do aggregation and will error if you try.\n' +
+            'COUNTING: Use countOnly=true to get just the record count without fetching data. Do NOT try SQL aggregate functions (COUNT, SUM, AVG) in the fields parameter — they are not supported.\n' +
             'Filter syntax: field=value, field>value, field LIKE %value%. Order syntax: field ASC, field DESC.',
         schema: z.object({
             tableName: z.string(),
@@ -86,6 +85,7 @@ const BASE_TOOLS = [
             offset: z.number().optional(),
             limit: z.number().optional().describe('Max records per request (server max: 1000). Use with offset to paginate.'),
             order: z.string().optional(),
+            group: z.string().optional(),
             continue: z.boolean().optional(),
             related: z.string().optional().describe('Include related records via FK (e.g. "parent_table_by_fk_field"). Check relationships in the data model.'),
             countOnly: z.boolean().optional().describe('Return only the record count, no data. Use this instead of COUNT() in fields.'),
@@ -247,14 +247,13 @@ const BASE_TOOLS = [
     {
         name: 'aggregate_data',
         title: 'Aggregate Data',
-        description: 'THE ONLY WAY to compute totals, sums, counts, averages, min/max on this database. Do NOT use get_table_data for aggregation — it will fail.\n' +
-            'Pushes SUM, COUNT, AVG, MIN, MAX to the database server. Returns results in a single call — no pagination needed.\n' +
-            'IMPORTANT: Always provide groupBy for efficient server-side aggregation. Without groupBy, falls back to slow client-side pagination.\n' +
+        description: 'Compute server-side aggregations (SUM, COUNT, AVG, MIN, MAX) on table data.\n' +
+            'This tool handles pagination internally — you get results in ONE call instead of paginating manually.\n' +
+            'Supports GROUP BY for breakdowns. Use this instead of fetching all rows to compute totals.\n' +
             'Examples:\n' +
-            '  - Total revenue by currency: aggregates=[{function:"SUM", field:"totalamount"}], groupBy=["currency"]\n' +
-            '  - Revenue by country: aggregates=[{function:"SUM", field:"totalamount"}], groupBy=["country"]\n' +
-            '  - Average order value by status: aggregates=[{function:"AVG", field:"totalamount"}], groupBy=["status"]\n' +
-            '  - Row count by category: aggregates=[{function:"COUNT", field:"*"}], groupBy=["category"]',
+            '  - Total revenue: aggregates=[{function:"SUM", field:"totalamount", alias:"total_revenue"}]\n' +
+            '  - Revenue by country: same + groupBy=["country"]\n' +
+            '  - Average order value: aggregates=[{function:"AVG", field:"totalamount", alias:"avg_order"}]',
         schema: z.object({
             tableName: z.string().describe('Table to aggregate'),
             aggregates: z.array(z.object({

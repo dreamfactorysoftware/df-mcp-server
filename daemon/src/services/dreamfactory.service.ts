@@ -335,9 +335,8 @@ export class DreamFactoryService {
   }
 
   /**
-   * Server-side aggregation via DreamFactory's GROUP BY + aggregate fields support.
-   * Pushes SUM/COUNT/AVG/MIN/MAX down to the database in a single API call.
-   * Falls back to client-side pagination if the server doesn't support aggregate fields.
+   * Server-side aggregation: fetches all matching rows (paginated internally)
+   * and computes SUM, COUNT, AVG, MIN, MAX on specified fields.
    */
   static async aggregateData(
     baseUrl: string,
@@ -350,42 +349,8 @@ export class DreamFactoryService {
     }
   ): Promise<unknown> {
     const { tableName, aggregates, filter, groupBy } = options;
-
-    // Build fields list: group-by columns + aggregate expressions
-    const fields: string[] = [];
-    if (groupBy) {
-      fields.push(...groupBy);
-    }
-    for (const agg of aggregates) {
-      const fn = (agg.function || '').toUpperCase();
-      const field = agg.field || '*';
-      fields.push(`${fn}(${field})`);
-    }
-
-    // Try server-side aggregation first (single API call)
-    if (groupBy && groupBy.length > 0) {
-      try {
-        const params: Record<string, unknown> = {
-          tableName,
-          fields,
-          limit: 0, // no limit on grouped results
-        };
-        params.group = groupBy.join(',');
-        if (filter) {
-          params.filter = filter;
-        }
-
-        const data = await this.getTableData(baseUrl, auth, params) as Record<string, unknown>;
-        const rows = (data?.resource ?? []) as Record<string, unknown>[];
-
-        return { results: rows, mode: 'server-side' };
-      } catch (serverErr) {
-        console.warn('[aggregateData] Server-side aggregation failed, falling back to client-side:', serverErr instanceof Error ? serverErr.message : serverErr);
-      }
-    }
-
-    // Fallback: client-side aggregation (paginated fetch + JS compute)
     const PAGE_SIZE = 1000;
+
     const neededFields = new Set<string>();
     for (const agg of aggregates) {
       if (agg.field && agg.field !== '*') neededFields.add(agg.field);
@@ -448,10 +413,10 @@ export class DreamFactoryService {
         groups[key]._rows.push(row);
       }
       const results = Object.values(groups).map(g => ({ ...g._key, ...computeAgg(g._rows, aggregates) }));
-      return { results, rows_scanned: allRows.length, total_count: totalCount, mode: 'client-side-fallback' };
+      return { results, rows_scanned: allRows.length, total_count: totalCount };
     }
 
-    return { results: [computeAgg(allRows, aggregates)], rows_scanned: allRows.length, total_count: totalCount, mode: 'client-side-fallback' };
+    return { results: [computeAgg(allRows, aggregates)], rows_scanned: allRows.length, total_count: totalCount };
   }
 
   /**

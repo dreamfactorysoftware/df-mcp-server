@@ -160,7 +160,6 @@ class McpOAuthController extends Controller
             'grant_types' => ['authorization_code', 'refresh_token'],
             'response_types' => ['code'],
             'token_endpoint_auth_method' => 'client_secret_post',
-            'scope' => 'mcp:tools mcp:resources mcp:prompts',
         ]);
     }
 
@@ -248,7 +247,6 @@ class McpOAuthController extends Controller
                 'df_session_token' => $existingSession['session_token'],
                 'user_email' => $existingSession['email'],
                 'user_name' => $existingSession['name'] ?? $existingSession['first_name'] ?? null,
-                'scope' => 'mcp:tools mcp:resources mcp:prompts',
             ]);
 
             // Build redirect URL back to the client
@@ -374,7 +372,6 @@ class McpOAuthController extends Controller
             'df_session_token' => $dfSession['session_token'],
             'user_email' => $dfSession['email'],
             'user_name' => $dfSession['name'] ?? null,
-            'scope' => 'mcp:tools mcp:resources mcp:prompts',
         ]);
 
         // Build redirect URL
@@ -458,7 +455,6 @@ class McpOAuthController extends Controller
             'df_session_token' => $existingSession['session_token'],
             'user_email' => $existingSession['email'],
             'user_name' => $existingSession['name'] ?? $existingSession['first_name'] ?? null,
-            'scope' => 'mcp:tools mcp:resources mcp:prompts',
         ]);
 
         // Clean up pending authorization
@@ -523,7 +519,6 @@ class McpOAuthController extends Controller
             'df_session_token' => $sessionToken,
             'user_email' => $dfSession['email'],
             'user_name' => $dfSession['name'] ?? $dfSession['first_name'] ?? null,
-            'scope' => 'mcp:tools mcp:resources mcp:prompts',
         ]);
 
         // Clean up pending authorization
@@ -588,7 +583,6 @@ class McpOAuthController extends Controller
             'df_session_token' => $sessionToken,
             'user_email' => $dfSession['email'],
             'user_name' => $dfSession['name'] ?? null,
-            'scope' => 'mcp:tools mcp:resources mcp:prompts',
         ]);
 
         // Build redirect URL

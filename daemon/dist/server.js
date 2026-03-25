@@ -225,8 +225,8 @@ app.listen(PORT, HOST, () => {
     console.log(`  POST /mcp/cache/clear - Clear session cache`);
     console.log(`  ALL  /mcp/:serviceName - MCP protocol (requires X-DreamFactory-Session-Token header)`);
 });
-async function gracefulShutdown(signal) {
-    console.log(`${signal} received, shutting down MCP daemon...`);
+process.on('SIGINT', async () => {
+    console.log('Shutting down MCP daemon...');
     for (const [sessionId, entry] of sessions.entries()) {
         try {
             await entry.transport.close();
@@ -237,12 +237,4 @@ async function gracefulShutdown(signal) {
         }
     }
     process.exit(0);
-}
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('uncaughtException', (err) => {
-    console.error('Uncaught exception (keeping process alive):', err);
-});
-process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled rejection (keeping process alive):', reason);
 });
