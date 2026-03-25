@@ -1,9 +1,7 @@
 import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CustomToolParameter, CustomToolDefinition } from '../types.js';
-import type { DFAuthConfig } from './dreamfactory.service.js';
-import type { SessionService } from './session.service.js';
-import { respond, respondError, createToolRegistrar, getAuth } from './tool-utils.js';
+import { respond, respondError, createToolRegistrar } from './tool-utils.js';
 
 const MAX_RESPONSE_SIZE = 1_048_576; // 1 MB
 const REQUEST_TIMEOUT_MS = 30_000; // 30 seconds
@@ -115,8 +113,7 @@ export async function executeFunctionToolRequest(
  */
 export async function executeCustomToolRequest(
   toolDef: CustomToolDefinition,
-  params: Record<string, unknown>,
-  auth?: DFAuthConfig
+  params: Record<string, unknown>
 ) {
   console.log(`[custom-tool] Executing API tool "${toolDef.name}", method=${toolDef.http_method}, url=${toolDef.url}, params:`, safeStringify(params));
 
@@ -161,16 +158,6 @@ export async function executeCustomToolRequest(
     ...(toolDef.headers ?? {}),
     ...dynamicHeaders,
   };
-
-  // Inject DreamFactory auth headers if available and not already set
-  if (auth) {
-    if (auth.sessionToken && !Object.keys(headers).some(k => k.toLowerCase() === 'x-dreamfactory-session-token')) {
-      headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
-    }
-    if (auth.apiKey && !Object.keys(headers).some(k => k.toLowerCase() === 'x-dreamfactory-api-key')) {
-      headers['X-DreamFactory-API-Key'] = auth.apiKey;
-    }
-  }
 
   const method = toolDef.http_method!;
 
@@ -223,7 +210,6 @@ export async function executeCustomToolRequest(
 export function registerCustomTools(
   server: McpServer,
   customTools: CustomToolDefinition[],
-  sessionManager: SessionService,
   disabledTools?: Set<string>
 ) {
   const registerTool = createToolRegistrar(server, disabledTools);
@@ -239,17 +225,11 @@ export function registerCustomTools(
       toolDef.name,
       toolDef.description,
       schema,
-      async (params, context) => {
+      async (params) => {
         if (isFunction) {
           return executeFunctionToolRequest(toolDef, params);
         }
-        let auth: DFAuthConfig | undefined;
-        try {
-          auth = getAuth(sessionManager, context.sessionId);
-        } catch {
-          // Auth not available — custom tool will run without DF headers
-        }
-        return executeCustomToolRequest(toolDef, params, auth);
+        return executeCustomToolRequest(toolDef, params);
       }
     );
   }

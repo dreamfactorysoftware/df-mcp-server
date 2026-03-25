@@ -180,8 +180,7 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
         '- Fields: select specific columns to reduce response size',
         '- Related: include related records via foreign keys (e.g., `related=parent_table_by_fk_field`)',
         '- Pagination: use `limit` and `offset`, set `includeCount=true` for total count',
-        '- Counting: use `countOnly=true` to get just the count without data',
-        '- Aggregation: use `{prefix}_aggregate_data` for SUM/COUNT/AVG/MIN/MAX — it pushes computation to the database server',
+        '- Counting: use `countOnly=true` to get just the count without data — never use COUNT()/SUM()/AVG() in fields',
         '- Max page size: 1000 records. Always paginate for tables with more rows.',
         '',
         '## Key Data Modeling Hints',
@@ -218,7 +217,7 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
     });
     registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
     if (customTools && customTools.length > 0) {
-        registerCustomTools(server, customTools, sessionManager, disabledTools);
+        registerCustomTools(server, customTools, disabledTools);
     }
     return server;
 }
