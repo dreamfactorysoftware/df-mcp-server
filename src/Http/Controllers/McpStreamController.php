@@ -127,13 +127,14 @@ class McpStreamController extends Controller
             // Sysadmins get all services; non-admin users are filtered by role
             if (!SessionUtilities::isSysAdmin()) {
                 $accessibleIds = $this->getUserAccessibleServiceIds();
-                if (!empty($accessibleIds)) {
+                if ($accessibleIds === null) {
+                    // null means role grants access to all services — no filtering needed
+                } elseif (!empty($accessibleIds)) {
                     $allServices = array_values(array_filter(
                         $allServices,
                         fn($s) => in_array((int)($s['id'] ?? 0), $accessibleIds, true)
                     ));
                 } else {
-                    // Role has no service access entries — return nothing
                     $allServices = [];
                 }
             }
@@ -153,16 +154,20 @@ class McpStreamController extends Controller
      * Mirrors Service::getUserAccessibleServices() — reads the role_service_access
      * entries stored in the session by Session::setSessionData().
      *
-     * @return int[]
+     * @return int[]|null  Array of service IDs, or null if role grants access to ALL services.
      */
-    private function getUserAccessibleServiceIds(): array
+    private function getUserAccessibleServiceIds(): ?array
     {
         $roleServices = (array)SessionUtilities::get('role.services');
         $ids = [];
 
         foreach ($roleServices as $serviceAccess) {
             $serviceId = $serviceAccess['service_id'] ?? null;
-            if (!empty($serviceId) && is_numeric($serviceId) && $serviceId > 0) {
+            if ($serviceId === null || $serviceId === 0 || $serviceId === '') {
+                // A null service_id entry means "all services"
+                return null;
+            }
+            if (is_numeric($serviceId) && $serviceId > 0) {
                 $ids[] = (int)$serviceId;
             }
         }
