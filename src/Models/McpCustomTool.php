@@ -31,6 +31,10 @@ class McpCustomTool extends BaseModel
         'enabled' => 'boolean',
     ];
 
+    protected $attributes = [
+        'tool_type' => 'api',
+    ];
+
     /**
      * Get enabled custom tools for a given service as definition arrays.
      */
@@ -64,6 +68,20 @@ class McpCustomTool extends BaseModel
 
         foreach ($tools as $toolData) {
             $toolData['service_id'] = $serviceId;
+
+            // Normalize: accept 'type' as alias for 'tool_type'
+            if (!isset($toolData['tool_type']) && isset($toolData['type'])) {
+                $toolData['tool_type'] = $toolData['type'];
+            }
+
+            // Auto-detect tool_type from content when not explicitly set
+            if (empty($toolData['tool_type'])) {
+                if (!empty($toolData['function']) && empty($toolData['url'])) {
+                    $toolData['tool_type'] = 'function';
+                } else {
+                    $toolData['tool_type'] = 'api';
+                }
+            }
 
             if (!empty($toolData['id']) && $existing->has($toolData['id'])) {
                 $tool = $existing->get($toolData['id']);

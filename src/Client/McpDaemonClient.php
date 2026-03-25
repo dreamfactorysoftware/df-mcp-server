@@ -52,7 +52,7 @@ class McpDaemonClient
             // Copy relevant headers from original request
             foreach ($request->headers->all() as $key => $values) {
                 $lowerKey = strtolower($key);
-                if (in_array($lowerKey, ['content-type', 'accept', 'mcp-session-id', 'last-event-id'])) {
+                if (in_array($lowerKey, ['content-type', 'mcp-session-id', 'last-event-id'])) {
                     $headers[$key] = $values[0] ?? '';
                 }
             }
@@ -92,6 +92,7 @@ class McpDaemonClient
             $response = $client->request($request->method(), $this->daemonUrl . $daemonPath, [
                 'headers' => $headers,
                 'body' => $body,
+                'expect' => false,
             ]);
 
             $status = $response->getStatusCode();
