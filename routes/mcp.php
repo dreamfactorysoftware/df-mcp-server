@@ -71,6 +71,8 @@ Route::group(['prefix' => 'mcp', 'middleware' => []], function () {
         ->where('mcpService', '[A-Za-z0-9_\-]+');
     Route::get('{mcpService}/oauth-complete', [McpOAuthController::class, 'oauthComplete'])
         ->where('mcpService', '[A-Za-z0-9_\-]+');
+    Route::get('{mcpService}/oauth-redirect', [McpOAuthController::class, 'oauthRedirect'])
+        ->where('mcpService', '[A-Za-z0-9_\-]+');
     Route::post('{mcpService}/token', [McpOAuthController::class, 'token'])
         ->where('mcpService', '[A-Za-z0-9_\-]+');
 

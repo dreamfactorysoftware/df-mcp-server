@@ -322,17 +322,30 @@ class McpOAuthController extends Controller
         }
 
         // ============================================================
-        // Default: Redirect to DreamFactory login
+        // Default: Server-rendered login page
+        // Renders a simple login form that POSTs directly to
+        // /mcp/{service}/login, bypassing the Angular SPA entirely.
+        // This avoids the race condition where Angular's reactive UI
+        // renders a half-authenticated state while window.location
+        // navigates away.
         // ============================================================
 
-        // Build the callback URL that DF will redirect to after login
-        $callbackUrl = "{$baseUrl}/mcp/{$mcpService}/oauth-callback?auth_state={$authState}";
+        $oauthServices = $this->getAvailableOAuthServices();
 
-        // Redirect to DreamFactory's main login page with redirect parameter
-        // DF login should redirect back to our callback after successful authentication
-        $dfLoginUrl = $this->getFrontendUrl($request) . "/auth/login?redirect=" . urlencode($callbackUrl);
-
-        return redirect($dfLoginUrl);
+        return response()->view('mcp::mcp-login', [
+            'serviceName' => $mcpService,
+            'loginUrl' => "{$baseUrl}/mcp/{$mcpService}/login",
+            'state' => $authState,
+            'clientId' => $clientId,
+            'redirectUri' => $redirectUri,
+            'codeChallenge' => $codeChallenge,
+            'codeChallengeMethod' => $codeChallengeMethod,
+            'scope' => $scope,
+            'oauthServices' => $oauthServices,
+            'oauthRedirectUrl' => "{$baseUrl}/mcp/{$mcpService}/oauth-redirect",
+            'error' => $request->query('error'),
+            'email' => $request->query('email'),
+        ]);
     }
 
     /**
@@ -351,7 +364,7 @@ class McpOAuthController extends Controller
         $scope = $request->input('scope', 'mcp:tools mcp:resources mcp:prompts');
 
         if (empty($email) || empty($password)) {
-            return $this->errorResponse('invalid_request', 'Email and password are required');
+            return $this->loginError($request, $mcpService, 'Email and password are required.');
         }
 
         // Authenticate against DreamFactory
@@ -359,7 +372,7 @@ class McpOAuthController extends Controller
             $dfSession = $this->authenticateWithDreamFactory($email, $password);
         } catch (\Exception $e) {
             Log::error('MCP OAuth login failed', ['error' => $e->getMessage()]);
-            return $this->errorResponse('access_denied', 'Invalid credentials');
+            return $this->loginError($request, $mcpService, 'Invalid email or password.');
         }
 
         // Generate authorization code
@@ -539,6 +552,32 @@ class McpOAuthController extends Controller
         ]);
 
         return redirect($redirectUrl);
+    }
+
+    /**
+     * Redirect to a DreamFactory OAuth provider (Azure, Google, etc.)
+     * GET /mcp/{service}/oauth-redirect
+     *
+     * Initiates the external OAuth flow by redirecting to the DF OAuth
+     * endpoint with a redirect back to /mcp/{service}/oauth-complete.
+     */
+    public function oauthRedirect(Request $request, string $mcpService)
+    {
+        $provider = $request->query('provider');
+        $state = $request->query('state');
+
+        if (empty($provider) || empty($state)) {
+            return $this->errorResponse('invalid_request', 'Missing provider or state');
+        }
+
+        $baseUrl = $this->getBaseUrl($request);
+        $oauthCompleteUrl = "{$baseUrl}/mcp/{$mcpService}/oauth-complete?state={$state}";
+
+        // Build DF OAuth URL: /api/v2/{provider_path}&redirect={callback}
+        $separator = str_contains($provider, '?') ? '&' : '?';
+        $oauthUrl = "{$this->dfUrl}/api/v2/{$provider}{$separator}redirect=" . urlencode($oauthCompleteUrl);
+
+        return redirect($oauthUrl);
     }
 
     /**
@@ -961,6 +1000,32 @@ class McpOAuthController extends Controller
             'error' => $error,
             'error_description' => $description,
         ], 400);
+    }
+
+    /**
+     * Re-render the MCP login page with an error message.
+     * Used by the POST /mcp/{service}/login handler when authentication fails.
+     */
+    private function loginError(Request $request, string $mcpService, string $message)
+    {
+        $baseUrl = $this->getBaseUrl($request);
+        $state = $request->input('state', '');
+        $oauthServices = $this->getAvailableOAuthServices();
+
+        return response()->view('mcp::mcp-login', [
+            'serviceName' => $mcpService,
+            'loginUrl' => "{$baseUrl}/mcp/{$mcpService}/login",
+            'state' => $state,
+            'clientId' => $request->input('client_id', ''),
+            'redirectUri' => $request->input('redirect_uri', ''),
+            'codeChallenge' => $request->input('code_challenge', ''),
+            'codeChallengeMethod' => $request->input('code_challenge_method', 'S256'),
+            'scope' => $request->input('scope', 'mcp:tools mcp:resources mcp:prompts'),
+            'oauthServices' => $oauthServices,
+            'oauthRedirectUrl' => "{$baseUrl}/mcp/{$mcpService}/oauth-redirect",
+            'error' => $message,
+            'email' => $request->input('email', ''),
+        ], 401);
     }
 
     /**
