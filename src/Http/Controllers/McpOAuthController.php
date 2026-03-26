@@ -258,7 +258,9 @@ class McpOAuthController extends Controller
 
             $redirectUrl = $this->buildRedirectUrl($redirectUri, $redirectParams);
 
-            return redirect($redirectUrl);
+            return response()->view('mcp::mcp-auth-success', [
+                'redirectUrl' => $redirectUrl,
+            ]);
         }
 
         // ============================================================
@@ -402,7 +404,9 @@ class McpOAuthController extends Controller
 
         $redirectUrl = $this->buildRedirectUrl($redirectUri, $redirectParams);
 
-        return redirect($redirectUrl);
+        return response()->view('mcp::mcp-auth-success', [
+            'redirectUrl' => $redirectUrl,
+        ]);
     }
 
     /**
@@ -482,7 +486,9 @@ class McpOAuthController extends Controller
 
         $redirectUrl = $this->buildRedirectUrl($pending['redirect_uri'], $redirectParams);
 
-        return redirect($redirectUrl);
+        return response()->view('mcp::mcp-auth-success', [
+            'redirectUrl' => $redirectUrl,
+        ]);
     }
 
     /**
@@ -551,7 +557,9 @@ class McpOAuthController extends Controller
             'user_email' => $dfSession['email'],
         ]);
 
-        return redirect($redirectUrl);
+        return response()->view('mcp::mcp-auth-success', [
+            'redirectUrl' => $redirectUrl,
+        ]);
     }
 
     /**
