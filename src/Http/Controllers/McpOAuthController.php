@@ -583,7 +583,7 @@ class McpOAuthController extends Controller
 
         // Build DF OAuth URL: /api/v2/{provider_path}&redirect={callback}
         $separator = str_contains($provider, '?') ? '&' : '?';
-        $oauthUrl = "{$this->dfUrl}/api/v2/{$provider}{$separator}redirect=" . urlencode($oauthCompleteUrl);
+        $oauthUrl = "{$baseUrl}/api/v2/{$provider}{$separator}redirect=" . urlencode($oauthCompleteUrl);
 
         return redirect($oauthUrl);
     }
