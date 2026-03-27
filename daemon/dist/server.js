@@ -113,10 +113,29 @@ app.all('/mcp/:serviceName', async (req, res) => {
         const config = parseConfigFromHeaders(req);
         // Discover all services from DreamFactory (databases + files)
         // Prefers pre-resolved services from PHP (body or header) to avoid system/service permission requirement
-        const apiConfigs = await discoverServices(config.baseUrl, {
-            sessionToken: dfSessionToken,
-            apiKey: dfApiKey
-        }, req, availableServicesFromBody);
+        const INIT_TIMEOUT_MS = 30_000;
+        let apiConfigs;
+        try {
+            apiConfigs = await Promise.race([
+                discoverServices(config.baseUrl, {
+                    sessionToken: dfSessionToken,
+                    apiKey: dfApiKey
+                }, req, availableServicesFromBody),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Service discovery timed out')), INIT_TIMEOUT_MS))
+            ]);
+        }
+        catch (discoveryError) {
+            console.error(`[${serviceName}] Service discovery failed:`, discoveryError instanceof Error ? discoveryError.message : discoveryError);
+            res.status(504).json({
+                jsonrpc: '2.0',
+                error: {
+                    code: -32000,
+                    message: `Service discovery failed: ${discoveryError instanceof Error ? discoveryError.message : 'unknown error'}`
+                },
+                id: null
+            });
+            return;
+        }
         if (apiConfigs.length === 0) {
             res.status(400).json({
                 jsonrpc: '2.0',

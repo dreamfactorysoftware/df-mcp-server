@@ -14,6 +14,9 @@ export type DFService = {
   type: string;
 };
 
+/** Default timeout (in ms) for all HTTP requests to the DreamFactory API. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 // Known DreamFactory database service types
 const DATABASE_SERVICE_TYPES = new Set([
   'sqlite',
@@ -520,7 +523,11 @@ export class DreamFactoryService {
 
     console.log(`[DreamFactoryService.requestRaw] ${method} ${target.toString()}`);
 
-    const response = await fetch(target, { method, headers });
+    const response = await fetch(target, {
+      method,
+      headers,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
 
     console.log(`[DreamFactoryService.requestRaw] Response status: ${response.status} ${response.statusText}`);
 
@@ -568,7 +575,8 @@ export class DreamFactoryService {
     const response = await fetch(target, {
       method,
       headers,
-      body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
+      body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
     console.log(`[DreamFactoryService.request] Response status: ${response.status} ${response.statusText}`);
