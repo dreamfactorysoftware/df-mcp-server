@@ -77,6 +77,9 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
 
         // Load MCP routes
         $this->loadRoutesFrom(__DIR__ . '/../routes/mcp.php');
+
+        // Load views
+        $this->loadViewsFrom(__DIR__ . '/../resources/views', 'mcp');
     }
 }
 
