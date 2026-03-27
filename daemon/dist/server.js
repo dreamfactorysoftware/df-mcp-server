@@ -211,7 +211,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
                     sessionManager.clearConfig(sessionId);
                 }
             },
-            enableJsonResponse: false
+            enableJsonResponse: true
         });
         transport.onclose = () => {
             const sid = transport.sessionId;

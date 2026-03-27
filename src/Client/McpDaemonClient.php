@@ -184,16 +184,20 @@ class McpDaemonClient
             $headers[$name] = implode(', ', $values);
         }
 
-        if (function_exists('ignore_user_abort')) {
-            ignore_user_abort(true);
-        }
+        // Do NOT call ignore_user_abort(true) — we want PHP to detect when the
+        // client disconnects so the worker is freed immediately.
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0);
+            @set_time_limit(300); // Hard cap: 5 minutes max for any SSE stream
         }
 
         return response()->stream(function () use ($response) {
             $body = $response->getBody();
             while (!$body->eof()) {
+                // Check if the client has disconnected — frees the PHP-FPM worker
+                // instead of holding it until the daemon closes the connection.
+                if (connection_aborted()) {
+                    break;
+                }
                 echo $body->read(8192);
                 if (function_exists('ob_flush')) @ob_flush();
                 if (function_exists('flush')) @flush();
