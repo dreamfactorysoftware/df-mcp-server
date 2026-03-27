@@ -248,7 +248,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
           sessionManager.clearConfig(sessionId);
         }
       },
-      enableJsonResponse: false
+      enableJsonResponse: true
     });
 
     transport.onclose = () => {
