@@ -175,12 +175,14 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
         fileApis.length > 0 ? 'File tools: list_files, get_file_content, create_folder, delete_file (also prefixed per file API).\n' : '',
         '## Query Syntax Quick Reference',
         '- Filter: `field=value`, `field>10`, `field LIKE %text%`, `field IN (1,2,3)`, `field BETWEEN 1 AND 10`, `field IS NULL`',
+        '- IMPORTANT: Use field names exactly as they appear in the schema — do NOT add quotes, brackets, backticks, or URL-encoding around field names. Spaces in field names are valid as-is. Example: `Production Day=2026-03-16` (NOT `[Production Day]`, NOT `"Production Day"`, NOT `Production%20Day`)',
         '- Combine filters: `(field1=value1) AND (field2>value2)`, `(f1=v1) OR (f2=v2)`',
         '- Order: `field ASC`, `field DESC`, `field1 ASC, field2 DESC`',
         '- Fields: select specific columns to reduce response size',
         '- Related: include related records via foreign keys (e.g., `related=parent_table_by_fk_field`)',
         '- Pagination: use `limit` and `offset`, set `includeCount=true` for total count',
-        '- Counting: use `countOnly=true` to get just the count without data — never use COUNT()/SUM()/AVG() in fields',
+        '- Counting: use `countOnly=true` to get just the count without data',
+        '- Aggregation: use `{prefix}_aggregate_data` for SUM/COUNT/AVG/MIN/MAX — it pushes computation to the database server',
         '- Max page size: 1000 records. Always paginate for tables with more rows.',
         '',
         '## Key Data Modeling Hints',
@@ -217,7 +219,7 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
     });
     registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
     if (customTools && customTools.length > 0) {
-        registerCustomTools(server, customTools, disabledTools);
+        registerCustomTools(server, customTools, sessionManager, disabledTools);
     }
     return server;
 }

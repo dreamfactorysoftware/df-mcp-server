@@ -145,10 +145,30 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
 
     // Discover all services from DreamFactory (databases + files)
     // Prefers pre-resolved services from PHP (body or header) to avoid system/service permission requirement
-    const apiConfigs = await discoverServices(config.baseUrl, {
-      sessionToken: dfSessionToken,
-      apiKey: dfApiKey
-    }, req, availableServicesFromBody);
+    const INIT_TIMEOUT_MS = 30_000;
+    let apiConfigs: ApiConfig[];
+    try {
+      apiConfigs = await Promise.race([
+        discoverServices(config.baseUrl, {
+          sessionToken: dfSessionToken,
+          apiKey: dfApiKey
+        }, req, availableServicesFromBody),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Service discovery timed out')), INIT_TIMEOUT_MS)
+        )
+      ]);
+    } catch (discoveryError) {
+      console.error(`[${serviceName}] Service discovery failed:`, discoveryError instanceof Error ? discoveryError.message : discoveryError);
+      res.status(504).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: `Service discovery failed: ${discoveryError instanceof Error ? discoveryError.message : 'unknown error'}`
+        },
+        id: null
+      });
+      return;
+    }
 
     if (apiConfigs.length === 0) {
       res.status(400).json({
@@ -264,8 +284,8 @@ app.listen(PORT, HOST, () => {
   console.log(`  ALL  /mcp/:serviceName - MCP protocol (requires X-DreamFactory-Session-Token header)`);
 });
 
-process.on('SIGINT', async () => {
-  console.log('Shutting down MCP daemon...');
+async function gracefulShutdown(signal: string) {
+  console.log(`${signal} received, shutting down MCP daemon...`);
   for (const [sessionId, entry] of sessions.entries()) {
     try {
       await entry.transport.close();
@@ -275,4 +295,15 @@ process.on('SIGINT', async () => {
     }
   }
   process.exit(0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (keeping process alive):', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection (keeping process alive):', reason);
 });

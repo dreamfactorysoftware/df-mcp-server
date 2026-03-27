@@ -160,6 +160,7 @@ class McpOAuthController extends Controller
             'grant_types' => ['authorization_code', 'refresh_token'],
             'response_types' => ['code'],
             'token_endpoint_auth_method' => 'client_secret_post',
+            'scope' => 'mcp:tools mcp:resources mcp:prompts',
         ]);
     }
 
@@ -257,7 +258,9 @@ class McpOAuthController extends Controller
 
             $redirectUrl = $this->buildRedirectUrl($redirectUri, $redirectParams);
 
-            return redirect($redirectUrl);
+            return response()->view('mcp::mcp-auth-success', [
+                'redirectUrl' => $redirectUrl,
+            ]);
         }
 
         // ============================================================
@@ -388,7 +391,9 @@ class McpOAuthController extends Controller
 
         $redirectUrl = $this->buildRedirectUrl($redirectUri, $redirectParams);
 
-        return redirect($redirectUrl);
+        return response()->view('mcp::mcp-auth-success', [
+            'redirectUrl' => $redirectUrl,
+        ]);
     }
 
     /**
@@ -468,7 +473,9 @@ class McpOAuthController extends Controller
 
         $redirectUrl = $this->buildRedirectUrl($pending['redirect_uri'], $redirectParams);
 
-        return redirect($redirectUrl);
+        return response()->view('mcp::mcp-auth-success', [
+            'redirectUrl' => $redirectUrl,
+        ]);
     }
 
     /**
@@ -537,7 +544,9 @@ class McpOAuthController extends Controller
             'user_email' => $dfSession['email'],
         ]);
 
-        return redirect($redirectUrl);
+        return response()->view('mcp::mcp-auth-success', [
+            'redirectUrl' => $redirectUrl,
+        ]);
     }
 
     /**
@@ -716,13 +725,18 @@ class McpOAuthController extends Controller
         // Consume the authorization code
         $authCode->consume();
 
-        return response()->json([
+        $tokenResponse = [
             'access_token' => $accessToken->access_token,
             'token_type' => 'Bearer',
             'expires_in' => McpOAuthAccessToken::ACCESS_TOKEN_LIFETIME_HOURS * 3600,
             'refresh_token' => $accessToken->refresh_token,
-            'scope' => $accessToken->scope ?? 'mcp:tools mcp:resources mcp:prompts',
-        ]);
+        ];
+
+        if (!empty($accessToken->scope)) {
+            $tokenResponse['scope'] = $accessToken->scope;
+        }
+
+        return response()->json($tokenResponse);
     }
 
     /**
@@ -775,13 +789,18 @@ class McpOAuthController extends Controller
         // Refresh the token
         $token->refresh();
 
-        return response()->json([
+        $tokenResponse = [
             'access_token' => $token->access_token,
             'token_type' => 'Bearer',
             'expires_in' => McpOAuthAccessToken::ACCESS_TOKEN_LIFETIME_HOURS * 3600,
             'refresh_token' => $token->refresh_token,
-            'scope' => $token->scope ?? 'mcp:tools mcp:resources mcp:prompts',
-        ]);
+        ];
+
+        if (!empty($token->scope)) {
+            $tokenResponse['scope'] = $token->scope;
+        }
+
+        return response()->json($tokenResponse);
     }
 
     /**
