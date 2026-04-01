@@ -136,22 +136,8 @@ app.all('/mcp/:serviceName', async (req, res) => {
             });
             return;
         }
-        if (apiConfigs.length === 0) {
-            res.status(400).json({
-                jsonrpc: '2.0',
-                error: {
-                    code: -32000,
-                    message: 'No supported services found in DreamFactory'
-                },
-                id: null
-            });
-            return;
-        }
-        const dbCount = apiConfigs.filter(c => c.category === 'database').length;
-        const fileCount = apiConfigs.filter(c => c.category === 'file').length;
-        console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file`);
-        console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
         // Parse disabled tools and custom tools from service config (body envelope or header fallback)
+        // This must happen before the service check so custom-tools-only roles are not rejected.
         let disabledTools;
         let customTools;
         const mcpConfigData = mcpConfig ?? (() => {
@@ -188,6 +174,24 @@ app.all('/mcp/:serviceName', async (req, res) => {
                     console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
                 }
             }
+        }
+        const hasCustomTools = customTools !== undefined && customTools.length > 0;
+        if (apiConfigs.length === 0 && !hasCustomTools) {
+            res.status(400).json({
+                jsonrpc: '2.0',
+                error: {
+                    code: -32000,
+                    message: 'No supported services found in DreamFactory'
+                },
+                id: null
+            });
+            return;
+        }
+        const dbCount = apiConfigs.filter(c => c.category === 'database').length;
+        const fileCount = apiConfigs.filter(c => c.category === 'file').length;
+        console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file${hasCustomTools ? `, ${customTools.length} custom tool(s)` : ''}`);
+        if (apiConfigs.length > 0) {
+            console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
         }
         const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools);
         const transport = new StreamableHTTPServerTransport({
