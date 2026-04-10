@@ -25,8 +25,9 @@ const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
 
-const ALLOWED_ORIGIN = process.env.MCP_CORS_ORIGIN ?? 'http://localhost:8080';
-app.use(cors({ origin: ALLOWED_ORIGIN }));
+// MCP clients (Claude Desktop, etc.) are external — CORS must be permissive.
+// The daemon is already protected by requiring a DreamFactory session token.
+app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 

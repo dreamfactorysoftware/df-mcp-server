@@ -45,11 +45,12 @@ class McpStreamMiddleware
     /**
      * CORS headers for MCP endpoints
      */
+    // MCP clients (Claude Desktop, etc.) are external — CORS must be permissive.
+    // Endpoints are protected by requiring a DreamFactory session/Bearer token.
     private static function corsHeaders(): array
     {
-        $origin = config('app.url', 'http://localhost:8080');
         return [
-            'Access-Control-Allow-Origin' => $origin,
+            'Access-Control-Allow-Origin' => '*',
             'Access-Control-Allow-Methods' => 'GET, POST, DELETE, OPTIONS',
             'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id',
             'Access-Control-Expose-Headers' => 'WWW-Authenticate',
