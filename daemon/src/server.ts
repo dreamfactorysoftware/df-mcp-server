@@ -25,9 +25,13 @@ const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
 
-app.use(cors());
+const ALLOWED_ORIGIN = process.env.MCP_CORS_ORIGIN ?? 'http://localhost:8080';
+app.use(cors({ origin: ALLOWED_ORIGIN }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Internal API key for PHP proxy -> daemon communication
+const INTERNAL_API_KEY = process.env.MCP_INTERNAL_KEY ?? '';
 
 /**
  * Send 401 Unauthorized response
@@ -46,12 +50,12 @@ function sendUnauthorized(res: Response): void {
 const sessionManager = new SessionService();
 const sessions = new Map<string, SessionEntry>();
 
-// Health check endpoints
+// Health check endpoints — do not expose session IDs
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     timestamp: Math.floor(Date.now() / 1000),
-    sessions: Array.from(sessions.keys())
+    active_sessions: sessions.size,
   });
 });
 
@@ -59,12 +63,15 @@ app.get('/ping', (_req, res) => {
   res.json({
     status: 'ok',
     timestamp: Math.floor(Date.now() / 1000),
-    sessions: Array.from(sessions.keys())
+    active_sessions: sessions.size,
   });
 });
 
-// Cache management endpoint
+// Cache management endpoint — requires internal API key from PHP proxy
 app.post('/mcp/cache/clear', (req, res) => {
+  if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
+    return res.status(403).json({ error: 'Forbidden: invalid internal key' });
+  }
   const service = typeof req.body === 'object' ? req.body?.service : undefined;
   if (service) {
     for (const [sessionId, entry] of sessions.entries()) {

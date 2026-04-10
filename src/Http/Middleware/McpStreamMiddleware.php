@@ -45,12 +45,16 @@ class McpStreamMiddleware
     /**
      * CORS headers for MCP endpoints
      */
-    private const CORS_HEADERS = [
-        'Access-Control-Allow-Origin' => '*',
-        'Access-Control-Allow-Methods' => 'GET, POST, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id',
-        'Access-Control-Expose-Headers' => 'WWW-Authenticate',
-    ];
+    private static function corsHeaders(): array
+    {
+        $origin = config('app.url', 'http://localhost:8080');
+        return [
+            'Access-Control-Allow-Origin' => $origin,
+            'Access-Control-Allow-Methods' => 'GET, POST, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id',
+            'Access-Control-Expose-Headers' => 'WWW-Authenticate',
+        ];
+    }
 
     /**
      * Handle an incoming request.
@@ -76,7 +80,7 @@ class McpStreamMiddleware
 
         // Handle OPTIONS preflight for any MCP path
         if ($method === 'OPTIONS') {
-            return response('', 200)->withHeaders(self::CORS_HEADERS);
+            return response('', 200)->withHeaders(self::corsHeaders());
         }
 
         $mcpService = $matches[1];
@@ -100,7 +104,7 @@ class McpStreamMiddleware
 
         // Add CORS headers to response
         if ($response) {
-            foreach (self::CORS_HEADERS as $key => $value) {
+            foreach (self::corsHeaders() as $key => $value) {
                 $response->headers->set($key, $value);
             }
             return $response;
@@ -116,7 +120,7 @@ class McpStreamMiddleware
     private function handleRfc8414WellKnown(Request $request, Closure $next, string $wellKnownType, string $mcpService, string $method)
     {
         if ($method === 'OPTIONS') {
-            return response('', 200)->withHeaders(self::CORS_HEADERS);
+            return response('', 200)->withHeaders(self::corsHeaders());
         }
 
         $controllerMethod = self::RFC8414_WELL_KNOWN[$wellKnownType] ?? null;
@@ -129,7 +133,7 @@ class McpStreamMiddleware
             $response = $controller->$controllerMethod($request, $mcpService);
 
             if ($response) {
-                foreach (self::CORS_HEADERS as $key => $value) {
+                foreach (self::corsHeaders() as $key => $value) {
                     $response->headers->set($key, $value);
                 }
                 return $response;
