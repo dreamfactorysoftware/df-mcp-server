@@ -169,6 +169,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
                     parameters: Array.isArray(t.parameters) ? t.parameters : [],
                     headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
                     function: t.function ?? undefined,
+                    secrets: t.secrets && typeof t.secrets === 'object' && !Array.isArray(t.secrets) ? t.secrets : undefined,
                 }));
                 if (customTools.length > 0) {
                     console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
