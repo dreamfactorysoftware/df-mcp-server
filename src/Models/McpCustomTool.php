@@ -52,9 +52,21 @@ class McpCustomTool extends BaseModel
      */
     public static function getAllForService(int $serviceId): array
     {
-        return static::where('service_id', $serviceId)
+        $rows = static::where('service_id', $serviceId)
             ->get()
             ->toArray();
+
+        foreach ($rows as &$row) {
+            // PHP encodes an empty array as JSON [], but the admin UI expects
+            // an empty headers map to serialize as {}. Force empty maps to
+            // objects so JSON emits the right shape.
+            if (empty($row['headers'])) {
+                $row['headers'] = (object) [];
+            }
+        }
+        unset($row);
+
+        return $rows;
     }
 
     /**
@@ -112,7 +124,7 @@ class McpCustomTool extends BaseModel
             'http_method' => $this->http_method,
             'url' => $this->url,
             'parameters' => $this->parameters ?? [],
-            'headers' => $this->headers ?? (object)[],
+            'headers' => !empty($this->headers) ? $this->headers : (object) [],
             'function' => $this->getAttribute('function'),
         ];
     }
