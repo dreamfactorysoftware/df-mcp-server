@@ -24,4 +24,5 @@ export type CustomToolDefinition = {
   parameters: CustomToolParameter[];
   headers?: Record<string, string>;
   function?: string;
+  secrets?: Record<string, string>;
 };

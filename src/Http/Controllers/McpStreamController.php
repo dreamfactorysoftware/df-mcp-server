@@ -64,6 +64,28 @@ class McpStreamController extends Controller
         $appId = $config['app_id'] ?? null;
         SessionUtilities::setSessionData($appId, $token->user_id);
 
+        // Resolve lookup placeholders in custom tool configs (headers, URLs, parameters).
+        // Must run AFTER setSessionData() so the user's lookup maps are populated.
+        // Function bodies are excluded — they receive secrets via the secrets object below.
+        if (!empty($config['custom_tools']) && is_array($config['custom_tools'])) {
+            $functionBodies = [];
+            foreach ($config['custom_tools'] as $i => $tool) {
+                if (isset($tool['function'])) {
+                    $functionBodies[$i] = $tool['function'];
+                    unset($config['custom_tools'][$i]['function']);
+                }
+            }
+            SessionUtilities::replaceLookups($config['custom_tools'], true);
+            foreach ($functionBodies as $i => $body) {
+                $config['custom_tools'][$i]['function'] = $body;
+            }
+
+            // Scan function bodies for secrets.KEY references, resolve the lookup
+            // values, and attach a secrets map so the daemon can inject them at runtime
+            // without the values ever appearing in the JS source string.
+            $this->extractFunctionSecrets($config['custom_tools']);
+        }
+
         // Determine scheme - prioritize X-Forwarded-Proto for proxies
         $scheme = $request->header('X-Forwarded-Proto');
         if (empty($scheme)) {
@@ -98,6 +120,37 @@ class McpStreamController extends Controller
 
         $client = new McpDaemonClient();
         return $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
+    }
+
+    /**
+     * Scan function bodies for secrets.KEY references, resolve the corresponding
+     * lookup values, and attach a secrets map to each tool definition.
+     *
+     * Only secrets actually referenced in the function body are included
+     * (principle of least privilege). Unresolved references are silently
+     * omitted — secrets.MISSING evaluates to undefined in JS.
+     */
+    private function extractFunctionSecrets(array &$customTools): void
+    {
+        foreach ($customTools as &$tool) {
+            if (empty($tool['function']) || !is_string($tool['function'])) {
+                continue;
+            }
+
+            $secrets = [];
+            if (preg_match_all('/secrets\.(\w+)/', $tool['function'], $matches)) {
+                foreach ($matches[1] as $key) {
+                    $value = null;
+                    if (SessionUtilities::getLookupValue($key, $value, true)) {
+                        $secrets[$key] = $value;
+                    }
+                }
+            }
+
+            if (!empty($secrets)) {
+                $tool['secrets'] = $secrets;
+            }
+        }
     }
 
     /**
