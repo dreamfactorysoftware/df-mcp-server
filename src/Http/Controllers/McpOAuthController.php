@@ -285,6 +285,26 @@ class McpOAuthController extends Controller
         $baseUrl = $this->getBaseUrl($request);
 
         // ============================================================
+        // Auto OAuth service: skip the login page entirely and kick off
+        // a DreamFactory OAuth provider directly. The provider redirects
+        // back to /mcp/{service}/oauth-complete with ?session_token=... ,
+        // and we pre-seed ?state=<authState> so oauthComplete can look up
+        // the pending record it just cached above.
+        // ============================================================
+        if (!empty($serviceConfig['auto_oauth_service'])) {
+            $oauthServiceName = strtolower($serviceConfig['auto_oauth_service']);
+            $redirectBack = "{$baseUrl}/mcp/{$mcpService}/oauth-complete?state=" . urlencode($authState);
+            $dfOAuthUrl = "{$baseUrl}/api/v2/user/session?service={$oauthServiceName}&redirect=" . urlencode($redirectBack);
+
+            Log::info('MCP OAuth: Redirecting to auto OAuth service', [
+                'oauth_service' => $oauthServiceName,
+                'service' => $mcpService,
+            ]);
+
+            return redirect($dfOAuthUrl);
+        }
+
+        // ============================================================
         // Check for custom login URL configuration
         // ============================================================
         if (!empty($serviceConfig['custom_login_url'])) {

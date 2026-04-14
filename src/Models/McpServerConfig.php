@@ -17,6 +17,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'oauth_client_id',
         'oauth_client_secret',
         'custom_login_url',
+        'auto_oauth_service',
         'disabled_tools',
     ];
 
@@ -109,6 +110,11 @@ class McpServerConfig extends BaseServiceConfigModel
             case 'custom_login_url':
                 $schema['label'] = 'Custom Login URL';
                 $schema['description'] = 'Optional custom login page URL. If set, users will be redirected here instead of the default DreamFactory login. Must use HTTPS.';
+                $schema['type'] = 'text';
+                break;
+            case 'auto_oauth_service':
+                $schema['label'] = 'Auto OAuth Service';
+                $schema['description'] = 'Optional name of a DreamFactory OAuth service (e.g. "google"). If set, the MCP authorization flow will redirect directly to that OAuth provider, skipping the login page entirely. Takes precedence over Custom Login URL.';
                 $schema['type'] = 'text';
                 break;
         }
