@@ -4,6 +4,7 @@ namespace DreamFactory\Core\McpServer\Http\Controllers;
 
 use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
+use DreamFactory\Core\McpServer\Models\McpCustomTool;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Utility\Session as SessionUtilities;
@@ -80,6 +81,11 @@ class McpStreamController extends Controller
                 $config['custom_tools'][$i]['function'] = $body;
             }
 
+            // Resolve SCM-linked function bodies from GitHub/GitLab/Bitbucket.
+            // Must run before extractFunctionSecrets so secrets.KEY references
+            // in GitHub-hosted code are found and resolved.
+            $this->resolveScmFunctionBodies($config['custom_tools']);
+
             // Scan function bodies for secrets.KEY references, resolve the lookup
             // values, and attach a secrets map so the daemon can inject them at runtime
             // without the values ever appearing in the JS source string.
@@ -149,6 +155,36 @@ class McpStreamController extends Controller
 
             if (!empty($secrets)) {
                 $tool['secrets'] = $secrets;
+            }
+        }
+    }
+
+    /**
+     * Resolve function bodies from linked SCM services for function-type custom tools.
+     *
+     * For each tool with a storage_service_id, fetches the function body from the
+     * configured GitHub/GitLab/Bitbucket service and overwrites the function field.
+     * If the fetch fails, the existing inline function body (if any) is kept as fallback.
+     */
+    private function resolveScmFunctionBodies(array &$customTools): void
+    {
+        foreach ($customTools as &$tool) {
+            $toolType = $tool['tool_type'] ?? 'api';
+            $storageServiceId = $tool['storage_service_id'] ?? null;
+
+            if ($toolType !== 'function' || empty($storageServiceId)) {
+                continue;
+            }
+
+            $content = McpCustomTool::resolveScmFunctionBody(
+                $storageServiceId,
+                $tool['scm_repository'] ?? null,
+                $tool['scm_reference'] ?? null,
+                $tool['storage_path'] ?? null
+            );
+
+            if ($content !== null) {
+                $tool['function'] = $content;
             }
         }
     }
