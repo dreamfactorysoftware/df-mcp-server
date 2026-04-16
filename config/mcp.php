@@ -1,6 +1,9 @@
 <?php
 
 return [
+    // Cache TTL (seconds) for function bodies fetched from SCM services (GitHub/GitLab/Bitbucket)
+    'scm_cache_ttl' => env('MCP_SCM_CACHE_TTL', 300),
+
     // Daemon configuration
     'daemon' => [
         'enabled' => env('MCP_DAEMON_ENABLED', true),
