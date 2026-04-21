@@ -55,6 +55,10 @@ class McpServerConfig extends BaseServiceConfigModel
 
     /**
      * Override to handle custom_tools sync on save.
+     *
+     * On initial service create, $id is null here (the service has not been
+     * inserted yet). The sync runs from storeConfig() below, which fires
+     * after the service row is created with a real id.
      */
     public static function setConfig($id, $config, $local_config = null)
     {
@@ -63,12 +67,36 @@ class McpServerConfig extends BaseServiceConfigModel
 
         parent::setConfig($id, $config, $local_config);
 
-        if (is_array($customTools)) {
-            try {
-                McpCustomTool::syncToolsForService($id, $customTools);
-            } catch (\Exception $e) {
-                // Table may not exist yet if migration hasn't run
-            }
+        if ($id && is_array($customTools)) {
+            self::syncCustomTools((int) $id, $customTools);
+        }
+    }
+
+    /**
+     * Override to sync custom_tools when a new service's config is stored
+     * for the first time (post-insert, when the service id is known).
+     */
+    public static function storeConfig($id, $config)
+    {
+        $customTools = $config['custom_tools'] ?? null;
+        unset($config['custom_tools']);
+
+        parent::storeConfig($id, $config);
+
+        if ($id && is_array($customTools)) {
+            self::syncCustomTools((int) $id, $customTools);
+        }
+    }
+
+    private static function syncCustomTools(int $serviceId, array $customTools): void
+    {
+        try {
+            McpCustomTool::syncToolsForService($serviceId, $customTools);
+        } catch (\Throwable $e) {
+            \Log::error('Failed to sync MCP custom tools', [
+                'service_id' => $serviceId,
+                'error'      => $e->getMessage(),
+            ]);
         }
     }
 
