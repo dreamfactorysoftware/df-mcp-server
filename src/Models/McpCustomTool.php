@@ -85,6 +85,7 @@ class McpCustomTool extends BaseModel
     public static function syncToolsForService(int $serviceId, array $tools): void
     {
         $existing = static::where('service_id', $serviceId)->get()->keyBy('id');
+        $existingByName = $existing->keyBy('name');
         $receivedIds = [];
 
         foreach ($tools as $toolData) {
@@ -104,8 +105,19 @@ class McpCustomTool extends BaseModel
                 }
             }
 
+            // Resolve the matching existing row — by id first, then by name.
+            // The name fallback matters when the UI saves a tool right after
+            // creating it: the server assigned an id, but the UI never
+            // refreshed its form state so it resends with id missing and we'd
+            // otherwise hit the (service_id, name) unique constraint.
+            $tool = null;
             if (!empty($toolData['id']) && $existing->has($toolData['id'])) {
                 $tool = $existing->get($toolData['id']);
+            } elseif (!empty($toolData['name']) && $existingByName->has($toolData['name'])) {
+                $tool = $existingByName->get($toolData['name']);
+            }
+
+            if ($tool) {
                 $tool->update($toolData);
                 if ($tool->wasChanged(['storage_service_id', 'storage_path', 'scm_repository', 'scm_reference'])) {
                     Cache::forget(self::buildScmCacheKey(
