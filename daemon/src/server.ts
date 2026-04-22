@@ -25,9 +25,14 @@ const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
 
+// MCP clients (Claude Desktop, etc.) are external — CORS must be permissive.
+// The daemon is already protected by requiring a DreamFactory session token.
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Internal API key for PHP proxy -> daemon communication
+const INTERNAL_API_KEY = process.env.MCP_INTERNAL_KEY ?? '';
 
 /**
  * Send 401 Unauthorized response
@@ -46,12 +51,12 @@ function sendUnauthorized(res: Response): void {
 const sessionManager = new SessionService();
 const sessions = new Map<string, SessionEntry>();
 
-// Health check endpoints
+// Health check endpoints — do not expose session IDs
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     timestamp: Math.floor(Date.now() / 1000),
-    sessions: Array.from(sessions.keys())
+    active_sessions: sessions.size,
   });
 });
 
@@ -59,12 +64,15 @@ app.get('/ping', (_req, res) => {
   res.json({
     status: 'ok',
     timestamp: Math.floor(Date.now() / 1000),
-    sessions: Array.from(sessions.keys())
+    active_sessions: sessions.size,
   });
 });
 
-// Cache management endpoint
+// Cache management endpoint — requires internal API key from PHP proxy
 app.post('/mcp/cache/clear', (req, res) => {
+  if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
+    return res.status(403).json({ error: 'Forbidden: invalid internal key' });
+  }
   const service = typeof req.body === 'object' ? req.body?.service : undefined;
   if (service) {
     for (const [sessionId, entry] of sessions.entries()) {
@@ -170,24 +178,8 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       return;
     }
 
-    if (apiConfigs.length === 0) {
-      res.status(400).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32000,
-          message: 'No supported services found in DreamFactory'
-        },
-        id: null
-      });
-      return;
-    }
-
-    const dbCount = apiConfigs.filter(c => c.category === 'database').length;
-    const fileCount = apiConfigs.filter(c => c.category === 'file').length;
-    console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file`);
-    console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
-
     // Parse disabled tools and custom tools from service config (body envelope or header fallback)
+    // This must happen before the service check so custom-tools-only roles are not rejected.
     let disabledTools: Set<string> | undefined;
     let customTools: CustomToolDefinition[] | undefined;
     const mcpConfigData = mcpConfig ?? (() => {
@@ -218,11 +210,33 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
             parameters: Array.isArray(t.parameters) ? t.parameters : [],
             headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
             function: t.function ?? undefined,
+            secrets: t.secrets && typeof t.secrets === 'object' && !Array.isArray(t.secrets) ? t.secrets : undefined,
           }));
         if (customTools.length > 0) {
           console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
         }
       }
+    }
+
+    const hasCustomTools = customTools !== undefined && customTools.length > 0;
+
+    if (apiConfigs.length === 0 && !hasCustomTools) {
+      res.status(400).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: 'No supported services found in DreamFactory'
+        },
+        id: null
+      });
+      return;
+    }
+
+    const dbCount = apiConfigs.filter(c => c.category === 'database').length;
+    const fileCount = apiConfigs.filter(c => c.category === 'file').length;
+    console.log(`Discovered ${apiConfigs.length} service(s): ${dbCount} database, ${fileCount} file${hasCustomTools ? `, ${customTools!.length} custom tool(s)` : ''}`);
+    if (apiConfigs.length > 0) {
+      console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
     }
 
     const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools);
@@ -248,7 +262,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
           sessionManager.clearConfig(sessionId);
         }
       },
-      enableJsonResponse: false
+      enableJsonResponse: true
     });
 
     transport.onclose = () => {

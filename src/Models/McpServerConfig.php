@@ -17,6 +17,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'oauth_client_id',
         'oauth_client_secret',
         'custom_login_url',
+        'auto_oauth_service',
         'disabled_tools',
     ];
 
@@ -54,6 +55,10 @@ class McpServerConfig extends BaseServiceConfigModel
 
     /**
      * Override to handle custom_tools sync on save.
+     *
+     * On initial service create, $id is null here (the service has not been
+     * inserted yet). The sync runs from storeConfig() below, which fires
+     * after the service row is created with a real id.
      */
     public static function setConfig($id, $config, $local_config = null)
     {
@@ -62,12 +67,36 @@ class McpServerConfig extends BaseServiceConfigModel
 
         parent::setConfig($id, $config, $local_config);
 
-        if (is_array($customTools)) {
-            try {
-                McpCustomTool::syncToolsForService($id, $customTools);
-            } catch (\Exception $e) {
-                // Table may not exist yet if migration hasn't run
-            }
+        if ($id && is_array($customTools)) {
+            self::syncCustomTools((int) $id, $customTools);
+        }
+    }
+
+    /**
+     * Override to sync custom_tools when a new service's config is stored
+     * for the first time (post-insert, when the service id is known).
+     */
+    public static function storeConfig($id, $config)
+    {
+        $customTools = $config['custom_tools'] ?? null;
+        unset($config['custom_tools']);
+
+        parent::storeConfig($id, $config);
+
+        if ($id && is_array($customTools)) {
+            self::syncCustomTools((int) $id, $customTools);
+        }
+    }
+
+    private static function syncCustomTools(int $serviceId, array $customTools): void
+    {
+        try {
+            McpCustomTool::syncToolsForService($serviceId, $customTools);
+        } catch (\Throwable $e) {
+            \Log::error('Failed to sync MCP custom tools', [
+                'service_id' => $serviceId,
+                'error'      => $e->getMessage(),
+            ]);
         }
     }
 
@@ -109,6 +138,11 @@ class McpServerConfig extends BaseServiceConfigModel
             case 'custom_login_url':
                 $schema['label'] = 'Custom Login URL';
                 $schema['description'] = 'Optional custom login page URL. If set, users will be redirected here instead of the default DreamFactory login. Must use HTTPS.';
+                $schema['type'] = 'text';
+                break;
+            case 'auto_oauth_service':
+                $schema['label'] = 'Auto OAuth Service';
+                $schema['description'] = 'Optional name of a DreamFactory OAuth service (e.g. "google"). If set, the MCP authorization flow will redirect directly to that OAuth provider, skipping the login page entirely. Takes precedence over Custom Login URL.';
                 $schema['type'] = 'text';
                 break;
         }

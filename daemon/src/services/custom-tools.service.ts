@@ -94,9 +94,9 @@ export async function executeFunctionToolRequest(
     // Wrap the body in an async IIFE so that `await` is valid inside user-written formulas.
     // The outer (sync) function returns the Promise produced by the IIFE; Promise.race then
     // resolves or rejects it against the timeout.
-    const fn = new Function(...paramNames, `return (async () => { ${functionBody} })()`);
+    const fn = new Function('secrets', ...paramNames, `return (async () => { ${functionBody} })()`);
     const result = await Promise.race([
-      fn(...paramValues) as Promise<unknown>,
+      fn(toolDef.secrets ?? {}, ...paramValues) as Promise<unknown>,
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Function execution timed out after 30s')), FUNCTION_TIMEOUT_MS)
       ),

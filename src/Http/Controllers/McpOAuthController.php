@@ -221,9 +221,19 @@ class McpOAuthController extends Controller
             ]);
         }
 
-        // Validate redirect URI
+        // Validate redirect URI is present and registered with the client
         if (empty($redirectUri)) {
             return $this->errorResponse('invalid_request', 'Missing redirect_uri');
+        }
+
+        $registeredUris = $client->redirect_uris ?? [];
+        if (!empty($registeredUris) && !in_array($redirectUri, $registeredUris, true)) {
+            Log::warning('MCP OAuth: redirect_uri not registered', [
+                'provided' => $redirectUri,
+                'registered' => $registeredUris,
+                'service' => $mcpService,
+            ]);
+            return $this->errorResponse('invalid_request', 'redirect_uri is not registered for this client');
         }
 
         // ============================================================
@@ -283,6 +293,26 @@ class McpOAuthController extends Controller
         ], now()->addMinutes(10));
 
         $baseUrl = $this->getBaseUrl($request);
+
+        // ============================================================
+        // Auto OAuth service: skip the login page entirely and kick off
+        // a DreamFactory OAuth provider directly. The provider redirects
+        // back to /mcp/{service}/oauth-complete with ?session_token=... ,
+        // and we pre-seed ?state=<authState> so oauthComplete can look up
+        // the pending record it just cached above.
+        // ============================================================
+        if (!empty($serviceConfig['auto_oauth_service'])) {
+            $oauthServiceName = strtolower($serviceConfig['auto_oauth_service']);
+            $redirectBack = "{$baseUrl}/mcp/{$mcpService}/oauth-complete?state=" . urlencode($authState);
+            $dfOAuthUrl = "{$baseUrl}/api/v2/user/session?service={$oauthServiceName}&redirect=" . urlencode($redirectBack);
+
+            Log::info('MCP OAuth: Redirecting to auto OAuth service', [
+                'oauth_service' => $oauthServiceName,
+                'service' => $mcpService,
+            ]);
+
+            return redirect($dfOAuthUrl);
+        }
 
         // ============================================================
         // Check for custom login URL configuration
@@ -931,17 +961,16 @@ class McpOAuthController extends Controller
      */
     private function getBaseUrl(Request $request): string
     {
-        $scheme = $request->header('X-Forwarded-Proto', $request->getScheme());
-        $host = $request->header('X-Forwarded-Host', $request->getHost());
-
-        // For proxied requests, don't include port (proxy handles it)
-        // Only include port for direct requests with non-standard ports
-        if ($request->header('X-Forwarded-Proto')) {
-            // Proxied request - don't add port
-            return "{$scheme}://{$host}";
+        // Prefer configured APP_URL to prevent host header injection attacks.
+        // Only fall back to request headers for local/dev environments.
+        $configuredUrl = rtrim(config('app.url', ''), '/');
+        if (!empty($configuredUrl) && $configuredUrl !== 'http://localhost') {
+            return $configuredUrl;
         }
 
-        // Direct request - check if we need to include port
+        $scheme = $request->getScheme();
+        $host = $request->getHost();
+
         $port = $request->getPort();
         $url = "{$scheme}://{$host}";
         if (($scheme === 'http' && $port != 80) || ($scheme === 'https' && $port != 443)) {

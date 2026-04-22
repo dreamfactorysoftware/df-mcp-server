@@ -4,6 +4,7 @@ namespace DreamFactory\Core\McpServer\Http\Controllers;
 
 use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
+use DreamFactory\Core\McpServer\Models\McpCustomTool;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Utility\Session as SessionUtilities;
@@ -64,6 +65,33 @@ class McpStreamController extends Controller
         $appId = $config['app_id'] ?? null;
         SessionUtilities::setSessionData($appId, $token->user_id);
 
+        // Resolve lookup placeholders in custom tool configs (headers, URLs, parameters).
+        // Must run AFTER setSessionData() so the user's lookup maps are populated.
+        // Function bodies are excluded — they receive secrets via the secrets object below.
+        if (!empty($config['custom_tools']) && is_array($config['custom_tools'])) {
+            $functionBodies = [];
+            foreach ($config['custom_tools'] as $i => $tool) {
+                if (isset($tool['function'])) {
+                    $functionBodies[$i] = $tool['function'];
+                    unset($config['custom_tools'][$i]['function']);
+                }
+            }
+            SessionUtilities::replaceLookups($config['custom_tools'], true);
+            foreach ($functionBodies as $i => $body) {
+                $config['custom_tools'][$i]['function'] = $body;
+            }
+
+            // Resolve SCM-linked function bodies from GitHub/GitLab/Bitbucket.
+            // Must run before extractFunctionSecrets so secrets.KEY references
+            // in GitHub-hosted code are found and resolved.
+            $this->resolveScmFunctionBodies($config['custom_tools']);
+
+            // Scan function bodies for secrets.KEY references, resolve the lookup
+            // values, and attach a secrets map so the daemon can inject them at runtime
+            // without the values ever appearing in the JS source string.
+            $this->extractFunctionSecrets($config['custom_tools']);
+        }
+
         // Determine scheme - prioritize X-Forwarded-Proto for proxies
         $scheme = $request->header('X-Forwarded-Proto');
         if (empty($scheme)) {
@@ -98,6 +126,67 @@ class McpStreamController extends Controller
 
         $client = new McpDaemonClient();
         return $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
+    }
+
+    /**
+     * Scan function bodies for secrets.KEY references, resolve the corresponding
+     * lookup values, and attach a secrets map to each tool definition.
+     *
+     * Only secrets actually referenced in the function body are included
+     * (principle of least privilege). Unresolved references are silently
+     * omitted — secrets.MISSING evaluates to undefined in JS.
+     */
+    private function extractFunctionSecrets(array &$customTools): void
+    {
+        foreach ($customTools as &$tool) {
+            if (empty($tool['function']) || !is_string($tool['function'])) {
+                continue;
+            }
+
+            $secrets = [];
+            if (preg_match_all('/secrets\.(\w+)/', $tool['function'], $matches)) {
+                foreach ($matches[1] as $key) {
+                    $value = null;
+                    if (SessionUtilities::getLookupValue($key, $value, true)) {
+                        $secrets[$key] = $value;
+                    }
+                }
+            }
+
+            if (!empty($secrets)) {
+                $tool['secrets'] = $secrets;
+            }
+        }
+    }
+
+    /**
+     * Resolve function bodies from linked SCM services for function-type custom tools.
+     *
+     * For each tool with a storage_service_id, fetches the function body from the
+     * configured GitHub/GitLab/Bitbucket service and overwrites the function field.
+     * If the fetch fails, the existing inline function body (if any) is kept as fallback.
+     */
+    private function resolveScmFunctionBodies(array &$customTools): void
+    {
+        foreach ($customTools as &$tool) {
+            $toolType = $tool['tool_type'] ?? 'api';
+            $storageServiceId = $tool['storage_service_id'] ?? null;
+
+            if ($toolType !== 'function' || empty($storageServiceId)) {
+                continue;
+            }
+
+            $content = McpCustomTool::resolveScmFunctionBody(
+                $storageServiceId,
+                $tool['scm_repository'] ?? null,
+                $tool['scm_reference'] ?? null,
+                $tool['storage_path'] ?? null
+            );
+
+            if ($content !== null) {
+                $tool['function'] = $content;
+            }
+        }
     }
 
     /**
