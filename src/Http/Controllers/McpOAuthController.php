@@ -221,9 +221,19 @@ class McpOAuthController extends Controller
             ]);
         }
 
-        // Validate redirect URI
+        // Validate redirect URI is present and registered with the client
         if (empty($redirectUri)) {
             return $this->errorResponse('invalid_request', 'Missing redirect_uri');
+        }
+
+        $registeredUris = $client->redirect_uris ?? [];
+        if (!empty($registeredUris) && !in_array($redirectUri, $registeredUris, true)) {
+            Log::warning('MCP OAuth: redirect_uri not registered', [
+                'provided' => $redirectUri,
+                'registered' => $registeredUris,
+                'service' => $mcpService,
+            ]);
+            return $this->errorResponse('invalid_request', 'redirect_uri is not registered for this client');
         }
 
         // ============================================================
@@ -951,17 +961,16 @@ class McpOAuthController extends Controller
      */
     private function getBaseUrl(Request $request): string
     {
-        $scheme = $request->header('X-Forwarded-Proto', $request->getScheme());
-        $host = $request->header('X-Forwarded-Host', $request->getHost());
-
-        // For proxied requests, don't include port (proxy handles it)
-        // Only include port for direct requests with non-standard ports
-        if ($request->header('X-Forwarded-Proto')) {
-            // Proxied request - don't add port
-            return "{$scheme}://{$host}";
+        // Prefer configured APP_URL to prevent host header injection attacks.
+        // Only fall back to request headers for local/dev environments.
+        $configuredUrl = rtrim(config('app.url', ''), '/');
+        if (!empty($configuredUrl) && $configuredUrl !== 'http://localhost') {
+            return $configuredUrl;
         }
 
-        // Direct request - check if we need to include port
+        $scheme = $request->getScheme();
+        $host = $request->getHost();
+
         $port = $request->getPort();
         $url = "{$scheme}://{$host}";
         if (($scheme === 'http' && $port != 80) || ($scheme === 'https' && $port != 443)) {
