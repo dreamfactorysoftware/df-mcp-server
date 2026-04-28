@@ -127,22 +127,22 @@ class McpServerConfig extends BaseServiceConfigModel
         switch ($schema['name']) {
             case 'oauth_client_id':
                 $schema['label'] = 'OAuth Client ID';
-                $schema['description'] = 'OAuth Client ID for authentication.';
+                $schema['description'] = 'Auto-generated public identifier this MCP service registers itself with. External MCP clients (Claude Desktop, Cursor) discover it via the OAuth metadata endpoint — you normally don\'t edit this. Regenerate if it leaks.';
                 $schema['default'] = self::generateOAuthClientId();
                 break;
             case 'oauth_client_secret':
                 $schema['label'] = 'OAuth Client Secret';
-                $schema['description'] = 'OAuth Client Secret for authentication.';
+                $schema['description'] = 'Auto-generated secret paired with the Client ID. Treat like a password — never commit to source control. Regenerate to invalidate all currently-issued tokens.';
                 $schema['default'] = self::generateOAuthClientSecret();
                 break;
             case 'custom_login_url':
                 $schema['label'] = 'Custom Login URL';
-                $schema['description'] = 'Optional custom login page URL. If set, users will be redirected here instead of the default DreamFactory login. Must use HTTPS.';
+                $schema['description'] = 'Optional. Send users to your own branded login page during the MCP OAuth flow instead of DreamFactory\'s default. The page must call DF\'s session-create endpoint and post back; HTTPS required (localhost is exempt for dev).';
                 $schema['type'] = 'text';
                 break;
             case 'auto_oauth_service':
                 $schema['label'] = 'Auto OAuth Service';
-                $schema['description'] = 'Optional name of a DreamFactory OAuth service (e.g. "google"). If set, the MCP authorization flow will redirect directly to that OAuth provider, skipping the login page entirely. Takes precedence over Custom Login URL.';
+                $schema['description'] = 'Optional. Name of a DF OAuth service (e.g. "google", "okta"). When set, MCP clients skip the login page entirely and go straight to that provider. Takes precedence over Custom Login URL. Use this for SSO-only environments.';
                 $schema['type'] = 'text';
                 break;
         }
