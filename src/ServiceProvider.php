@@ -51,6 +51,12 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
         $this->loadRoutesFrom(__DIR__ . '/../routes/mcp.php');
         $this->loadViewsFrom(__DIR__ . '/../resources/views', 'mcp');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \DreamFactory\Core\McpServer\Commands\PruneRequestLogs::class,
+            ]);
+        }
     }
 
     /**
