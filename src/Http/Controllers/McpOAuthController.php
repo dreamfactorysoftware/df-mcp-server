@@ -208,6 +208,27 @@ class McpOAuthController extends Controller
             return $this->errorResponse('invalid_client', 'Invalid client_id');
         }
 
+        // Validate redirect URI is present BEFORE any client lookup/creation —
+        // otherwise an attacker can race the auto-create path to register
+        // their own redirect_uri before the legit client.
+        if (empty($redirectUri)) {
+            return $this->errorResponse('invalid_request', 'Missing redirect_uri');
+        }
+
+        // Restrict scheme to http/https. Without this, javascript:, data:,
+        // file://, and other schemes would be accepted as long as they passed
+        // the registered-list check below.
+        $parsed = parse_url($redirectUri);
+        $scheme = $parsed['scheme'] ?? '';
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            Log::warning('MCP OAuth: redirect_uri rejected (unsupported scheme)', [
+                'provided' => $redirectUri,
+                'scheme'   => $scheme,
+                'service'  => $mcpService,
+            ]);
+            return $this->errorResponse('invalid_request', 'redirect_uri scheme must be http or https');
+        }
+
         // Ensure client exists in the OAuth clients table (for foreign key constraints)
         $client = McpOAuthClient::findByClientId($clientId);
         if (!$client) {
@@ -216,22 +237,20 @@ class McpOAuthController extends Controller
                 'client_id' => $clientId,
                 'client_secret' => $serviceConfig['oauth_client_secret'],
                 'name' => $mcpService,
-                'redirect_uris' => $redirectUri ? [$redirectUri] : [],
+                'redirect_uris' => [$redirectUri],
                 'is_active' => true,
             ]);
         }
 
-        // Validate redirect URI is present and registered with the client
-        if (empty($redirectUri)) {
-            return $this->errorResponse('invalid_request', 'Missing redirect_uri');
-        }
-
-        $registeredUris = $client->redirect_uris ?? [];
-        if (!empty($registeredUris) && !in_array($redirectUri, $registeredUris, true)) {
+        // Delegate to the model's strict origin-matching helper. It handles
+        // the empty-registered-list case (returns true to allow first-time
+        // dynamic registration) but rejects any redirect_uri whose origin
+        // does not exactly match a registered entry.
+        if (!$client->isValidRedirectUri($redirectUri)) {
             Log::warning('MCP OAuth: redirect_uri not registered', [
-                'provided' => $redirectUri,
-                'registered' => $registeredUris,
-                'service' => $mcpService,
+                'provided'   => $redirectUri,
+                'registered' => $client->redirect_uris ?? [],
+                'service'    => $mcpService,
             ]);
             return $this->errorResponse('invalid_request', 'redirect_uri is not registered for this client');
         }
@@ -270,6 +289,8 @@ class McpOAuthController extends Controller
 
             return response()->view('mcp::mcp-auth-success', [
                 'redirectUrl' => $redirectUrl,
+            ])->withHeaders([
+                'Referrer-Policy' => 'no-referrer',
             ]);
         }
 
@@ -423,6 +444,11 @@ class McpOAuthController extends Controller
 
         return response()->view('mcp::mcp-auth-success', [
             'redirectUrl' => $redirectUrl,
+        ])->withHeaders([
+            // session_token may have arrived via URL query (redirect target).
+            // Prevent the URL — and any embedded token — from leaking via
+            // Referer on outbound navigation from this success page.
+            'Referrer-Policy' => 'no-referrer',
         ]);
     }
 
@@ -505,6 +531,11 @@ class McpOAuthController extends Controller
 
         return response()->view('mcp::mcp-auth-success', [
             'redirectUrl' => $redirectUrl,
+        ])->withHeaders([
+            // session_token may have arrived via URL query (redirect target).
+            // Prevent the URL — and any embedded token — from leaking via
+            // Referer on outbound navigation from this success page.
+            'Referrer-Policy' => 'no-referrer',
         ]);
     }
 
@@ -576,6 +607,11 @@ class McpOAuthController extends Controller
 
         return response()->view('mcp::mcp-auth-success', [
             'redirectUrl' => $redirectUrl,
+        ])->withHeaders([
+            // session_token may have arrived via URL query (redirect target).
+            // Prevent the URL — and any embedded token — from leaking via
+            // Referer on outbound navigation from this success page.
+            'Referrer-Policy' => 'no-referrer',
         ]);
     }
 
@@ -597,6 +633,59 @@ class McpOAuthController extends Controller
             return response()->json([
                 'error' => 'invalid_request',
                 'error_description' => 'Missing session_token',
+            ], 400);
+        }
+
+        // Reject empty / non-http(s) redirect_uri before any code is minted.
+        // Without this an attacker with a valid DF session can mint an
+        // authorization code bound to any URL (open redirect / code theft).
+        if (empty($redirectUri)) {
+            return response()->json([
+                'error' => 'invalid_request',
+                'error_description' => 'Missing redirect_uri',
+            ], 400);
+        }
+        $parsed = parse_url($redirectUri);
+        $scheme = $parsed['scheme'] ?? '';
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            Log::warning('MCP OAuth df-callback: redirect_uri rejected (unsupported scheme)', [
+                'provided' => $redirectUri,
+                'scheme'   => $scheme,
+                'service'  => $mcpService,
+            ]);
+            return response()->json([
+                'error' => 'invalid_request',
+                'error_description' => 'redirect_uri scheme must be http or https',
+            ], 400);
+        }
+
+        // Resolve client_id and verify the redirect_uri origin is registered.
+        if (empty($clientId)) {
+            return response()->json([
+                'error' => 'invalid_request',
+                'error_description' => 'Missing client_id',
+            ], 400);
+        }
+        $client = McpOAuthClient::findByClientId($clientId);
+        if (!$client) {
+            Log::warning('MCP OAuth df-callback: unknown client_id', [
+                'client_id' => $clientId,
+                'service'   => $mcpService,
+            ]);
+            return response()->json([
+                'error' => 'invalid_client',
+                'error_description' => 'Unknown client_id',
+            ], 400);
+        }
+        if (!$client->isValidRedirectUri($redirectUri)) {
+            Log::warning('MCP OAuth df-callback: redirect_uri not registered', [
+                'provided'   => $redirectUri,
+                'registered' => $client->redirect_uris ?? [],
+                'service'    => $mcpService,
+            ]);
+            return response()->json([
+                'error' => 'invalid_request',
+                'error_description' => 'redirect_uri is not registered for this client',
             ], 400);
         }
 
