@@ -6,6 +6,7 @@ use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
 use DreamFactory\Core\McpServer\Models\McpCustomTool;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
+use DreamFactory\Core\McpServer\Utility\RequestLogger;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Utility\Session as SessionUtilities;
 use Illuminate\Http\Request;
@@ -43,9 +44,13 @@ class McpStreamController extends Controller
 
     private function processMcpRequest(Request $request, string $mcpService)
     {
+        $startNs = hrtime(true);
+
         // Validate Bearer token
         $token = $this->validateBearerToken($request);
         if ($token instanceof \Illuminate\Http\JsonResponse) {
+            // Don't audit-log failed token validations — service_id can't be
+            // attributed to a session and the noise dwarfs the signal.
             return $token;
         }
 
@@ -54,6 +59,7 @@ class McpStreamController extends Controller
         // Get service configuration from request (set by middleware)
         $config = $request->attributes->get('mcp_service_config');
         if (!$config) {
+            try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'error', 'MCP service not found'); } catch (\Throwable $e) { /* never break the response on audit failure */ }
             return response()->json([
                 'error' => 'MCP service not found',
                 'service' => $mcpService,
@@ -115,6 +121,7 @@ class McpStreamController extends Controller
         }
 
         if (!config('mcp.daemon.enabled', false)) {
+            try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'error', 'MCP daemon disabled'); } catch (\Throwable $ignored) { /* never break the response */ }
             return response()->json([
                 'error' => 'MCP daemon is disabled. Please set MCP_DAEMON_ENABLED=true and run the Node daemon.'
             ], 503);
@@ -125,7 +132,37 @@ class McpStreamController extends Controller
         $availableServices = $this->getAvailableServices();
 
         $client = new McpDaemonClient();
-        return $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
+        try {
+            $response = $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
+            try {
+                $bytesOut = self::responseBytes($response);
+                $status = $response->getStatusCode() >= 400 ? 'error' : 'success';
+                RequestLogger::log($mcpService, $request, $token, $startNs, $bytesOut, $status);
+            } catch (\Throwable $ignored) {
+                /* audit logging must never break the response */
+            }
+            return $response;
+        } catch (\Throwable $e) {
+            try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'error', $e->getMessage()); } catch (\Throwable $ignored) { /* belt and suspenders */ }
+            throw $e;
+        }
+    }
+
+    /**
+     * Best-effort byte count for the proxied response. Streaming responses
+     * (SSE GETs) return 0 — exact byte counting would require wrapping the
+     * stream, which isn't worth the complexity for an audit log.
+     */
+    private static function responseBytes($response): int
+    {
+        if ($response instanceof \Symfony\Component\HttpFoundation\StreamedResponse) {
+            return 0;
+        }
+        if (method_exists($response, 'getContent')) {
+            $content = $response->getContent();
+            return is_string($content) ? strlen($content) : 0;
+        }
+        return 0;
     }
 
     /**
