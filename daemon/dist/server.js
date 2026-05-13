@@ -94,6 +94,11 @@ app.all('/mcp/:serviceName', async (req, res) => {
     }
     try {
         if (existingSession) {
+            // Evict stale SSE stream on GET reconnect to prevent 409 "Only one SSE stream"
+            // The previous stream may be orphaned if the client disconnected uncleanly
+            if (req.method === 'GET') {
+                existingSession.transport.closeStandaloneSSEStream?.();
+            }
             updateSessionConfigFromHeaders(req, sessionManager, sessionIdHeader);
             await existingSession.transport.handleRequest(req, res, req.body);
             return;
