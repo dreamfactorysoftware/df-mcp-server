@@ -98,6 +98,21 @@ app.post('/mcp/cache/clear', (req, res) => {
 // ============================================================================
 
 app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
+  // Shared-secret check: when MCP_INTERNAL_KEY is configured, only the PHP
+  // proxy (which injects this header after RBAC) is allowed through.
+  // Without this gate any local process on 127.0.0.1 can speak to the
+  // daemon directly with a valid session token, bypassing PHP-side RBAC.
+  if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
+    return res.status(403).json({
+      jsonrpc: '2.0',
+      id: null,
+      error: {
+        code: -32001,
+        message: 'Forbidden: invalid internal key',
+      },
+    });
+  }
+
   const serviceName = req.params.serviceName as string;
   const sessionIdHeader = getSessionId(req);
   const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;

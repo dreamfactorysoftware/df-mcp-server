@@ -12,4 +12,10 @@ return [
         'port' => env('MCP_DAEMON_PORT', 8006),
         'internal_base_url' => env('MCP_INTERNAL_BASE_URL'),
     ],
+
+    // Per-tool-call audit log (mcp_request_log table)
+    'audit_logging' => [
+        'enabled'        => env('MCP_AUDIT_LOGGING_ENABLED', true),
+        'retention_days' => (int) env('MCP_AUDIT_RETENTION_DAYS', 90),
+    ],
 ];

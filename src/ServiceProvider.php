@@ -2,84 +2,103 @@
 
 namespace DreamFactory\Core\McpServer;
 
+use DreamFactory\Core\Enums\ServiceTypeGroups;
+use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpUsageController;
+use DreamFactory\Core\McpServer\Http\Middleware\McpStreamMiddleware;
 use DreamFactory\Core\McpServer\Models\McpServerConfig;
 use DreamFactory\Core\McpServer\Services\Mcp;
-use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Services\ServiceManager;
 use DreamFactory\Core\Services\ServiceType;
+use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Support\Facades\Route;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
 {
-    /**
-     * Track if middleware has been registered to prevent duplicates
-     */
+    /** Guard against double-registration when this provider is resolved twice. */
     private static bool $middlewareRegistered = false;
 
-    /**
-     * Register services.
-     */
     public function register(): void
     {
-        // Merge config
-        $this->mergeConfigFrom(
-            __DIR__ . '/../config/mcp.php',
-            'mcp'
-        );
+        $this->mergeConfigFrom(__DIR__ . '/../config/mcp.php', 'mcp');
 
-        // Add our scripting service types.
         $this->app->resolving('df.service', function (ServiceManager $df) {
-            $df->addType(
-                new ServiceType(
-                    [
-                        'name'            => 'mcp',
-                        'label'           => 'MCP Server Service',
-                        'description'     => 'MCP Server service for Model Context Protocol.',
-                        'group'           => ServiceTypeGroups::MCP,
-                        'config_handler'  => McpServerConfig::class,
-                        'factory'         => function ($config) {
-                            return new Mcp($config);
-                        },
-                    ]));
+            $df->addType(new ServiceType([
+                'name'           => 'mcp',
+                'label'          => 'MCP Server Service',
+                'description'    => 'MCP Server service for Model Context Protocol.',
+                'group'          => ServiceTypeGroups::MCP,
+                'config_handler' => McpServerConfig::class,
+                'factory'        => function ($config) {
+                    return new Mcp($config);
+                },
+            ]));
         });
 
-        // Register middleware in register() to ensure it's registered as early as possible
-        // This is critical for GET requests which DreamFactory intercepts before boot()
-        if (!self::$middlewareRegistered) {
-            $this->app->booting(function () {
-                if (self::$middlewareRegistered) {
-                    return;
-                }
-                try {
-                    $kernel = $this->app->make(\Illuminate\Contracts\Http\Kernel::class);
-                    if (method_exists($kernel, 'prependMiddleware')) {
-                        $kernel->prependMiddleware(\DreamFactory\Core\McpServer\Http\Middleware\McpStreamMiddleware::class);
-                        self::$middlewareRegistered = true;
-                    } elseif (method_exists($kernel, 'pushMiddleware')) {
-                        $kernel->pushMiddleware(\DreamFactory\Core\McpServer\Http\Middleware\McpStreamMiddleware::class);
-                        self::$middlewareRegistered = true;
-                    }
-                } catch (\Exception $e) {
-                    \Log::warning('Failed to register MCP stream middleware', [
-                        'error' => $e->getMessage(),
-                    ]);
-                }
-            });
+        // Register internal routes during booting (before normal boot()) so
+        // they take priority over df-file's greedy {storage}/{path} catch-all,
+        // which has an empty prefix and would otherwise swallow the 2-segment
+        // GET /_internal/ai/mcp-usage. Same pattern as df-ai's internal
+        // routes.
+        $this->app->booting(function (): void {
+            $this->registerInternalRoutes();
+        });
+
+        $this->registerStreamMiddleware();
+    }
+
+    public function boot(): void
+    {
+        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
+        $this->loadRoutesFrom(__DIR__ . '/../routes/mcp.php');
+        $this->loadViewsFrom(__DIR__ . '/../resources/views', 'mcp');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \DreamFactory\Core\McpServer\Commands\PruneRequestLogs::class,
+            ]);
         }
     }
 
     /**
-     * Bootstrap services.
+     * Powers the MCP section of the AI Gateway dashboard. Handler lives in
+     * InternalMcpUsageController so it can be unit-tested in isolation.
      */
-    public function boot(): void
+    private function registerInternalRoutes(): void
     {
-        // Load migrations
-        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
+        Route::middleware('df.auth_check')->get(
+            '_internal/ai/mcp-usage',
+            [InternalMcpUsageController::class, 'usage']
+        );
+    }
 
-        // Load MCP routes
-        $this->loadRoutesFrom(__DIR__ . '/../routes/mcp.php');
-
-        // Load views
-        $this->loadViewsFrom(__DIR__ . '/../resources/views', 'mcp');
+    /**
+     * Prepend McpStreamMiddleware globally so it can intercept /mcp/* requests
+     * before DreamFactory's API routing. Kicked off via $this->app->booting()
+     * because the HTTP kernel isn't available during register().
+     */
+    private function registerStreamMiddleware(): void
+    {
+        if (self::$middlewareRegistered) {
+            return;
+        }
+        $this->app->booting(function () {
+            if (self::$middlewareRegistered) {
+                return;
+            }
+            try {
+                $kernel = $this->app->make(Kernel::class);
+                if (method_exists($kernel, 'prependMiddleware')) {
+                    $kernel->prependMiddleware(McpStreamMiddleware::class);
+                    self::$middlewareRegistered = true;
+                } elseif (method_exists($kernel, 'pushMiddleware')) {
+                    $kernel->pushMiddleware(McpStreamMiddleware::class);
+                    self::$middlewareRegistered = true;
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('Failed to register MCP stream middleware', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        });
     }
 }
-
