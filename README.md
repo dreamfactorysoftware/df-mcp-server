@@ -40,6 +40,10 @@ The Laravel package proxies every MCP request through a persistent Node.js daemo
 
 Once the daemon is online, the MCP routes in DreamFactory automatically forward traffic to it.
 
+### Configuration
+
+Set `APP_URL` in your DreamFactory `.env` to the **external URL clients use to reach DreamFactory** — the public address (e.g. `https://df.example.com`), **not** `http://localhost`. The MCP server uses `APP_URL` to build its OAuth discovery and callback URLs and to validate session tokens server-side. If it is left as `localhost` (or any address clients can't reach), MCP OAuth fails. After changing it, run `php artisan config:clear`.
+
 ### Authentication
 
 The MCP service uses OAuth-based authentication. Users must authenticate with DreamFactory via OAuth to obtain a session token. The Laravel controller validates requests and passes the session token to the daemon via the `X-DreamFactory-Session-Token` header.
