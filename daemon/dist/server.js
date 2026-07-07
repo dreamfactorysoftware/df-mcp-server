@@ -7,9 +7,13 @@ import { createServer, getSessionId, parseConfigFromHeaders, updateSessionConfig
 const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
+// MCP clients (Claude Desktop, etc.) are external — CORS must be permissive.
+// The daemon is already protected by requiring a DreamFactory session token.
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+// Internal API key for PHP proxy -> daemon communication
+const INTERNAL_API_KEY = process.env.MCP_INTERNAL_KEY ?? '';
 /**
  * Send 401 Unauthorized response
  */
@@ -25,23 +29,26 @@ function sendUnauthorized(res) {
 }
 const sessionManager = new SessionService();
 const sessions = new Map();
-// Health check endpoints
+// Health check endpoints — do not expose session IDs
 app.get('/health', (_req, res) => {
     res.json({
         status: 'ok',
         timestamp: Math.floor(Date.now() / 1000),
-        sessions: Array.from(sessions.keys())
+        active_sessions: sessions.size,
     });
 });
 app.get('/ping', (_req, res) => {
     res.json({
         status: 'ok',
         timestamp: Math.floor(Date.now() / 1000),
-        sessions: Array.from(sessions.keys())
+        active_sessions: sessions.size,
     });
 });
-// Cache management endpoint
+// Cache management endpoint — requires internal API key from PHP proxy
 app.post('/mcp/cache/clear', (req, res) => {
+    if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
+        return res.status(403).json({ error: 'Forbidden: invalid internal key' });
+    }
     const service = typeof req.body === 'object' ? req.body?.service : undefined;
     if (service) {
         for (const [sessionId, entry] of sessions.entries()) {
@@ -66,6 +73,20 @@ app.post('/mcp/cache/clear', (req, res) => {
 // MCP Protocol Endpoint - Requires DreamFactory session token from PHP
 // ============================================================================
 app.all('/mcp/:serviceName', async (req, res) => {
+    // Shared-secret check: when MCP_INTERNAL_KEY is configured, only the PHP
+    // proxy (which injects this header after RBAC) is allowed through.
+    // Without this gate any local process on 127.0.0.1 can speak to the
+    // daemon directly with a valid session token, bypassing PHP-side RBAC.
+    if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
+        return res.status(403).json({
+            jsonrpc: '2.0',
+            id: null,
+            error: {
+                code: -32001,
+                message: 'Forbidden: invalid internal key',
+            },
+        });
+    }
     const serviceName = req.params.serviceName;
     const sessionIdHeader = getSessionId(req);
     const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
@@ -94,6 +115,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
     }
     try {
         if (existingSession) {
+            existingSession.lastAccess = Date.now();
             // Evict stale SSE stream on GET reconnect to prevent 409 "Only one SSE stream"
             // The previous stream may be orphaned if the client disconnected uncleanly
             if (req.method === 'GET') {
@@ -213,7 +235,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
                 return sessionId;
             },
             onsessioninitialized: sessionId => {
-                sessions.set(sessionId, { server, transport, serviceName, apiConfigs });
+                sessions.set(sessionId, { server, transport, serviceName, apiConfigs, lastAccess: Date.now() });
             },
             onsessionclosed: sessionId => {
                 if (sessionId) {
@@ -223,12 +245,14 @@ app.all('/mcp/:serviceName', async (req, res) => {
             },
             enableJsonResponse: true
         });
+        // NOTE: do NOT tear the session down here. With enableJsonResponse the
+        // transport's per-request stream closes right after each JSON POST — if we
+        // deleted the session on that close, a first-party caller that does
+        // initialize and tools/list as separate POSTs would lose its session
+        // between them ("Server not initialized"). Sessions are instead reaped by
+        // idle TTL (see reaper below) and by explicit DELETE (onsessionclosed).
         transport.onclose = () => {
-            const sid = transport.sessionId;
-            if (sid) {
-                sessions.delete(sid);
-                sessionManager.clearConfig(sid);
-            }
+            // intentionally no-op — idle reaper owns cleanup
         };
         await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
@@ -245,6 +269,24 @@ app.all('/mcp/:serviceName', async (req, res) => {
         });
     }
 });
+// Reap MCP sessions that have been idle past the TTL. Sessions are now kept
+// alive across separate JSON POSTs (so first-party stateless callers can do
+// initialize then tools/list), so this reaper — plus explicit DELETE — is what
+// bounds session lifetime.
+const SESSION_IDLE_TTL_MS = 10 * 60 * 1000;
+setInterval(() => {
+    const now = Date.now();
+    for (const [sid, entry] of sessions.entries()) {
+        if (now - entry.lastAccess > SESSION_IDLE_TTL_MS) {
+            try {
+                entry.transport.close?.();
+            }
+            catch { /* already closed */ }
+            sessions.delete(sid);
+            sessionManager.clearConfig(sid);
+        }
+    }
+}, 2 * 60 * 1000).unref?.();
 app.listen(PORT, HOST, () => {
     console.log(`MCP Daemon listening on http://${HOST}:${PORT}`);
     console.log('');
