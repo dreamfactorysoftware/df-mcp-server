@@ -1,3 +1,5 @@
+import { currentTraceId } from './trace.service.js';
+
 export type DFAuthConfig = {
   sessionToken: string;
   apiKey?: string;
@@ -521,6 +523,11 @@ export class DreamFactoryService {
       headers['X-DreamFactory-API-Key'] = auth.apiKey;
     }
 
+    const traceId = currentTraceId();
+    if (traceId) {
+      headers['X-DreamFactory-Trace-Id'] = traceId;
+    }
+
     console.log(`[DreamFactoryService.requestRaw] ${method} ${target.toString()}`);
 
     const response = await fetch(target, {
@@ -564,6 +571,11 @@ export class DreamFactoryService {
 
     if (auth.apiKey) {
       headers['X-DreamFactory-API-Key'] = auth.apiKey;
+    }
+
+    const traceId = currentTraceId();
+    if (traceId) {
+      headers['X-DreamFactory-Trace-Id'] = traceId;
     }
 
     if (body) {

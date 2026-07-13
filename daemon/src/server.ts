@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
+import { runWithTrace } from './services/trace.service.js';
 import {
   createServer,
   getSessionId,
@@ -31,6 +32,12 @@ const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Carry the platform trace id (minted by DF PHP) through every async
+// continuation of this request so DF REST sub-calls can re-attach it.
+app.use((req, _res, next) => {
+  runWithTrace(req.header('x-dreamfactory-trace-id'), next);
+});
 
 // Internal API key for PHP proxy -> daemon communication
 const INTERNAL_API_KEY = process.env.MCP_INTERNAL_KEY ?? '';

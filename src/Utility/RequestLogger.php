@@ -46,7 +46,7 @@ class RequestLogger
 
             McpRequestLog::create([
                 'service_id'    => $serviceId,
-                'user_id'       => $token?->user_id,
+                'user_id'       => $token?->user_id ?? Session::getCurrentUserId(),
                 'role_id'       => Session::getRoleId(),
                 'app_id'        => Session::get('app.id'),
                 'client_id'     => $token?->client_id,
@@ -58,7 +58,7 @@ class RequestLogger
                 'duration_ms'   => $durationMs,
                 'status'        => $status,
                 'error_message' => $errorMessage,
-                'request_id'    => (string) Str::uuid(),
+                'request_id'    => \DreamFactory\Core\Utility\TraceId::get(),
             ]);
         } catch (\Throwable $e) {
             // Audit logging must never break the MCP response path.

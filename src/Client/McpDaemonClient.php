@@ -36,6 +36,9 @@ class McpDaemonClient
                 'X-Mcp-Base-Url' => $baseUrl,
                 'X-DreamFactory-Session-Token' => $dfSessionToken,
                 'Accept' => 'application/json, text/event-stream',
+                // Platform trace id: the daemon re-attaches this to its DF REST
+                // sub-calls so all rows of one MCP action join on one id.
+                \DreamFactory\Core\Utility\TraceId::HEADER => \DreamFactory\Core\Utility\TraceId::get(),
             ];
 
             // Pass API key if configured (required for non-admin users)

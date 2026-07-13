@@ -96,6 +96,7 @@ class Mcp extends BaseRestService
         // The caller (df-ai-chat) speaks bare JSON-RPC with no session
         // handshake, so run the full initialize/initialized/call exchange
         // against the session-stateful daemon and return the final response.
+        $startNs = hrtime(true);
         $result = (new McpDaemonClient())->rpcStateless(
             $this->name,
             is_array($config) ? $config : [],
@@ -104,6 +105,18 @@ class Mcp extends BaseRestService
             $availableServices,
             $jsonRpc,
         );
+
+        // First-party calls get the same audit row as OAuth clients — the
+        // session-authed bridge must not be an invisible path in the ledger.
+        try {
+            $status = is_array($result) && array_key_exists('error', $result) ? 'error' : 'success';
+            $bytesOut = strlen((string) json_encode($result));
+            \DreamFactory\Core\McpServer\Utility\RequestLogger::log(
+                $this->name, $request, null, $startNs, $bytesOut, $status
+            );
+        } catch (\Throwable $ignored) {
+            /* audit logging must never break the response */
+        }
 
         // Return the decoded JSON-RPC object directly — DreamFactory serializes
         // the array as the JSON body. Returning a Laravel Response here would
