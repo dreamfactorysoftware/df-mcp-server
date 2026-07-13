@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerDreamFactoryTools } from '../services/tools.service.js';
 import { registerCustomTools } from '../services/custom-tools.service.js';
+import { registerGlobalTools } from '../services/global-tools.service.js';
 import { DreamFactoryService } from '../services/dreamfactory.service.js';
 import packageJson from '../../package.json' with { type: 'json' };
 export function getSessionId(req) {
@@ -217,6 +218,8 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
     }, {
         instructions
     });
+    // Agent identity/access tools — always available, not service-prefixed.
+    registerGlobalTools(server, sessionManager, disabledTools);
     registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
     if (customTools && customTools.length > 0) {
         registerCustomTools(server, customTools, sessionManager, disabledTools);
