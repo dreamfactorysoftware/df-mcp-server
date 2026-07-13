@@ -79,6 +79,8 @@ export function getAuth(sessionManager: SessionService, sessionId?: string): DFA
 }
 
 export function createToolRegistrar(server: McpServer, disabledTools?: Set<string>) {
+  const plugin = (globalThis as any).__mcpToolPlugin;
+
   return (
     name: string,
     title: string,
@@ -89,13 +91,14 @@ export function createToolRegistrar(server: McpServer, disabledTools?: Set<strin
     if (disabledTools?.has(name)) {
       return;
     }
+    const finalHandler = plugin?.wrapHandler ? plugin.wrapHandler(name, handler) : handler;
     server.registerTool(
       name,
       { title, description, inputSchema: schema },
       async (params, context) => {
         console.log(`[tool] ${name} called`);
         try {
-          const result = await handler(params ?? {}, context ?? {});
+          const result = await finalHandler(params ?? {}, context ?? {});
           console.log(`[tool] ${name} completed, isError=${result?.isError ?? false}`);
           return result;
         } catch (error) {
