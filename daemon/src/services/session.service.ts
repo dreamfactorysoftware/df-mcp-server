@@ -9,6 +9,19 @@ export type SessionConfig = {
 
 export class SessionService {
   private readonly configs = new Map<string, SessionConfig>();
+  private defaultConfig?: SessionConfig;
+
+  /**
+   * Register a config that is returned when no session ID is available.
+   *
+   * Stateless mode issues no session IDs, so tool handlers are invoked with an
+   * undefined sessionId. In that mode a SessionService is created per request
+   * and seeded here. Left unset in stateful mode, where lookups stay keyed by
+   * session ID.
+   */
+  setDefaultConfig(config: SessionConfig): void {
+    this.defaultConfig = config;
+  }
 
   setConfig(sessionId: string, config: SessionConfig): void {
     this.configs.set(sessionId, config);
@@ -16,9 +29,9 @@ export class SessionService {
 
   getConfig(sessionId?: string): SessionConfig | undefined {
     if (!sessionId) {
-      return undefined;
+      return this.defaultConfig;
     }
-    return this.configs.get(sessionId);
+    return this.configs.get(sessionId) ?? this.defaultConfig;
   }
 
   getApiConfigs(sessionId?: string): ApiConfig[] {
