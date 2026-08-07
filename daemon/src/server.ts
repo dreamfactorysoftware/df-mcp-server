@@ -25,6 +25,14 @@ const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
 
+// Stateless mode: issue no session IDs and keep no session state between
+// requests. Every input a session would cache (DreamFactory token, API key,
+// resolved apiConfigs) is sent by the PHP proxy on each request, so a server is
+// built per request and discarded. This lets any node answer any request, which
+// is required behind a load balancer — MCP clients do not return affinity
+// cookies. Trade-off: no server-initiated SSE stream (GET returns 405).
+const STATELESS = (process.env.MCP_STATELESS ?? '').toLowerCase() === 'true';
+
 // MCP clients (Claude Desktop, etc.) are external — CORS must be permissive.
 // The daemon is already protected by requiring a DreamFactory session token.
 app.use(cors());
@@ -56,6 +64,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     timestamp: Math.floor(Date.now() / 1000),
+    mode: STATELESS ? 'stateless' : 'stateful',
     active_sessions: sessions.size,
   });
 });
@@ -64,6 +73,7 @@ app.get('/ping', (_req, res) => {
   res.json({
     status: 'ok',
     timestamp: Math.floor(Date.now() / 1000),
+    mode: STATELESS ? 'stateless' : 'stateful',
     active_sessions: sessions.size,
   });
 });
@@ -115,7 +125,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
 
   const serviceName = req.params.serviceName as string;
   const sessionIdHeader = getSessionId(req);
-  const existingSession = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
+  const existingSession = !STATELESS && sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
 
   // Get DreamFactory session token from header (passed by PHP after OAuth validation)
   const dfSessionToken = req.headers['x-dreamfactory-session-token'] as string | undefined;
@@ -157,6 +167,21 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     }
 
     if (req.method !== 'POST') {
+      if (STATELESS) {
+        // No sessions exist to resume or terminate, so the standalone SSE
+        // stream (GET) and session teardown (DELETE) do not apply. The spec
+        // allows servers to decline them; clients fall back to POST-only.
+        res.status(405).set('Allow', 'POST').json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Method Not Allowed: daemon is in stateless mode (POST only)'
+          },
+          id: null
+        });
+        return;
+      }
+
       res.status(400).json({
         jsonrpc: '2.0',
         error: {
@@ -259,6 +284,34 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       console.log('Services:', apiConfigs.map(a => `${a.name} (${a.category})`).join(', '));
     }
 
+    if (STATELESS) {
+      // Scope the config to this request only. sessionIdGenerator: undefined
+      // makes the SDK skip session validation entirely, so a fresh transport
+      // may serve any request without having seen the initialize handshake.
+      const requestSessions = new SessionService();
+      requestSessions.setDefaultConfig({
+        url: config.baseUrl,
+        sessionToken: dfSessionToken,
+        apiKey: dfApiKey,
+        apiConfigs
+      });
+
+      const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools);
+      const statelessTransport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true
+      });
+
+      res.on('close', () => {
+        void Promise.resolve(statelessTransport.close()).catch(() => undefined);
+        void Promise.resolve(statelessServer.close()).catch(() => undefined);
+      });
+
+      await statelessServer.connect(statelessTransport);
+      await statelessTransport.handleRequest(req, res, req.body);
+      return;
+    }
+
     const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools);
 
     const transport = new StreamableHTTPServerTransport({
@@ -310,6 +363,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
 
 app.listen(PORT, HOST, () => {
   console.log(`MCP Daemon listening on http://${HOST}:${PORT}`);
+  console.log(`Session mode: ${STATELESS ? 'stateless (no session IDs; load-balancer safe)' : 'stateful (sessions pinned to this process)'}`);
   console.log('');
   console.log('Endpoints:');
   console.log(`  GET  /health - Health check`);
