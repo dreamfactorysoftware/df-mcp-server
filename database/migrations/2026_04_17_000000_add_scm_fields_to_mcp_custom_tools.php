@@ -8,7 +8,11 @@ class AddScmFieldsToMcpCustomTools extends Migration
 {
     public function up()
     {
-        Schema::table('mcp_custom_tools', function (Blueprint $table) {
+        // SQL Server does not allow potential cascading loops, so set no action there.
+        $driver = Schema::getConnection()->getDriverName();
+        $onDelete = (('sqlsrv' === $driver) ? 'no action' : 'set null');
+
+        Schema::table('mcp_custom_tools', function (Blueprint $table) use ($onDelete) {
             $table->unsignedInteger('storage_service_id')->nullable()->after('function');
             $table->string('scm_repository')->nullable()->after('storage_service_id');
             $table->string('scm_reference')->nullable()->after('scm_repository');
@@ -17,7 +21,7 @@ class AddScmFieldsToMcpCustomTools extends Migration
             $table->foreign('storage_service_id')
                 ->references('id')
                 ->on('service')
-                ->onDelete('set null');
+                ->onDelete($onDelete);
         });
     }
 
