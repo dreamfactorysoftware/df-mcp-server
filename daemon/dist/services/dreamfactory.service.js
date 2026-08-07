@@ -1,3 +1,4 @@
+import { currentTraceId } from './trace.service.js';
 /** Default timeout (in ms) for all HTTP requests to the DreamFactory API. */
 const REQUEST_TIMEOUT_MS = 30_000;
 // Known DreamFactory database service types
@@ -391,6 +392,10 @@ export class DreamFactoryService {
         if (auth.apiKey) {
             headers['X-DreamFactory-API-Key'] = auth.apiKey;
         }
+        const traceId = currentTraceId();
+        if (traceId) {
+            headers['X-DreamFactory-Trace-Id'] = traceId;
+        }
         console.log(`[DreamFactoryService.requestRaw] ${method} ${target.toString()}`);
         const response = await fetch(target, {
             method,
@@ -419,6 +424,10 @@ export class DreamFactoryService {
         };
         if (auth.apiKey) {
             headers['X-DreamFactory-API-Key'] = auth.apiKey;
+        }
+        const traceId = currentTraceId();
+        if (traceId) {
+            headers['X-DreamFactory-Trace-Id'] = traceId;
         }
         if (body) {
             headers['Content-Type'] = typeof body === 'string' ? 'text/plain' : 'application/json';

@@ -3,6 +3,7 @@ import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
+import { runWithTrace } from './services/trace.service.js';
 import { createServer, getSessionId, parseConfigFromHeaders, updateSessionConfigFromHeaders, discoverServices } from './utils/utils.js';
 const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
@@ -19,6 +20,11 @@ const STATELESS = (process.env.MCP_STATELESS ?? '').toLowerCase() === 'true';
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+// Carry the platform trace id (minted by DF PHP) through every async
+// continuation of this request so DF REST sub-calls can re-attach it.
+app.use((req, _res, next) => {
+    runWithTrace(req.header('x-dreamfactory-trace-id'), next);
+});
 // Internal API key for PHP proxy -> daemon communication
 const INTERNAL_API_KEY = process.env.MCP_INTERNAL_KEY ?? '';
 /**
@@ -124,6 +130,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
     }
     try {
         if (existingSession) {
+            existingSession.lastAccess = Date.now();
             // Evict stale SSE stream on GET reconnect to prevent 409 "Only one SSE stream"
             // The previous stream may be orphaned if the client disconnected uncleanly
             if (req.method === 'GET') {
@@ -281,7 +288,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
                 return sessionId;
             },
             onsessioninitialized: sessionId => {
-                sessions.set(sessionId, { server, transport, serviceName, apiConfigs });
+                sessions.set(sessionId, { server, transport, serviceName, apiConfigs, lastAccess: Date.now() });
             },
             onsessionclosed: sessionId => {
                 if (sessionId) {
@@ -291,12 +298,14 @@ app.all('/mcp/:serviceName', async (req, res) => {
             },
             enableJsonResponse: true
         });
+        // NOTE: do NOT tear the session down here. With enableJsonResponse the
+        // transport's per-request stream closes right after each JSON POST — if we
+        // deleted the session on that close, a first-party caller that does
+        // initialize and tools/list as separate POSTs would lose its session
+        // between them ("Server not initialized"). Sessions are instead reaped by
+        // idle TTL (see reaper below) and by explicit DELETE (onsessionclosed).
         transport.onclose = () => {
-            const sid = transport.sessionId;
-            if (sid) {
-                sessions.delete(sid);
-                sessionManager.clearConfig(sid);
-            }
+            // intentionally no-op — idle reaper owns cleanup
         };
         await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
@@ -313,6 +322,24 @@ app.all('/mcp/:serviceName', async (req, res) => {
         });
     }
 });
+// Reap MCP sessions that have been idle past the TTL. Sessions are now kept
+// alive across separate JSON POSTs (so first-party stateless callers can do
+// initialize then tools/list), so this reaper — plus explicit DELETE — is what
+// bounds session lifetime.
+const SESSION_IDLE_TTL_MS = 10 * 60 * 1000;
+setInterval(() => {
+    const now = Date.now();
+    for (const [sid, entry] of sessions.entries()) {
+        if (now - entry.lastAccess > SESSION_IDLE_TTL_MS) {
+            try {
+                entry.transport.close?.();
+            }
+            catch { /* already closed */ }
+            sessions.delete(sid);
+            sessionManager.clearConfig(sid);
+        }
+    }
+}, 2 * 60 * 1000).unref?.();
 app.listen(PORT, HOST, () => {
     console.log(`MCP Daemon listening on http://${HOST}:${PORT}`);
     console.log(`Session mode: ${STATELESS ? 'stateless (no session IDs; load-balancer safe)' : 'stateful (sessions pinned to this process)'}`);
