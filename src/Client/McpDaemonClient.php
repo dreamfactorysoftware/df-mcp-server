@@ -223,9 +223,7 @@ class McpDaemonClient
         //
         // Empty params must serialize as {} not [], or the transport rejects
         // the message as invalid JSON-RPC.
-        if (($jsonRpc['params'] ?? null) === []) {
-            $jsonRpc['params'] = (object) [];
-        }
+        $jsonRpc = self::restoreEmptyJsonObjects($jsonRpc);
 
         $envelope = fn (array $payload) => json_encode([
             '_mcpPayload'           => $payload,
@@ -270,6 +268,25 @@ class McpDaemonClient
      * an SSE frame ("event: message\ndata: {...}"). Returns the last JSON-RPC
      * object found, or an empty array.
      */
+    /**
+     * json_decode(..., true) upstream (Mcp::handleRpcBridge) collapses empty
+     * JSON objects to PHP empty arrays, which re-serialize as [] — rejected by
+     * the daemon's JSON-RPC / zod validation. Restore {} where the MCP schema
+     * requires an object: top-level `params`, and `params.arguments` for an
+     * argument-less tools/call.
+     */
+    public static function restoreEmptyJsonObjects(array $jsonRpc): array
+    {
+        if (($jsonRpc['params'] ?? null) === []) {
+            $jsonRpc['params'] = (object) [];
+        }
+        if (is_array($jsonRpc['params'] ?? null) && (($jsonRpc['params']['arguments'] ?? null) === [])) {
+            $jsonRpc['params']['arguments'] = (object) [];
+        }
+
+        return $jsonRpc;
+    }
+
     private function decodeDaemonBody(string $body): array
     {
         $trimmed = ltrim($body);
