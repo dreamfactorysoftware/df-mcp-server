@@ -36,6 +36,9 @@ class McpDaemonClient
                 'X-Mcp-Base-Url' => $baseUrl,
                 'X-DreamFactory-Session-Token' => $dfSessionToken,
                 'Accept' => 'application/json, text/event-stream',
+                // Platform trace id: the daemon re-attaches this to its DF REST
+                // sub-calls so all rows of one MCP action join on one id.
+                \DreamFactory\Core\Utility\TraceId::HEADER => \DreamFactory\Core\Utility\TraceId::get(),
             ];
 
             // Pass API key if configured (required for non-admin users)
@@ -165,6 +168,143 @@ class McpDaemonClient
                 ],
             ], 500);
         }
+    }
+
+    /**
+     * Run a complete MCP exchange for a first-party caller that speaks bare
+     * JSON-RPC with no session handshake of its own (e.g. df-ai-chat's
+     * McpToolClient). The StreamableHTTP transport is session-stateful, so we
+     * perform initialize + notifications/initialized and then the caller's
+     * actual request under one throwaway session, returning the final
+     * JSON-RPC response.
+     *
+     * ponytail: opens a fresh MCP session per call. Fine for chat's
+     * list-then-call cadence; cache the session id per (service,dfSessionToken)
+     * if a hot tool loop ever makes the two extra round-trips matter.
+     *
+     * @param array $jsonRpc The caller's JSON-RPC request (method/params/id).
+     * @return array Decoded JSON-RPC response object from the daemon.
+     */
+    public function rpcStateless(
+        string $mcpService,
+        array $config,
+        string $baseUrl,
+        string $dfSessionToken,
+        array $availableServices,
+        array $jsonRpc
+    ): array {
+        $client = new \GuzzleHttp\Client(['timeout' => 300]);
+        $url = $this->daemonUrl . "/mcp/{$mcpService}";
+
+        $headers = [
+            'X-Mcp-Base-Url'               => $baseUrl,
+            'X-DreamFactory-Session-Token' => $dfSessionToken,
+            'Content-Type'                 => 'application/json',
+            'Accept'                       => 'application/json, text/event-stream',
+        ];
+        if ($appId = ($config['app_id'] ?? null)) {
+            if ($apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId)) {
+                $headers['X-DreamFactory-API-Key'] = $apiKey;
+            }
+        }
+
+        // Standard MCP handshake: initialize -> notifications/initialized ->
+        // the caller's real request, threading the minted session id.
+        //
+        // NOTE (blocked): the daemon's StreamableHTTP transport runs with
+        // enableJsonResponse and tears the session down (transport.onclose ->
+        // sessions.delete) right after each POST response, so the id captured
+        // from initialize is already gone by the follow-up POST ("Server not
+        // initialized"). Batching initialize with the call is also rejected
+        // ("Only one initialization request is allowed"). This client is
+        // therefore correct but cannot complete until the daemon keeps a
+        // JSON-mode session alive across POSTs (short TTL) or exposes an
+        // internal one-shot endpoint. See handoff.md.
+        //
+        // Empty params must serialize as {} not [], or the transport rejects
+        // the message as invalid JSON-RPC.
+        $jsonRpc = self::restoreEmptyJsonObjects($jsonRpc);
+
+        $envelope = fn (array $payload) => json_encode([
+            '_mcpPayload'           => $payload,
+            '_mcpConfig'            => $config,
+            '_mcpAvailableServices' => $availableServices ?: [],
+        ]);
+        // $headers is captured by reference — the Mcp-Session-Id added after
+        // initialize must be sent on the follow-up POSTs.
+        $post = function (array $payload) use ($client, $url, &$headers, $envelope) {
+            return $client->post($url, [
+                'headers'     => $headers,
+                'body'        => $envelope($payload),
+                'expect'      => false,
+                'http_errors' => false,
+            ]);
+        };
+
+        $init = $post([
+            'jsonrpc' => '2.0',
+            'id'      => 'init',
+            'method'  => 'initialize',
+            'params'  => [
+                'protocolVersion' => '2024-11-05',
+                'capabilities'    => (object) [],
+                'clientInfo'      => ['name' => 'df-ai-chat', 'version' => '1.0'],
+            ],
+        ]);
+        $sessionId = $init->getHeaderLine('Mcp-Session-Id');
+        if ($sessionId !== '') {
+            $headers['Mcp-Session-Id'] = $sessionId;
+        }
+
+        $post(['jsonrpc' => '2.0', 'method' => 'notifications/initialized']);
+
+        $resp = $post($jsonRpc);
+
+        return $this->decodeDaemonBody((string) $resp->getBody());
+    }
+
+    /**
+     * Decode a daemon response body that is either a plain JSON-RPC object or
+     * an SSE frame ("event: message\ndata: {...}"). Returns the last JSON-RPC
+     * object found, or an empty array.
+     */
+    /**
+     * json_decode(..., true) upstream (Mcp::handleRpcBridge) collapses empty
+     * JSON objects to PHP empty arrays, which re-serialize as [] — rejected by
+     * the daemon's JSON-RPC / zod validation. Restore {} where the MCP schema
+     * requires an object: top-level `params`, and `params.arguments` for an
+     * argument-less tools/call.
+     */
+    public static function restoreEmptyJsonObjects(array $jsonRpc): array
+    {
+        if (($jsonRpc['params'] ?? null) === []) {
+            $jsonRpc['params'] = (object) [];
+        }
+        if (is_array($jsonRpc['params'] ?? null) && (($jsonRpc['params']['arguments'] ?? null) === [])) {
+            $jsonRpc['params']['arguments'] = (object) [];
+        }
+
+        return $jsonRpc;
+    }
+
+    private function decodeDaemonBody(string $body): array
+    {
+        $trimmed = ltrim($body);
+        if ($trimmed !== '' && ($trimmed[0] === '{' || $trimmed[0] === '[')) {
+            $decoded = json_decode($trimmed, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+
+        $result = [];
+        foreach (preg_split('/\r?\n/', $body) as $line) {
+            if (str_starts_with($line, 'data:')) {
+                $decoded = json_decode(trim(substr($line, 5)), true);
+                if (is_array($decoded)) {
+                    $result = $decoded;
+                }
+            }
+        }
+        return $result;
     }
 
     private function streamSseResponse($response, int $status, string $contentType)

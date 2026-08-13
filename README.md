@@ -40,6 +40,20 @@ The Laravel package proxies every MCP request through a persistent Node.js daemo
 
 Once the daemon is online, the MCP routes in DreamFactory automatically forward traffic to it.
 
+### Running multiple DreamFactory nodes (stateless mode)
+
+By default the daemon keeps each MCP session in memory, so every request for a session must reach the same node. Behind a load balancer this breaks: MCP clients do not return affinity cookies, so requests round-robin and hit a node that has never seen the session, which fails with `Bad Request: Server not initialized`.
+
+If you run more than one DreamFactory node behind a load balancer, start the daemon in **stateless mode**:
+
+```
+MCP_STATELESS=true
+```
+
+No session IDs are issued and no session state is kept — every request carries everything the daemon needs, so any node can answer any request. No load-balancer stickiness or shared cache is required. `GET /health` reports the active mode.
+
+Trade-off: the server-initiated SSE stream is unavailable (`GET` returns `405`), and the MCP server is rebuilt per request. Leave this unset for single-node installs, where the default warm-session behavior is faster.
+
 ### Configuration
 
 Set `APP_URL` in your DreamFactory `.env` to the **external URL clients use to reach DreamFactory** — the public address (e.g. `https://df.example.com`), **not** `http://localhost`. The MCP server uses `APP_URL` to build its OAuth discovery and callback URLs and to validate session tokens server-side. If it is left as `localhost` (or any address clients can't reach), MCP OAuth fails. After changing it, run `php artisan config:clear`.

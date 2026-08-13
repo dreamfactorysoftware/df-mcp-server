@@ -49,7 +49,9 @@ export function sanitizeApiName(name) {
         .replace(/^_|_$/g, '');
 }
 export function getAuth(sessionManager, sessionId) {
-    const sessionConfig = sessionId ? sessionManager.getConfig(sessionId) : undefined;
+    // Always consult the manager: in stateless mode there is no session ID and the
+    // per-request config is served from the default slot.
+    const sessionConfig = sessionManager.getConfig(sessionId);
     const sessionToken = sessionConfig?.sessionToken ?? '';
     const apiKey = sessionConfig?.apiKey;
     if (!sessionToken) {
