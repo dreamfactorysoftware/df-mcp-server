@@ -16,5 +16,8 @@
         <testsuite name="Utility">
             <directory>tests/Utility</directory>
         </testsuite>
+        <testsuite name="Protocol">
+            <directory>tests/Protocol</directory>
+        </testsuite>
     </testsuites>
 </phpunit>
