@@ -10,5 +10,8 @@
         <testsuite name="Client">
             <directory>tests/Client</directory>
         </testsuite>
+        <testsuite name="Protocol">
+            <directory>tests/Protocol</directory>
+        </testsuite>
     </testsuites>
 </phpunit>

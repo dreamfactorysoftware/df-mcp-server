@@ -99,4 +99,84 @@ class RedirectUriValidationTest extends TestCase
             'isValidRedirectUri() must reject same-string-different-origin payloads'
         );
     }
+
+    /**
+     * Configured redirect URIs (df-mcp-server: "Allowed Redirect URIs" on the
+     * service config) must widen the allowlist without weakening the matching
+     * rules. Clients that do not perform dynamic client registration — Mistral
+     * Vibe posts straight to /authorize — otherwise depend on winning a race to
+     * be the first client to authorize against the service.
+     */
+    public function testIsValidRedirectUriHonorsAdditionalConfiguredUris(): void
+    {
+        $client = new \DreamFactory\Core\McpServer\Models\McpOAuthClient();
+        $client->redirect_uris = ['https://claude.ai/api/mcp/auth_callback'];
+
+        $configured = ['https://callback.mistral.ai/v1/integrations_auth/oauth2_callback'];
+
+        $this->assertFalse(
+            $client->isValidRedirectUri('https://callback.mistral.ai/v1/integrations_auth/oauth2_callback'),
+            'Precondition: the URI must not already be registered on the client'
+        );
+        $this->assertTrue(
+            $client->isValidRedirectUri(
+                'https://callback.mistral.ai/v1/integrations_auth/oauth2_callback',
+                $configured
+            ),
+            'A redirect_uri configured on the service must be accepted'
+        );
+        $this->assertTrue(
+            $client->isValidRedirectUri('https://claude.ai/api/mcp/auth_callback', $configured),
+            'Dynamically registered URIs must keep working alongside configured ones'
+        );
+        $this->assertFalse(
+            $client->isValidRedirectUri('https://evil.example.com/cb', $configured),
+            'Configured URIs must not open the allowlist to unrelated origins'
+        );
+        $this->assertFalse(
+            $client->isValidRedirectUri('https://callback.mistral.ai.evil.example.com/cb', $configured),
+            'Host matching must stay exact — a lookalike suffix must not match'
+        );
+    }
+
+    public function testAuthorizePassesConfiguredUrisToValidator(): void
+    {
+        $this->assertMatchesRegularExpression(
+            '/->isValidRedirectUri\s*\(\s*\$redirectUri\s*,\s*\$configuredUris\s*\)/',
+            $this->controllerSrc,
+            'authorizeGet() must pass the service-configured redirect URIs into '
+            . 'isValidRedirectUri(), otherwise the admin-managed allowlist is ignored.'
+        );
+    }
+
+    public function testNormalizeRedirectUrisDropsUnsafeEntries(): void
+    {
+        $configClass = \DreamFactory\Core\McpServer\Models\McpServerConfig::class;
+        if (!class_exists($configClass)) {
+            $this->markTestSkipped('McpServerConfig requires df-core to be autoloadable');
+        }
+
+        $this->assertSame(
+            ['https://callback.mistral.ai/cb', 'http://localhost:8080/cb'],
+            $configClass::normalizeRedirectUris([
+                'https://callback.mistral.ai/cb',
+                '  ',
+                'javascript:alert(1)',
+                'file:///etc/passwd',
+                'not-a-url',
+                'http://localhost:8080/cb',
+                'https://callback.mistral.ai/cb',
+            ]),
+            'normalizeRedirectUris() must drop blanks, non-absolute values, and '
+            . 'non-http(s) schemes, and de-duplicate what remains'
+        );
+
+        $this->assertSame(
+            ['https://a.example.com/cb', 'https://b.example.com/cb'],
+            $configClass::normalizeRedirectUris("https://a.example.com/cb\nhttps://b.example.com/cb"),
+            'A newline-separated string must be accepted (raw textarea input)'
+        );
+
+        $this->assertSame([], $configClass::normalizeRedirectUris(null));
+    }
 }

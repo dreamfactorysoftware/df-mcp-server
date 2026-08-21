@@ -18,6 +18,14 @@ use Illuminate\Support\Facades\Log;
  */
 class McpOAuthController extends Controller
 {
+    /**
+     * Scopes this MCP authorization server issues. Advertised in both the
+     * protected-resource metadata (RFC 9728, where scopes_supported is
+     * RECOMMENDED and is consumed by MCP clients to build their scope request)
+     * and the authorization-server metadata (RFC 8414), so keep them in one place.
+     */
+    private const SUPPORTED_SCOPES = ['mcp:tools', 'mcp:resources', 'mcp:prompts'];
+
     private string $dfUrl;
 
     public function __construct()
@@ -56,6 +64,7 @@ class McpOAuthController extends Controller
             'resource' => "{$baseUrl}/mcp/{$mcpService}",
             'authorization_servers' => ["{$baseUrl}/mcp/{$mcpService}"],
             'bearer_methods_supported' => ['header'],
+            'scopes_supported' => self::SUPPORTED_SCOPES,
         ]);
     }
 
@@ -76,7 +85,7 @@ class McpOAuthController extends Controller
             'grant_types_supported' => ['authorization_code', 'refresh_token'],
             'token_endpoint_auth_methods_supported' => ['none', 'client_secret_post'],
             'code_challenge_methods_supported' => ['S256', 'plain'],
-            'scopes_supported' => ['mcp:tools', 'mcp:resources', 'mcp:prompts'],
+            'scopes_supported' => self::SUPPORTED_SCOPES,
         ]);
     }
 
@@ -124,16 +133,19 @@ class McpOAuthController extends Controller
             'https://claude.com/api/mcp/auth_callback',
         ];
 
+        // Redirect URIs configured on the service are always allowed.
+        $configuredUris = McpServerConfig::normalizeRedirectUris($serviceConfig['redirect_uris'] ?? null);
+
         // Merge with any existing redirect_uris, avoiding duplicates
         $client = McpOAuthClient::findByClientId($serviceConfig['oauth_client_id']);
         if ($client) {
             $existingUris = $client->redirect_uris ?? [];
-            $allUris = array_unique(array_merge($existingUris, $validatedRedirectUris, $claudeRedirectUris));
+            $allUris = array_unique(array_merge($existingUris, $validatedRedirectUris, $claudeRedirectUris, $configuredUris));
             $client->update(['redirect_uris' => array_values($allUris)]);
             $validatedRedirectUris = $allUris;
         } else {
             // Create client entry if it doesn't exist
-            $allUris = array_unique(array_merge($validatedRedirectUris, $claudeRedirectUris));
+            $allUris = array_unique(array_merge($validatedRedirectUris, $claudeRedirectUris, $configuredUris));
             McpOAuthClient::create([
                 'client_id' => $serviceConfig['oauth_client_id'],
                 'client_secret' => $serviceConfig['oauth_client_secret'],
@@ -176,7 +188,7 @@ class McpOAuthController extends Controller
         $codeChallenge = $request->query('code_challenge');
         $codeChallengeMethod = $request->query('code_challenge_method', 'plain');
         $responseType = $request->query('response_type', 'code');
-        $scope = $request->query('scope', 'mcp:tools mcp:resources mcp:prompts');
+        $scope = $request->query('scope', implode(' ', self::SUPPORTED_SCOPES));
 
         // Validate response_type
         if ($responseType !== 'code') {
@@ -229,15 +241,23 @@ class McpOAuthController extends Controller
             return $this->errorResponse('invalid_request', 'redirect_uri scheme must be http or https');
         }
 
+        // Redirect URIs configured on the service are always allowed, no matter
+        // which client registered first. This is the escape hatch for clients
+        // that do not perform dynamic registration (e.g. Mistral Vibe), which
+        // would otherwise be locked out by whichever client authorized first.
+        $configuredUris = McpServerConfig::normalizeRedirectUris($serviceConfig['redirect_uris'] ?? null);
+
         // Ensure client exists in the OAuth clients table (for foreign key constraints)
         $client = McpOAuthClient::findByClientId($clientId);
         if (!$client) {
-            // Create the client entry for the pre-configured credentials
+            // Create the client entry for the pre-configured credentials. When an
+            // admin has configured an allowlist, seed from that instead of trusting
+            // whichever client happens to authorize first.
             $client = McpOAuthClient::create([
                 'client_id' => $clientId,
                 'client_secret' => $serviceConfig['oauth_client_secret'],
                 'name' => $mcpService,
-                'redirect_uris' => [$redirectUri],
+                'redirect_uris' => !empty($configuredUris) ? $configuredUris : [$redirectUri],
                 'is_active' => true,
             ]);
         }
@@ -246,10 +266,11 @@ class McpOAuthController extends Controller
         // the empty-registered-list case (returns true to allow first-time
         // dynamic registration) but rejects any redirect_uri whose origin
         // does not exactly match a registered entry.
-        if (!$client->isValidRedirectUri($redirectUri)) {
+        if (!$client->isValidRedirectUri($redirectUri, $configuredUris)) {
             Log::warning('MCP OAuth: redirect_uri not registered', [
                 'provided'   => $redirectUri,
                 'registered' => $client->redirect_uris ?? [],
+                'configured' => $configuredUris,
                 'service'    => $mcpService,
             ]);
             return $this->errorResponse('invalid_request', 'redirect_uri is not registered for this client');

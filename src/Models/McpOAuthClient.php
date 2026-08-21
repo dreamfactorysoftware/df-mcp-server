@@ -77,15 +77,28 @@ class McpOAuthClient extends Model
      * Security: Uses strict origin matching to prevent open redirect attacks.
      * For example, "https://evil.com?https://chatgpt.com" would NOT match "https://chatgpt.com"
      */
-    public function isValidRedirectUri(string $redirectUri): bool
+    public function isValidRedirectUri(string $redirectUri, array $additionalUris = []): bool
     {
-        $allowedUris = $this->redirect_uris ?? [];
+        $allowedUris = array_values(array_unique(array_merge(
+            $this->redirect_uris ?? [],
+            $additionalUris
+        )));
 
         // If no URIs registered, allow any (for dynamic registration)
         if (empty($allowedUris)) {
             return true;
         }
 
+        return self::uriMatchesList($allowedUris, $redirectUri);
+    }
+
+    /**
+     * Match a redirect URI against an explicit allowlist using the same strict
+     * origin rules as isValidRedirectUri(). An empty list matches nothing here —
+     * the permissive empty-list case belongs to the caller.
+     */
+    public static function uriMatchesList(array $allowedUris, string $redirectUri): bool
+    {
         $redirectParsed = parse_url($redirectUri);
         if (!$redirectParsed || empty($redirectParsed['scheme']) || empty($redirectParsed['host'])) {
             return false;

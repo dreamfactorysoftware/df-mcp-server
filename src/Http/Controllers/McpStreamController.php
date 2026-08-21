@@ -32,6 +32,31 @@ class McpStreamController extends Controller
         return $this->processMcpRequest($request, $mcpService);
     }
 
+    /**
+     * HEAD must answer exactly as GET would — same status and headers, no body
+     * (RFC 9110 sec. 9.3.2). Previously no HEAD arm existed in the middleware, so
+     * these fell through to DreamFactory's routing and returned 404, hiding the
+     * 401 + WWW-Authenticate that drives OAuth discovery.
+     *
+     * This deliberately stops short of processMcpRequest(): a HEAD probe must not
+     * open an MCP session against the daemon as a side effect.
+     */
+    public function handleHead(Request $request, string $mcpService)
+    {
+        $token = $this->validateBearerToken($request);
+        if ($token instanceof \Illuminate\Http\JsonResponse) {
+            return response('', $token->getStatusCode())
+                ->withHeaders($token->headers->all());
+        }
+
+        $accept = strtolower($request->header('Accept', ''));
+        if (!str_contains($accept, 'text/event-stream')) {
+            return response('', 406);
+        }
+
+        return response('', 200)->header('Content-Type', 'text/event-stream');
+    }
+
     public function handlePost(Request $request, string $mcpService)
     {
         return $this->processMcpRequest($request, $mcpService);
