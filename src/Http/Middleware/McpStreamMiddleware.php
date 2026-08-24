@@ -65,6 +65,14 @@ class McpStreamMiddleware
         $path = $request->path();
         $method = $request->method();
 
+        // nginx auth_request subrequest for the SSE stream. Deliberately not
+        // under /mcp/ so it cannot collide with a service named "authz" and so
+        // nginx can point at one fixed internal location. The service name
+        // travels in a header because the subrequest URI is fixed.
+        if ($path === 'mcp-authz') {
+            return $this->handleAuthz($request);
+        }
+
         // Check for RFC 8414 canonical well-known paths first:
         //   /.well-known/oauth-authorization-server/mcp/{service}
         //   /.well-known/oauth-protected-resource/mcp/{service}
@@ -112,6 +120,23 @@ class McpStreamMiddleware
         }
 
         return $next($request);
+    }
+
+    /**
+     * Resolve the nginx auth_request subrequest for GET /mcp/{service}.
+     */
+    private function handleAuthz(Request $request)
+    {
+        $originalUri = (string) $request->header('X-Mcp-Original-Uri', '');
+        if (!preg_match('#^/mcp/([A-Za-z0-9_\-]+)#', $originalUri, $m)) {
+            return response()->json(['error' => 'Invalid or missing X-Mcp-Original-Uri'], 400);
+        }
+
+        $mcpService = $m[1];
+        $request->attributes->set('mcp_service_name', $mcpService);
+        $request->attributes->set('mcp_service_config', $this->getServiceConfig($mcpService));
+
+        return (new McpStreamController())->authz($request, $mcpService);
     }
 
     /**
