@@ -1,6 +1,9 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
@@ -47,8 +50,45 @@ app.use((req, _res, next) => {
   runWithTrace(req.header('x-dreamfactory-trace-id'), next);
 });
 
-// Internal API key for PHP proxy -> daemon communication
-const INTERNAL_API_KEY = process.env.MCP_INTERNAL_KEY ?? '';
+// Shared secret for the PHP proxy -> daemon hop. The PHP side generates this
+// key and persists it to storage/app/mcp_internal_key on shared storage; the
+// daemon reads the same file. This binds the two sides without depending on
+// APP_KEY reaching the daemon process environment. An explicit MCP_INTERNAL_KEY
+// (or MCP_INTERNAL_KEY_FILE for a non-standard storage path) overrides the
+// default file. The key is resolved lazily and cached on first read, so the
+// daemon picks it up on the first request even when it boots before the PHP
+// side has written the file.
+function resolveInternalKeyFile(): string {
+  if (process.env.MCP_INTERNAL_KEY_FILE) {
+    return process.env.MCP_INTERNAL_KEY_FILE;
+  }
+  // dist/server.js lives at vendor/dreamfactory/df-mcp-server/daemon/dist,
+  // five levels below the DreamFactory app root that owns storage/.
+  const here = dirname(fileURLToPath(import.meta.url));
+  return resolve(here, '../../../../../storage/app/mcp_internal_key');
+}
+
+let cachedInternalKey = '';
+
+function getInternalKey(): string {
+  const explicit = process.env.MCP_INTERNAL_KEY;
+  if (explicit) {
+    return explicit;
+  }
+  if (cachedInternalKey) {
+    return cachedInternalKey;
+  }
+  try {
+    const key = readFileSync(resolveInternalKeyFile(), 'utf8').trim();
+    if (key) {
+      cachedInternalKey = key;
+      return key;
+    }
+  } catch {
+    // Key file not present yet — the PHP side writes it on its first request.
+  }
+  return '';
+}
 
 /**
  * Send 401 Unauthorized response
@@ -88,7 +128,8 @@ app.get('/ping', (_req, res) => {
 
 // Cache management endpoint — requires internal API key from PHP proxy
 app.post('/mcp/cache/clear', (req, res) => {
-  if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
+  const internalKey = getInternalKey();
+  if (!internalKey || req.headers['x-mcp-internal-key'] !== internalKey) {
     return res.status(403).json({ error: 'Forbidden: invalid internal key' });
   }
   const service = typeof req.body === 'object' ? req.body?.service : undefined;
@@ -116,11 +157,14 @@ app.post('/mcp/cache/clear', (req, res) => {
 // ============================================================================
 
 app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
-  // Shared-secret check: when MCP_INTERNAL_KEY is configured, only the PHP
-  // proxy (which injects this header after RBAC) is allowed through.
-  // Without this gate any local process on 127.0.0.1 can speak to the
-  // daemon directly with a valid session token, bypassing PHP-side RBAC.
-  if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
+  // Shared-secret check: the PHP proxy injects this header after RBAC. The
+  // daemon reads the same shared secret the PHP side generated and fails
+  // closed — a request with no matching key is rejected. This stops any other
+  // local process on 127.0.0.1 from calling the daemon directly with a valid
+  // session token and bypassing PHP-side RBAC. The key is resolved lazily, so
+  // the legitimate proxy is never rejected once the shared key exists.
+  const internalKey = getInternalKey();
+  if (!internalKey || req.headers['x-mcp-internal-key'] !== internalKey) {
     return res.status(403).json({
       jsonrpc: '2.0',
       id: null,

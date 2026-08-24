@@ -15,9 +15,75 @@ class McpDaemonClient
 {
     private string $daemonUrl;
 
+    private string $internalKey;
+
     public function __construct(?string $daemonUrl = null)
     {
         $this->daemonUrl = $daemonUrl ?? config('mcp.daemon.url', 'http://127.0.0.1:8006');
+        // Shared secret the daemon requires on every request. Resolved once per
+        // client so both the PHP side and the daemon converge on one key.
+        $this->internalKey = $this->resolveInternalKey();
+    }
+
+    /**
+     * Resolve the shared secret sent to the daemon on the X-Mcp-Internal-Key
+     * header. An explicit MCP_INTERNAL_KEY wins. Otherwise the key is generated
+     * once and persisted to a file on shared storage that the daemon also reads,
+     * so both sides share a secret with no extra configuration and without
+     * depending on APP_KEY reaching the daemon process environment.
+     */
+    private function resolveInternalKey(): string
+    {
+        $configured = (string) config('mcp.daemon.internal_key');
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        $keyFile = (string) config('mcp.daemon.internal_key_file');
+        if ($keyFile === '') {
+            $keyFile = storage_path('app/mcp_internal_key');
+        }
+
+        try {
+            $existing = $this->readKeyFile($keyFile);
+            if ($existing !== '') {
+                return $existing;
+            }
+
+            $key = bin2hex(random_bytes(32));
+            $dir = dirname($keyFile);
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0700, true);
+            }
+
+            // Write to a temp file then rename into place so a concurrent
+            // request and the daemon never read a partially written file.
+            $tmp = $keyFile . '.' . bin2hex(random_bytes(4)) . '.tmp';
+            if (@file_put_contents($tmp, $key, LOCK_EX) !== false) {
+                @chmod($tmp, 0600);
+                @rename($tmp, $keyFile);
+                @unlink($tmp);
+            }
+
+            // Re-read so concurrent first-request workers converge on the one
+            // key that actually landed on disk.
+            $winner = $this->readKeyFile($keyFile);
+
+            return $winner !== '' ? $winner : $key;
+        } catch (\Throwable $e) {
+            Log::warning('MCP internal key provisioning failed', ['error' => $e->getMessage()]);
+
+            return '';
+        }
+    }
+
+    private function readKeyFile(string $keyFile): string
+    {
+        if (is_file($keyFile)) {
+            return trim((string) @file_get_contents($keyFile));
+        }
+
+        return '';
     }
 
     /**
@@ -35,6 +101,9 @@ class McpDaemonClient
             $headers = [
                 'X-Mcp-Base-Url' => $baseUrl,
                 'X-DreamFactory-Session-Token' => $dfSessionToken,
+                // Shared secret so the daemon can confirm this call came from the
+                // PHP proxy (post-RBAC) and not another local caller.
+                'X-Mcp-Internal-Key' => $this->internalKey,
                 'Accept' => 'application/json, text/event-stream',
                 // Platform trace id: the daemon re-attaches this to its DF REST
                 // sub-calls so all rows of one MCP action join on one id.
@@ -199,6 +268,7 @@ class McpDaemonClient
         $headers = [
             'X-Mcp-Base-Url'               => $baseUrl,
             'X-DreamFactory-Session-Token' => $dfSessionToken,
+            'X-Mcp-Internal-Key'           => $this->internalKey,
             'Content-Type'                 => 'application/json',
             'Accept'                       => 'application/json, text/event-stream',
         ];

@@ -9,6 +9,14 @@ const MAX_RESPONSE_SIZE = 1_048_576; // 1 MB
 const REQUEST_TIMEOUT_MS = 30_000; // 30 seconds
 const FUNCTION_TIMEOUT_MS = 30_000; // 30 seconds
 
+// Function-type custom tools run an admin-authored JS body through new Function(),
+// which is arbitrary code execution reachable from a request-driven path. It is
+// disabled by default and must be explicitly enabled by an operator who accepts
+// the risk. Set MCP_ALLOW_FUNCTION_TOOLS=true to allow admin-configured function
+// tools to run.
+const FUNCTION_TOOLS_ENABLED =
+  (process.env.MCP_ALLOW_FUNCTION_TOOLS ?? 'false').toLowerCase() === 'true';
+
 function safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value);
@@ -69,6 +77,11 @@ export async function executeFunctionToolRequest(
 ) {
   const functionBody = toolDef.function;
   console.log(`[custom-tool] Executing function "${toolDef.name}", params:`, safeStringify(params));
+
+  if (!FUNCTION_TOOLS_ENABLED) {
+    console.warn(`[custom-tool] Function "${toolDef.name}" blocked: function tools are disabled. Set MCP_ALLOW_FUNCTION_TOOLS=true to enable.`);
+    return respondError('Function tools are disabled on this server.');
+  }
 
   if (!functionBody) {
     console.error(`[custom-tool] Function "${toolDef.name}" has no function body`);
