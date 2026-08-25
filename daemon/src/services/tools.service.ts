@@ -5,7 +5,7 @@ import { SessionService } from './session.service.js';
 import { registerApiConnectorTools } from './api-connector.tools.js';
 import { registerFileApiTools } from './file-api.tools.js';
 import type { ApiConfig } from '../types.js';
-import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
+import { type ToolResponse, type ToolCallContext, type ProgressReporter, respond, sanitizeApiName, getAuth, createToolRegistrar, makeProgressReporter } from './tool-utils.js';
 
 type ToolDefinition = {
   name: string;
@@ -14,9 +14,10 @@ type ToolDefinition = {
   schema: z.ZodTypeAny;
   handler: (
     params: any,
-    context: { sessionId?: string },
+    context: ToolCallContext,
     apiConfig: ApiConfig,
-    auth: DFAuthConfig
+    auth: DFAuthConfig,
+    onProgress?: ProgressReporter
   ) => Promise<ToolResponse>;
 };
 
@@ -289,8 +290,8 @@ const BASE_TOOLS: ToolDefinition[] = [
       filter: z.string().optional().describe('Filter rows before aggregating (same syntax as get_table_data)'),
       groupBy: z.array(z.string()).optional().describe('Group results by these columns')
     }),
-    handler: async (args, _context, apiConfig, auth) => {
-      const data = await DreamFactoryService.aggregateData(apiConfig.baseUrl, auth, args);
+    handler: async (args, _context, apiConfig, auth, onProgress) => {
+      const data = await DreamFactoryService.aggregateData(apiConfig.baseUrl, auth, args, onProgress);
       return respond(data);
     }
   }
@@ -332,7 +333,8 @@ export function registerDreamFactoryTools(
         tool.schema,
         async (params, context) => {
           const auth = getAuth(sessionManager, context.sessionId);
-          return tool.handler(params, context, apiConfig, auth);
+          const onProgress = makeProgressReporter(server, context._meta);
+          return tool.handler(params, context, apiConfig, auth, onProgress);
         }
       );
     }

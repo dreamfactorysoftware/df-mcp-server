@@ -231,7 +231,7 @@ export class DreamFactoryService {
      * Pushes SUM/COUNT/AVG/MIN/MAX down to the database in a single API call.
      * Falls back to client-side pagination if the server doesn't support aggregate fields.
      */
-    static async aggregateData(baseUrl, auth, options) {
+    static async aggregateData(baseUrl, auth, options, onProgress) {
         const { tableName, aggregates, filter, groupBy } = options;
         // Build fields list: group-by columns + aggregate expressions
         const fields = [];
@@ -292,6 +292,10 @@ export class DreamFactoryService {
                 totalCount = data.meta.count;
             }
             allRows = allRows.concat(rows);
+            // This fallback walks the table a page at a time and can run for many
+            // seconds; it is the one place in the daemon with real, countable work to
+            // report. totalCount is known after the first page (includeCount above).
+            await onProgress?.(allRows.length, totalCount ?? undefined, `Scanned ${allRows.length}${totalCount ? ` of ${totalCount}` : ''} rows from ${tableName}`);
             if (rows.length < PAGE_SIZE)
                 break;
             offset += PAGE_SIZE;

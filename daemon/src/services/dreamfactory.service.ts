@@ -1,4 +1,5 @@
 import { currentTraceId } from './trace.service.js';
+import type { ProgressReporter } from './tool-utils.js';
 
 export type DFAuthConfig = {
   sessionToken: string;
@@ -352,7 +353,8 @@ export class DreamFactoryService {
       aggregates: Array<{ function: string; field: string; alias?: string }>;
       filter?: string;
       groupBy?: string[];
-    }
+    },
+    onProgress?: ProgressReporter
   ): Promise<unknown> {
     const { tableName, aggregates, filter, groupBy } = options;
 
@@ -416,6 +418,16 @@ export class DreamFactoryService {
         totalCount = (data.meta as Record<string, unknown>).count as number;
       }
       allRows = allRows.concat(rows);
+
+      // This fallback walks the table a page at a time and can run for many
+      // seconds; it is the one place in the daemon with real, countable work to
+      // report. totalCount is known after the first page (includeCount above).
+      await onProgress?.(
+        allRows.length,
+        totalCount ?? undefined,
+        `Scanned ${allRows.length}${totalCount ? ` of ${totalCount}` : ''} rows from ${tableName}`
+      );
+
       if (rows.length < PAGE_SIZE) break;
       offset += PAGE_SIZE;
       if (offset >= 100000) break;

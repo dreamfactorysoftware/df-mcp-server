@@ -2,7 +2,7 @@ import * as z from 'zod/v4';
 import { DreamFactoryService } from './dreamfactory.service.js';
 import { registerApiConnectorTools } from './api-connector.tools.js';
 import { registerFileApiTools } from './file-api.tools.js';
-import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
+import { respond, sanitizeApiName, getAuth, createToolRegistrar, makeProgressReporter } from './tool-utils.js';
 /**
  * Base tool definitions that will be registered for each API.
  * The handler receives the API config and auth, so it knows which API to target.
@@ -265,8 +265,8 @@ const BASE_TOOLS = [
             filter: z.string().optional().describe('Filter rows before aggregating (same syntax as get_table_data)'),
             groupBy: z.array(z.string()).optional().describe('Group results by these columns')
         }),
-        handler: async (args, _context, apiConfig, auth) => {
-            const data = await DreamFactoryService.aggregateData(apiConfig.baseUrl, auth, args);
+        handler: async (args, _context, apiConfig, auth, onProgress) => {
+            const data = await DreamFactoryService.aggregateData(apiConfig.baseUrl, auth, args, onProgress);
             return respond(data);
         }
     }
@@ -290,7 +290,8 @@ export function registerDreamFactoryTools(server, sessionManager, apiConfigs, di
             const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
             registerTool(prefixedName, prefixedTitle, prefixedDescription, tool.schema, async (params, context) => {
                 const auth = getAuth(sessionManager, context.sessionId);
-                return tool.handler(params, context, apiConfig, auth);
+                const onProgress = makeProgressReporter(server, context._meta);
+                return tool.handler(params, context, apiConfig, auth, onProgress);
             });
         }
     }
