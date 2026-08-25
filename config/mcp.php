@@ -20,6 +20,15 @@ return [
         // the daemon default to storage/app/mcp_internal_key; override only if
         // the daemon cannot resolve the app storage path on its own.
         'internal_key_file' => env('MCP_INTERNAL_KEY_FILE'),
+
+        // Serve the optional server-initiated SSE stream (GET on the MCP
+        // endpoint). Off by default: PHP-FPM holds one worker for the entire
+        // life of a stream, so a handful of connected clients can exhaust the
+        // pool. The MCP spec explicitly allows answering GET with 405, and the
+        // daemon emits no server-initiated messages today, so nothing is lost.
+        // Only enable this when the stream is served by something evented —
+        // e.g. nginx proxying /mcp straight to the daemon — not through FPM.
+        'sse_enabled' => env('MCP_SSE_ENABLED', false),
     ],
 
     // Per-tool-call audit log (mcp_request_log table)

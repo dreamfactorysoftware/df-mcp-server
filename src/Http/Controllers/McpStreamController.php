@@ -29,7 +29,35 @@ class McpStreamController extends Controller
             return response('Accept header must include text/event-stream for GET requests', 406);
         }
 
+        if (!config('mcp.daemon.sse_enabled', false)) {
+            return self::sseDisabledResponse();
+        }
+
         return $this->processMcpRequest($request, $mcpService);
+    }
+
+    /**
+     * Decline the optional server-initiated SSE stream.
+     *
+     * Proxying that stream through PHP-FPM pins one worker for its entire life:
+     * McpDaemonClient issues a non-streaming Guzzle request, so the worker blocks
+     * until the daemon closes the stream or the 300s timeout fires. Measured at
+     * one worker per open stream, which exhausts a default pool after a handful
+     * of connected clients. The MCP spec permits answering GET with 405, and the
+     * daemon emits no server-initiated messages, so clients lose nothing by
+     * falling back to POST-only. Flip MCP_SSE_ENABLED once the stream is served
+     * by an evented layer rather than FPM.
+     */
+    private static function sseDisabledResponse(): \Illuminate\Http\JsonResponse
+    {
+        return response()->json([
+            'jsonrpc' => '2.0',
+            'id' => null,
+            'error' => [
+                'code' => -32000,
+                'message' => 'Method Not Allowed: this endpoint does not offer a server-initiated SSE stream (POST only)',
+            ],
+        ], 405)->header('Allow', 'POST, DELETE');
     }
 
     /**
@@ -54,7 +82,83 @@ class McpStreamController extends Controller
             return response('', 406);
         }
 
+        // HEAD must mirror what GET would answer, so it declines too.
+        if (!config('mcp.daemon.sse_enabled', false)) {
+            return response('', 405)->withHeaders(self::sseDisabledResponse()->headers->all());
+        }
+
         return response('', 200)->header('Content-Type', 'text/event-stream');
+    }
+
+    /**
+     * nginx auth_request endpoint for the SSE stream.
+     *
+     * When nginx proxies GET /mcp/{service} straight to the Node daemon (so the
+     * stream is held by an evented layer instead of a PHP-FPM worker), PHP no
+     * longer sits in the data path — but it must still be the thing that decides
+     * whether the request is allowed. nginx issues a subrequest here first; a 204
+     * lets the stream through and carries the resolved DreamFactory context back
+     * as headers, anything else aborts it.
+     *
+     * Returns the same 401 + WWW-Authenticate a direct GET would, so OAuth
+     * discovery keeps working for unauthenticated clients.
+     */
+    public function authz(Request $request, string $mcpService)
+    {
+        $token = $this->validateBearerToken($request);
+        if ($token instanceof \Illuminate\Http\JsonResponse) {
+            return $token;
+        }
+
+        $config = $request->attributes->get('mcp_service_config');
+        if (!$config) {
+            // 403, not 404: nginx's auth_request only forwards 401 and 403 to the
+            // client and turns every other status into a 500. Declining to
+            // confirm whether an MCP service exists to a caller who is not
+            // entitled to it is the better answer here anyway.
+            return response()->json(['error' => 'MCP service not found', 'service' => $mcpService], 403);
+        }
+
+        SessionUtilities::setSessionData($config['app_id'] ?? null, $token->user_id);
+
+        $headers = [
+            'X-Mcp-Session-Token' => $token->getDfSessionToken(),
+            'X-Mcp-Base-Url' => $this->resolveBaseUrl($request),
+        ];
+
+        if ($appId = ($config['app_id'] ?? null)) {
+            if ($apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId)) {
+                $headers['X-Mcp-Api-Key'] = $apiKey;
+            }
+        }
+
+        // The daemon only needs config when it has to build a server from
+        // scratch; a GET normally resumes a session established by an earlier
+        // POST, which already holds it. Pass it when it comfortably fits — Node
+        // rejects a request whose headers total more than 16 KB.
+        $encodedConfig = json_encode($config);
+        if (is_string($encodedConfig) && strlen($encodedConfig) <= 8192) {
+            $headers['X-Mcp-Config'] = $encodedConfig;
+        }
+
+        return response('', 204)->withHeaders($headers);
+    }
+
+    /**
+     * External base URL the daemon should use for its DreamFactory REST calls.
+     */
+    private function resolveBaseUrl(Request $request): string
+    {
+        if ($internalBase = config('mcp.daemon.internal_base_url')) {
+            return rtrim($internalBase, '/') . '/api/v2';
+        }
+
+        $scheme = $request->header('X-Forwarded-Proto') ?: $request->getScheme();
+        if ($request->secure() || str_starts_with($request->fullUrl(), 'https://')) {
+            $scheme = 'https';
+        }
+
+        return $scheme . '://' . $request->getHttpHost() . '/api/v2';
     }
 
     public function handlePost(Request $request, string $mcpService)
