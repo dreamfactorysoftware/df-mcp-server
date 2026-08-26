@@ -105,6 +105,20 @@ class McpStreamController extends Controller
      */
     public function authz(Request $request, string $mcpService)
     {
+        // This endpoint answers with a DreamFactory session token and the app's
+        // API key, which makes it credential-issuing. It exists only to serve an
+        // nginx auth_request subrequest for the SSE stream, so it stays closed
+        // unless that stream is enabled, and it requires the shared secret even
+        // then. Both checks run before the bearer token is looked at, so an
+        // instance that does not use it answers the same way to everyone.
+        if (!config('mcp.daemon.authz_enabled', false)) {
+            return response()->json(['error' => 'Not found'], 404);
+        }
+
+        if (!$this->hasValidInternalKey($request)) {
+            return response()->json(['error' => 'Forbidden'], 403);
+        }
+
         $token = $this->validateBearerToken($request);
         if ($token instanceof \Illuminate\Http\JsonResponse) {
             return $token;
@@ -142,6 +156,26 @@ class McpStreamController extends Controller
         }
 
         return response('', 204)->withHeaders($headers);
+    }
+
+    /**
+     * True when the request carries the shared secret the daemon side uses.
+     *
+     * The nginx auth location injects it; a client cannot, because nginx never
+     * forwards a client-supplied copy of this header into the subrequest. Fails
+     * closed: with no key configured there is no way to be sure the caller is
+     * nginx, so nothing is issued.
+     */
+    private function hasValidInternalKey(Request $request): bool
+    {
+        $expected = (new McpDaemonClient())->getInternalKey();
+        if ($expected === '') {
+            return false;
+        }
+
+        $presented = (string) $request->header('X-Mcp-Internal-Key', '');
+
+        return $presented !== '' && hash_equals($expected, $presented);
     }
 
     /**

@@ -17,8 +17,11 @@ return [
         // and persists it to the file below; the daemon reads the same file.
         'internal_key' => env('MCP_INTERNAL_KEY'),
         // Location of the generated shared-secret file. Both the PHP side and
-        // the daemon default to storage/app/mcp_internal_key; override only if
-        // the daemon cannot resolve the app storage path on its own.
+        // the daemon default to storage/framework/mcp_internal_key; override
+        // only if the daemon cannot resolve the app storage path on its own.
+        // Note the directory: storage/app is the root of the stock "files"
+        // service, so a key written there is downloadable over the REST API by
+        // anyone with read access to it. storage/framework is not served.
         'internal_key_file' => env('MCP_INTERNAL_KEY_FILE'),
 
         // Serve the optional server-initiated SSE stream (GET on the MCP
@@ -29,6 +32,27 @@ return [
         // Only enable this when the stream is served by something evented —
         // e.g. nginx proxying /mcp straight to the daemon — not through FPM.
         'sse_enabled' => env('MCP_SSE_ENABLED', false),
+
+        // The /mcp-authz endpoint exists for one caller: an nginx auth_request
+        // subrequest, made while nginx proxies the SSE stream straight to the
+        // daemon. It answers with the caller's DreamFactory session token and
+        // the app's API key so nginx can hand them to the daemon, which makes
+        // it a credential-issuing endpoint and not something to leave reachable.
+        //
+        // It is therefore off unless the SSE stream it serves is on, and it
+        // requires the shared secret on X-Mcp-Internal-Key even then. Set
+        // MCP_INTERNAL_KEY explicitly in a deployment that uses it, so the
+        // nginx auth location can inject the same value:
+        //
+        //   location = /mcp-authz {
+        //       internal;
+        //       proxy_set_header X-Mcp-Internal-Key "<MCP_INTERNAL_KEY>";
+        //       proxy_pass http://php-upstream;
+        //   }
+        //
+        // `internal` keeps clients from reaching it at all; the secret is the
+        // second line of defence for deployments that miss that directive.
+        'authz_enabled' => env('MCP_AUTHZ_ENABLED', env('MCP_SSE_ENABLED', false)),
     ],
 
     // Per-tool-call audit log (mcp_request_log table)

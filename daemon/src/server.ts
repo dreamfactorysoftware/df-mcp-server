@@ -1,9 +1,9 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
@@ -51,7 +51,7 @@ app.use((req, _res, next) => {
 });
 
 // Shared secret for the PHP proxy -> daemon hop. The PHP side generates this
-// key and persists it to storage/app/mcp_internal_key on shared storage; the
+// key and persists it to storage/framework/mcp_internal_key on shared storage; the
 // daemon reads the same file. This binds the two sides without depending on
 // APP_KEY reaching the daemon process environment. An explicit MCP_INTERNAL_KEY
 // (or MCP_INTERNAL_KEY_FILE for a non-standard storage path) overrides the
@@ -62,10 +62,52 @@ function resolveInternalKeyFile(): string {
   if (process.env.MCP_INTERNAL_KEY_FILE) {
     return process.env.MCP_INTERNAL_KEY_FILE;
   }
-  // dist/server.js lives at vendor/dreamfactory/df-mcp-server/daemon/dist,
-  // five levels below the DreamFactory app root that owns storage/.
-  const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, '../../../../../storage/app/mcp_internal_key');
+  if (process.env.DF_APP_ROOT) {
+    return resolve(process.env.DF_APP_ROOT, 'storage/framework/mcp_internal_key');
+  }
+  // Walk up from dist/server.js looking for the DreamFactory app root, rather
+  // than counting directories: the package sits five levels down in the stock
+  // vendor layout, but not when it is symlinked in for development or vendored
+  // at a different depth. artisan next to storage/ is the marker.
+  //
+  // Not storage/app: that is the root of the stock "files" service, so a secret
+  // written there is downloadable over the REST API.
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(dir, 'artisan')) && existsSync(join(dir, 'storage', 'framework'))) {
+      return join(dir, 'storage', 'framework', 'mcp_internal_key');
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return '';
+}
+
+// Constant-time comparison so the key cannot be recovered a byte at a time.
+function keyMatches(expected: string, presented: unknown): boolean {
+  if (typeof presented !== 'string' || expected.length === 0 || presented.length === 0) {
+    return false;
+  }
+  const a = Buffer.from(expected);
+  const b = Buffer.from(presented);
+  if (a.length !== b.length) {
+    return false;
+  }
+  return timingSafeEqual(a, b);
+}
+
+// Re-read the key file once before rejecting: the PHP side may have rotated the
+// key (or written it for the first time) since it was cached, and a daemon that
+// caches a stale key rejects every request until it is restarted.
+function authorizeInternalCall(presented: unknown): boolean {
+  if (keyMatches(getInternalKey(), presented)) {
+    return true;
+  }
+  cachedInternalKey = '';
+  return keyMatches(getInternalKey(), presented);
 }
 
 let cachedInternalKey = '';
@@ -78,16 +120,39 @@ function getInternalKey(): string {
   if (cachedInternalKey) {
     return cachedInternalKey;
   }
+  const keyFile = resolveInternalKeyFile();
+  if (!keyFile) {
+    warnNoKey('could not locate the DreamFactory app root from ' + dirname(fileURLToPath(import.meta.url)));
+    return '';
+  }
   try {
-    const key = readFileSync(resolveInternalKeyFile(), 'utf8').trim();
+    const key = readFileSync(keyFile, 'utf8').trim();
     if (key) {
       cachedInternalKey = key;
       return key;
     }
   } catch {
     // Key file not present yet — the PHP side writes it on its first request.
+    warnNoKey('no key at ' + keyFile);
   }
   return '';
+}
+
+// Say this once, loudly. Without a key every request is rejected with a 403 that
+// otherwise looks identical to a genuinely unauthorized call, which is a hard
+// failure to diagnose from the outside.
+let warnedNoKey = false;
+function warnNoKey(detail: string): void {
+  if (warnedNoKey) {
+    return;
+  }
+  warnedNoKey = true;
+  console.error(
+    `[mcp-daemon] Shared secret unavailable (${detail}). Every request will be ` +
+    'rejected with 403 until it is. Set MCP_INTERNAL_KEY_FILE to the path the ' +
+    'PHP side writes (storage/framework/mcp_internal_key), DF_APP_ROOT to the ' +
+    'application root, or MCP_INTERNAL_KEY to an explicit shared value.'
+  );
 }
 
 /**
@@ -128,8 +193,7 @@ app.get('/ping', (_req, res) => {
 
 // Cache management endpoint — requires internal API key from PHP proxy
 app.post('/mcp/cache/clear', (req, res) => {
-  const internalKey = getInternalKey();
-  if (!internalKey || req.headers['x-mcp-internal-key'] !== internalKey) {
+  if (!authorizeInternalCall(req.headers['x-mcp-internal-key'])) {
     return res.status(403).json({ error: 'Forbidden: invalid internal key' });
   }
   const service = typeof req.body === 'object' ? req.body?.service : undefined;
@@ -163,8 +227,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
   // local process on 127.0.0.1 from calling the daemon directly with a valid
   // session token and bypassing PHP-side RBAC. The key is resolved lazily, so
   // the legitimate proxy is never rejected once the shared key exists.
-  const internalKey = getInternalKey();
-  if (!internalKey || req.headers['x-mcp-internal-key'] !== internalKey) {
+  if (!authorizeInternalCall(req.headers['x-mcp-internal-key'])) {
     return res.status(403).json({
       jsonrpc: '2.0',
       id: null,

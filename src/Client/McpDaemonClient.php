@@ -41,7 +41,11 @@ class McpDaemonClient
 
         $keyFile = (string) config('mcp.daemon.internal_key_file');
         if ($keyFile === '') {
-            $keyFile = storage_path('app/mcp_internal_key');
+            // Not storage/app: that directory is the root of the stock "files"
+            // service, so a secret written there is downloadable over the REST
+            // API by any caller with read access to it. storage/framework is
+            // not served by any file service.
+            $keyFile = storage_path('framework/mcp_internal_key');
         }
 
         try {
@@ -75,6 +79,15 @@ class McpDaemonClient
 
             return '';
         }
+    }
+
+    /**
+     * The shared secret this instance uses on the PHP proxy -> daemon hop.
+     * Empty when it could not be resolved or provisioned.
+     */
+    public function getInternalKey(): string
+    {
+        return $this->internalKey;
     }
 
     private function readKeyFile(string $keyFile): string

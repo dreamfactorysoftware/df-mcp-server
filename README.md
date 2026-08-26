@@ -54,6 +54,52 @@ No session IDs are issued and no session state is kept — every request carries
 
 Trade-off: the server-initiated SSE stream is unavailable (`GET` returns `405`), and the MCP server is rebuilt per request. Leave this unset for single-node installs, where the default warm-session behavior is faster.
 
+### Serving the SSE stream (optional)
+
+`GET` on the MCP endpoint answers `405` by default. The stream would otherwise be
+proxied through PHP-FPM, which pins one worker for the life of every connected
+client. Nothing is lost: the daemon emits no server-initiated messages.
+
+To serve it, put nginx in the data path and let PHP make the authorization
+decision out of band:
+
+```nginx
+location = /mcp-authz {
+    internal;                       # never reachable by a client
+    proxy_pass              http://php-upstream;
+    proxy_set_header        X-Mcp-Original-Uri  $request_uri;
+    proxy_set_header        X-Mcp-Internal-Key  "<your MCP_INTERNAL_KEY>";
+    proxy_pass_request_body off;
+    proxy_set_header        Content-Length "";
+}
+
+location ~ ^/mcp/[A-Za-z0-9_-]+$ {
+    auth_request              /mcp-authz;
+    auth_request_set          $mcp_token   $upstream_http_x_mcp_session_token;
+    auth_request_set          $mcp_api_key $upstream_http_x_mcp_api_key;
+    auth_request_set          $mcp_base    $upstream_http_x_mcp_base_url;
+    proxy_set_header          X-DreamFactory-Session-Token $mcp_token;
+    proxy_set_header          X-Mcp-Api-Key               $mcp_api_key;
+    proxy_set_header          X-Mcp-Base-Url              $mcp_base;
+    proxy_pass                http://127.0.0.1:8006;
+    proxy_buffering           off;
+    proxy_read_timeout        1h;
+}
+```
+
+Then set both of these, and `MCP_INTERNAL_KEY` to the same value used above:
+
+```
+MCP_SSE_ENABLED=true
+MCP_INTERNAL_KEY=<a long random string>
+```
+
+`/mcp-authz` answers with a DreamFactory session token and the app's API key so
+nginx can hand them to the daemon, so it is a credential-issuing endpoint. It
+stays disabled unless `MCP_SSE_ENABLED` is on, and it requires
+`X-Mcp-Internal-Key` even then — `internal` is the first line of defence, the
+shared secret is the second.
+
 ### Configuration
 
 Set `APP_URL` in your DreamFactory `.env` to the **external URL clients use to reach DreamFactory** — the public address (e.g. `https://df.example.com`), **not** `http://localhost`. The MCP server uses `APP_URL` to build its OAuth discovery and callback URLs and to validate session tokens server-side. If it is left as `localhost` (or any address clients can't reach), MCP OAuth fails. After changing it, run `php artisan config:clear`.
