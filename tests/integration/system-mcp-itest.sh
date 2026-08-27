@@ -45,7 +45,6 @@ CREATE2=$(curl -s "${H[@]}" -X POST "$BASE/api/v2/system/service?fields=id,name,
 check "$(echo "$CREATE2" | grep -q "\"name\":\"$DATA_SVC\"" && echo 1)" "created regular mcp service '$DATA_SVC' (regression)" "$CREATE2"
 SVCID=$(sid $SVC); SVCGET=$(curl -s "${H[@]}" "$BASE/api/v2/system/service/$SVCID")
 CID=$(echo "$SVCGET" | jq_ 'd["config"]["oauth_client_id"]'); CSEC=$(echo "$SVCGET" | jq_ 'd["config"]["oauth_client_secret"]')
-check "$(echo "$SVCGET" | grep -q '"oauth_client_id"' && echo 1)" "oauth_client_id present in config (value is a protected field in API output)" "$(echo $SVCGET | head -c 200)"
 check "$(echo "$SVCGET" | grep -q '"custom_tools":\[\]' && echo 1)" "system_mcp getConfig returns custom_tools=[]" "$(echo $SVCGET | head -c 300)"
 
 echo "## 3. service GET endpoint"
@@ -90,6 +89,8 @@ check "$(echo "$WK" | grep -q 'authorization_endpoint' && echo 1)" "RFC8414 meta
 REG=$(curl -s -X POST "$BASE/mcp/$SVC/register" -H 'Content-Type: application/json' -d '{"client_name":"itest","redirect_uris":["http://localhost:1/cb"]}')
 RCID=$(echo "$REG" | jq_ 'd.get("client_id","")'); RSEC=$(echo "$REG" | jq_ 'd.get("client_secret","")')
 check "$([ -n "$RCID" ] && echo 1)" "dynamic client registration returns client_id" "$(echo $REG | head -c 300)"
+CID=$(curl -s "${H[@]}" "$BASE/api/v2/system/service/$SVCID" | jq_ '(d.get("config") or {}).get("oauth_client_id") or ""')
+check "$([ ${#CID} -eq 32 ] && echo 1)" "service config now holds the 32-hex oauth_client_id (populated on first DCR, same as type mcp)" "cid=$CID"
 VER=$(head -c 48 /dev/urandom | base64 | tr -d '=+/' | head -c 43)
 CHAL=$(printf '%s' "$VER" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')
 LOGIN=$(curl -s -X POST "$BASE/mcp/$SVC/login" --data-urlencode email=$EMAIL --data-urlencode password=$PASS --data-urlencode client_id=$RCID --data-urlencode redirect_uri=http://localhost:1/cb --data-urlencode code_challenge=$CHAL --data-urlencode code_challenge_method=S256 --data-urlencode state=abc)
