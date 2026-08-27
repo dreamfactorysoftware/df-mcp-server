@@ -87,10 +87,8 @@ class McpStreamMiddleware
         $mcpService = $matches[1];
         $subPath = $matches[2] ?? null;
 
-        // Load service config and store in request for controllers
-        $serviceConfig = $this->getServiceConfig($mcpService);
-        $request->attributes->set('mcp_service_name', $mcpService);
-        $request->attributes->set('mcp_service_config', $serviceConfig);
+        // Load service config/type and store in request for controllers
+        $this->attachServiceAttributes($request, $mcpService);
 
         // Route to appropriate handler
         if ($subPath === null) {
@@ -126,9 +124,7 @@ class McpStreamMiddleware
 
         $controllerMethod = self::RFC8414_WELL_KNOWN[$wellKnownType] ?? null;
         if ($controllerMethod && $method === 'GET') {
-            $serviceConfig = $this->getServiceConfig($mcpService);
-            $request->attributes->set('mcp_service_name', $mcpService);
-            $request->attributes->set('mcp_service_config', $serviceConfig);
+            $this->attachServiceAttributes($request, $mcpService);
 
             $controller = new McpOAuthController();
             $response = $controller->$controllerMethod($request, $mcpService);
@@ -145,17 +141,38 @@ class McpStreamMiddleware
     }
 
     /**
-     * Get service configuration from ServiceManager
+     * Resolve the service by name and stash its name, config and type on the
+     * request for the controllers. The service type (`mcp` vs `system_mcp`)
+     * decides which daemon the stream controller proxies to.
      */
-    private function getServiceConfig(string $mcpService): ?array
+    private function attachServiceAttributes(Request $request, string $mcpService): void
     {
+        [$serviceConfig, $serviceType] = $this->getServiceConfig($mcpService);
+        $request->attributes->set('mcp_service_name', $mcpService);
+        $request->attributes->set('mcp_service_config', $serviceConfig);
+        $request->attributes->set('mcp_service_type', $serviceType);
+    }
+
+    /**
+     * Get service configuration (and type) from ServiceManager
+     *
+     * @return array{0: ?array, 1: ?string} [config, type]
+     */
+    private function getServiceConfig(string $mcpService): array
+    {
+        $config = null;
+        $type = null;
         try {
             /** @var \DreamFactory\Core\Services\ServiceManager $serviceManager */
             $serviceManager = app('df.service');
             $service = $serviceManager->getService($mcpService);
 
+            if (method_exists($service, 'getType')) {
+                $type = $service->getType();
+                $type = is_string($type) ? $type : null;
+            }
             if (method_exists($service, 'getConfig')) {
-                return $service->getConfig();
+                $config = $service->getConfig();
             }
         } catch (\Throwable $e) {
             Log::error('Failed to get service config', [
@@ -164,7 +181,7 @@ class McpStreamMiddleware
             ]);
         }
 
-        return null;
+        return [$config, $type];
     }
 
     /**

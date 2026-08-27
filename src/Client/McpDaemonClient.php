@@ -40,6 +40,7 @@ class McpDaemonClient
                 // sub-calls so all rows of one MCP action join on one id.
                 \DreamFactory\Core\Utility\TraceId::HEADER => \DreamFactory\Core\Utility\TraceId::get(),
             ];
+            $headers += self::internalKeyHeader();
 
             // Pass API key if configured (required for non-admin users)
             $appId = $config['app_id'] ?? null;
@@ -132,7 +133,9 @@ class McpDaemonClient
             ]);
 
             return response()->json([
-                'error' => 'MCP daemon is not running. Please start it with: php artisan mcp:daemon',
+                'error' => 'MCP daemon is not reachable at ' . $this->daemonUrl
+                    . '. Start it (data daemon: php artisan mcp:daemon; System API daemon: df-system-mcp-server)'
+                    . ' or fix MCP_DAEMON_URL / MCP_SYSTEM_DAEMON_URL.',
             ], 503);
 
         } catch (\GuzzleHttp\Exception\ServerException $e) {
@@ -202,6 +205,7 @@ class McpDaemonClient
             'Content-Type'                 => 'application/json',
             'Accept'                       => 'application/json, text/event-stream',
         ];
+        $headers += self::internalKeyHeader();
         if ($appId = ($config['app_id'] ?? null)) {
             if ($apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId)) {
                 $headers['X-DreamFactory-API-Key'] = $apiKey;
@@ -261,6 +265,23 @@ class McpDaemonClient
         $resp = $post($jsonRpc);
 
         return $this->decodeDaemonBody((string) $resp->getBody());
+    }
+
+    /**
+     * Shared-secret header for the daemons. Both the data daemon and
+     * df-system-mcp-server reject /mcp/* calls without a matching
+     * x-mcp-internal-key when MCP_INTERNAL_KEY is set on their side.
+     *
+     * @return array<string, string>
+     */
+    private static function internalKeyHeader(): array
+    {
+        $key = config('mcp.daemon.internal_key');
+        if (is_string($key) && $key !== '') {
+            return ['X-Mcp-Internal-Key' => $key];
+        }
+
+        return [];
     }
 
     /**

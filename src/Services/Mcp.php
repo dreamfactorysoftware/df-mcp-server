@@ -5,6 +5,7 @@ namespace DreamFactory\Core\McpServer\Services;
 use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
+use DreamFactory\Core\McpServer\Support\DaemonTarget;
 use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use DreamFactory\Core\Utility\Session as SessionUtilities;
@@ -72,6 +73,15 @@ class Mcp extends BaseRestService
             ], 401);
         }
 
+        $target = DaemonTarget::forServiceType($this->getType());
+        if (!$target['enabled']) {
+            return response()->json([
+                'jsonrpc' => '2.0',
+                'id'      => null,
+                'error'   => ['code' => -32000, 'message' => $target['disabled_message']],
+            ], 503);
+        }
+
         $config = $this->getConfig();
 
         // Resolve accessible services server-side (role-filtered) so the daemon
@@ -97,7 +107,7 @@ class Mcp extends BaseRestService
         // handshake, so run the full initialize/initialized/call exchange
         // against the session-stateful daemon and return the final response.
         $startNs = hrtime(true);
-        $result = (new McpDaemonClient())->rpcStateless(
+        $result = $this->daemonClient()->rpcStateless(
             $this->name,
             is_array($config) ? $config : [],
             $baseUrl,
@@ -122,6 +132,15 @@ class Mcp extends BaseRestService
         // the array as the JSON body. Returning a Laravel Response here would
         // get double-wrapped into a raw HTTP dump.
         return $result;
+    }
+
+    /**
+     * Daemon client bound to the daemon that serves this service's type
+     * (data daemon for `mcp`, df-system-mcp-server for `system_mcp`).
+     */
+    protected function daemonClient(): McpDaemonClient
+    {
+        return new McpDaemonClient(DaemonTarget::forServiceType($this->getType())['url']);
     }
 
     /**
