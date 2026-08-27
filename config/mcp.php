@@ -11,6 +11,16 @@ return [
         'host' => env('MCP_DAEMON_HOST', '127.0.0.1'),
         'port' => env('MCP_DAEMON_PORT', 8006),
         'internal_base_url' => env('MCP_INTERNAL_BASE_URL'),
+        // Shared secret sent as X-Mcp-Internal-Key to BOTH daemons when set
+        // (the daemons enforce it when MCP_INTERNAL_KEY is set on their side).
+        'internal_key' => env('MCP_INTERNAL_KEY'),
+    ],
+
+    // System API MCP daemon (df-system-mcp-server) backing the `system_mcp`
+    // service type. Exposes /api/v2/system/* as MCP tools.
+    'system_daemon' => [
+        'enabled' => env('MCP_SYSTEM_DAEMON_ENABLED', true),
+        'url' => env('MCP_SYSTEM_DAEMON_URL', 'http://127.0.0.1:3700'),
     ],
 
     // Per-tool-call audit log (mcp_request_log table)

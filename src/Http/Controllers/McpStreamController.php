@@ -4,6 +4,8 @@ namespace DreamFactory\Core\McpServer\Http\Controllers;
 
 use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
+use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
+use DreamFactory\Core\McpServer\Support\DaemonTarget;
 use DreamFactory\Core\McpServer\Models\McpCustomTool;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\McpServer\Utility\RequestLogger;
@@ -120,18 +122,27 @@ class McpStreamController extends Controller
             $baseUrl = $scheme . '://' . $host . '/api/v2';
         }
 
-        if (!config('mcp.daemon.enabled', false)) {
-            try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'error', 'MCP daemon disabled'); } catch (\Throwable $ignored) { /* never break the response */ }
+        // Pick the daemon by service type: `system_mcp` -> df-system-mcp-server,
+        // everything else -> the bundled data daemon.
+        $serviceType = $request->attributes->get('mcp_service_type');
+        $target = DaemonTarget::forServiceType(is_string($serviceType) ? $serviceType : null);
+
+        if (!$target['enabled']) {
+            try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'error', $target['label'] . ' disabled'); } catch (\Throwable $ignored) { /* never break the response */ }
             return response()->json([
-                'error' => 'MCP daemon is disabled. Please set MCP_DAEMON_ENABLED=true and run the Node daemon.'
+                'error' => $target['disabled_message'],
             ], 503);
         }
 
         // Resolve available services server-side so the daemon doesn't need
         // to call GET /api/v2/system/service (which requires system permissions).
-        $availableServices = $this->getAvailableServices();
+        // The system daemon exposes the System API itself and never auto-mounts
+        // DB/file services, so skip the lookup for it.
+        $availableServices = McpServiceTypes::isSystem($target['type'])
+            ? []
+            : $this->getAvailableServices();
 
-        $client = new McpDaemonClient();
+        $client = new McpDaemonClient($target['url']);
         try {
             $response = $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
             try {
