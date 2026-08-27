@@ -42,7 +42,7 @@ final class DaemonTarget
             $label = 'MCP daemon';
             $enabledEnv = 'MCP_DAEMON_ENABLED';
             $url = $section['url'] ?? self::DATA_DEFAULT_URL;
-            $enabled = self::toBool($section['enabled'] ?? false);
+            $enabled = self::toBool($section['enabled'] ?? true);
             $disabledMessage = $label . ' is disabled. Please set ' . $enabledEnv . '=true and run the Node daemon.';
             $resolvedType = McpServiceTypes::DATA;
         }

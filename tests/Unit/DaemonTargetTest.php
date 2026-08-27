@@ -83,6 +83,7 @@ class DaemonTargetTest extends TestCase
 
         $data = DaemonTarget::forServiceType('mcp', []);
         $this->assertSame(DaemonTarget::DATA_DEFAULT_URL, $data['url']);
+        $this->assertTrue($data['enabled'], 'data daemon defaults to enabled (matches config/mcp.php)');
     }
 
     public function testEnumHelpers(): void

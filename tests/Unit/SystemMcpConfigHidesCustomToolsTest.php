@@ -46,6 +46,10 @@ class SystemMcpConfigHidesCustomToolsTest extends TestCase
 
         $this->assertStringContainsString("\$config['custom_tools'] = [];", $body);
         $this->assertStringNotContainsString('McpCustomTool::', $body);
+        // Must forward late static binding; a non-forwarding BaseServiceConfigModel::getConfig()
+        // call would resolve `static` to the abstract base and fatal at runtime.
+        $this->assertStringNotContainsString('BaseServiceConfigModel::getConfig(', $this->contents);
+        $this->assertStringContainsString('parent::getConfig(', $body);
     }
 
     public function testSetAndStoreConfigDropCustomTools(): void
