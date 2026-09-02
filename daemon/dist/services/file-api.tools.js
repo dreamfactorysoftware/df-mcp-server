@@ -119,7 +119,10 @@ export function registerFileApiTools(server, sessionManager, apiConfigs, disable
             });
         }
     }
-    // Register cross-file-service tools
+    // Cross-service aggregator only pays off with 2+ file services.
+    if (fileConfigs.length < 2) {
+        return;
+    }
     registerTool('all_list_files', 'List Files from All Storage Services', 'List root files and folders from all connected file storage services', z.object({
         path: z.string().optional().describe('Path to list (empty for root)')
     }), async ({ path }, { sessionId }) => {

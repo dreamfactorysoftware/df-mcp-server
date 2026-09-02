@@ -6,17 +6,18 @@ import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-u
 /**
  * Base tool definitions that will be registered for each API.
  * The handler receives the API config and auth, so it knows which API to target.
+ *
+ * Descriptions stay short on purpose: each verb is emitted once per database,
+ * so a long essay here is multiplied by service count in tools/list. Full
+ * query syntax and "call get_data_model first" guidance live in the server
+ * instructions (once per session). The Zod `schema` object is shared by
+ * reference across prefixes — only the JSON serialization is per-tool.
  */
 const BASE_TOOLS = [
     {
         name: 'get_api_spec',
         title: 'Get API Spec',
-        description: 'Get the OpenAPI 3.0 specification for this database service. Returns endpoint descriptions, ' +
-            'query parameter syntax (filter operators, order format, field selection), table names with row counts, ' +
-            'relationships between tables (including structural patterns like hierarchies), and LLM usage hints. ' +
-            'TIP: Use get_data_model instead for a more condensed schema-focused view. ' +
-            'Use compact=true (default) for a token-efficient summary. Use tables=true to include full table/field details. ' +
-            'Use resourceName to get spec for a specific table only.',
+        description: 'OpenAPI 3.0 spec for this database (endpoints, query syntax, tables). Prefer get_data_model for a condensed schema. compact=true (default).',
         schema: z.object({
             compact: z.boolean().optional().describe('Return compact token-efficient format (default: true)'),
             resourceName: z.string().optional().describe('Get spec for a specific table/resource only'),
@@ -32,14 +33,7 @@ const BASE_TOOLS = [
     {
         name: 'get_data_model',
         title: 'Get Data Model',
-        description: 'Get a condensed data model showing ALL tables, their columns (name + type + foreign keys), ' +
-            'row counts, and structural patterns (hierarchies, junction tables). Returns ~10-20KB — small enough ' +
-            'to read in full. IMPORTANT: This is the best tool to call FIRST. It tells you:\n' +
-            '- Every table and column with types\n' +
-            '- Which columns are foreign keys and what they reference\n' +
-            '- Self-referencing hierarchies (e.g. dept.parent_dept_id → dept = tree structure needing recursive traversal)\n' +
-            '- Junction tables for many-to-many relationships\n' +
-            'Use this to plan your queries before calling get_table_data.',
+        description: 'BEST FIRST CALL. Condensed model of every table, columns (name/type/FK), row counts, hierarchies, and junction tables. Use this to plan queries before get_table_data.',
         schema: z.object({
             refresh: z.boolean().optional().describe('Force refresh cached data')
         }),
@@ -54,7 +48,7 @@ const BASE_TOOLS = [
     {
         name: 'get_tables',
         title: 'List Tables',
-        description: 'Get tables available in the database. TIP: Use get_data_model first for richer metadata including columns, relationships, and structural patterns.',
+        description: 'List tables in this database. Prefer get_data_model for columns and relationships.',
         schema: z.object({}),
         handler: async (_args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTables(apiConfig.baseUrl, auth);
@@ -64,7 +58,7 @@ const BASE_TOOLS = [
     {
         name: 'get_table_schema',
         title: 'Get Table Schema',
-        description: 'Retrieve the schema of a specific table',
+        description: 'Full schema for one table.',
         schema: z.object({ tableName: z.string() }),
         handler: async ({ tableName }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableSchema(tableName, apiConfig.baseUrl, auth);
@@ -74,11 +68,7 @@ const BASE_TOOLS = [
     {
         name: 'get_table_data',
         title: 'Get Table Data',
-        description: 'Retrieve table data with filtering, pagination, and sorting.\n' +
-            'IMPORTANT: The API returns max 1000 records per request. For large tables, paginate with limit+offset and set includeCount=true to know the total.\n' +
-            'COUNTING: Use countOnly=true to get just the record count without fetching data.\n' +
-            'STOP — AGGREGATION: If you need SUM, COUNT, AVG, MIN, MAX, totals, or GROUP BY — do NOT use this tool. Use aggregate_data instead. This tool CANNOT do aggregation and will error if you try.\n' +
-            'Filter syntax: field=value, field>value, field LIKE %value%. Order syntax: field ASC, field DESC.',
+        description: 'Read rows with filter/order/limit/offset. Max 1000 rows per call; paginate for more. countOnly=true to count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.',
         schema: z.object({
             tableName: z.string(),
             fields: z.array(z.string()).optional(),
@@ -101,7 +91,7 @@ const BASE_TOOLS = [
     {
         name: 'create_records',
         title: 'Create Records',
-        description: 'Create one or more records in a table',
+        description: 'Insert one or more rows.',
         schema: z.object({
             tableName: z.string(),
             records: z.array(z.record(z.string(), z.unknown())),
@@ -118,7 +108,7 @@ const BASE_TOOLS = [
     {
         name: 'update_records',
         title: 'Update Records',
-        description: 'Update (patch) records in a table',
+        description: 'Patch rows by ids or filter.',
         schema: z.object({
             tableName: z.string(),
             records: z.array(z.record(z.string(), z.unknown())),
@@ -137,7 +127,7 @@ const BASE_TOOLS = [
     {
         name: 'delete_records',
         title: 'Delete Records',
-        description: 'Delete records from a table',
+        description: 'Delete rows by ids or filter.',
         schema: z.object({
             tableName: z.string(),
             ids: z.array(z.string()).optional(),
@@ -156,7 +146,7 @@ const BASE_TOOLS = [
     {
         name: 'get_table_fields',
         title: 'Get Table Fields',
-        description: 'Retrieve field definitions for a table',
+        description: 'Field definitions for one table.',
         schema: z.object({
             tableName: z.string(),
             refresh: z.boolean().optional()
@@ -169,7 +159,7 @@ const BASE_TOOLS = [
     {
         name: 'get_table_relationships',
         title: 'Get Table Relationships',
-        description: 'Get foreign key relationships for a table. Shows which columns reference other tables, self-referencing hierarchies (e.g. parent_dept_id → dept for tree structures requiring recursive traversal), and junction tables for many-to-many joins.',
+        description: 'Foreign keys, self-referencing hierarchies, and junction tables for one table.',
         schema: z.object({
             tableName: z.string(),
             refresh: z.boolean().optional()
@@ -182,7 +172,7 @@ const BASE_TOOLS = [
     {
         name: 'get_stored_procedures',
         title: 'List Stored Procedures',
-        description: 'Get stored procedures available in the database',
+        description: 'List stored procedures.',
         schema: z.object({}),
         handler: async (_args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getStoredProcedures(apiConfig.baseUrl, auth);
@@ -192,7 +182,7 @@ const BASE_TOOLS = [
     {
         name: 'call_stored_procedure',
         title: 'Call Stored Procedure',
-        description: 'Call a stored procedure',
+        description: 'Execute a stored procedure.',
         schema: z.object({
             procedureName: z.string(),
             parameters: z.record(z.string(), z.unknown()).optional(),
@@ -207,7 +197,7 @@ const BASE_TOOLS = [
     {
         name: 'get_stored_functions',
         title: 'List Stored Functions',
-        description: 'Get stored functions available in the database',
+        description: 'List stored functions.',
         schema: z.object({}),
         handler: async (_args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getStoredFunctions(apiConfig.baseUrl, auth);
@@ -217,7 +207,7 @@ const BASE_TOOLS = [
     {
         name: 'call_stored_function',
         title: 'Call Stored Function',
-        description: 'Call a stored function',
+        description: 'Execute a stored function.',
         schema: z.object({
             functionName: z.string(),
             parameters: z.record(z.string(), z.unknown()).optional(),
@@ -231,7 +221,7 @@ const BASE_TOOLS = [
     {
         name: 'get_database_resources',
         title: 'List Database Resources',
-        description: 'Get all resources available in the database service',
+        description: 'List resources this database service exposes.',
         schema: z.object({
             asList: z.boolean().optional(),
             asAccessList: z.boolean().optional(),
@@ -247,14 +237,7 @@ const BASE_TOOLS = [
     {
         name: 'aggregate_data',
         title: 'Aggregate Data',
-        description: 'THE ONLY WAY to compute totals, sums, counts, averages, min/max on this database. Do NOT use get_table_data for aggregation — it will fail.\n' +
-            'Pushes SUM, COUNT, AVG, MIN, MAX to the database server. Returns results in a single call — no pagination needed.\n' +
-            'IMPORTANT: Always provide groupBy for efficient server-side aggregation. Without groupBy, falls back to slow client-side pagination.\n' +
-            'Examples:\n' +
-            '  - Total revenue by currency: aggregates=[{function:"SUM", field:"totalamount"}], groupBy=["currency"]\n' +
-            '  - Revenue by country: aggregates=[{function:"SUM", field:"totalamount"}], groupBy=["country"]\n' +
-            '  - Average order value by status: aggregates=[{function:"AVG", field:"totalamount"}], groupBy=["status"]\n' +
-            '  - Row count by category: aggregates=[{function:"COUNT", field:"*"}], groupBy=["category"]',
+        description: 'THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY. Always pass groupBy when possible. Do not use get_table_data for aggregation.',
         schema: z.object({
             tableName: z.string().describe('Table to aggregate'),
             aggregates: z.array(z.object({

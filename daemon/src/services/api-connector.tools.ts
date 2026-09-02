@@ -17,6 +17,7 @@ export function registerApiConnectorTools(
   disabledTools?: Set<string>
 ) {
   const registerTool = createToolRegistrar(server, disabledTools);
+  const dbConfigs = apiConfigs.filter(c => c.category === 'database');
 
   // List all available APIs (excludes services where all tools are disabled)
   registerTool(
@@ -42,6 +43,12 @@ export function registerApiConnectorTools(
     }
   );
 
+  // Cross-service aggregators only pay off (and only cost tokens) when more
+  // than one database is in this MCP connection's catalog.
+  if (dbConfigs.length < 2) {
+    return;
+  }
+
   // Get tables from all databases
   registerTool(
     'all_get_tables',
@@ -53,7 +60,7 @@ export function registerApiConnectorTools(
       const results: Record<string, unknown> = {};
 
       await Promise.all(
-        apiConfigs.map(async (api) => {
+        dbConfigs.map(async (api) => {
           try {
             const tables = await DreamFactoryService.getTables(api.baseUrl, auth);
             results[api.name] = { success: true, data: tables };
@@ -81,7 +88,7 @@ export function registerApiConnectorTools(
       const results: Record<string, unknown> = {};
 
       await Promise.all(
-        apiConfigs.map(async (api) => {
+        dbConfigs.map(async (api) => {
           try {
             const schema = await DreamFactoryService.getTableSchema(tableName, api.baseUrl, auth);
             results[api.name] = { found: true, schema };
@@ -115,7 +122,7 @@ export function registerApiConnectorTools(
       const results: Record<string, unknown> = {};
 
       await Promise.all(
-        apiConfigs.map(async (api) => {
+        dbConfigs.map(async (api) => {
           try {
             const procedures = await DreamFactoryService.getStoredProcedures(api.baseUrl, auth);
             results[api.name] = { success: true, data: procedures };
@@ -141,7 +148,7 @@ export function registerApiConnectorTools(
       const results: Record<string, unknown> = {};
 
       await Promise.all(
-        apiConfigs.map(async (api) => {
+        dbConfigs.map(async (api) => {
           try {
             const functions = await DreamFactoryService.getStoredFunctions(api.baseUrl, auth);
             results[api.name] = { success: true, data: functions };
@@ -167,7 +174,7 @@ export function registerApiConnectorTools(
       const results: Record<string, unknown> = {};
 
       await Promise.all(
-        apiConfigs.map(async (api) => {
+        dbConfigs.map(async (api) => {
           try {
             const resources = await DreamFactoryService.getDatabaseResources(api.baseUrl, auth, {});
             results[api.name] = { success: true, data: resources };
