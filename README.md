@@ -58,6 +58,24 @@ Trade-off: the server-initiated SSE stream is unavailable (`GET` returns `405`),
 
 Set `APP_URL` in your DreamFactory `.env` to the **external URL clients use to reach DreamFactory** — the public address (e.g. `https://df.example.com`), **not** `http://localhost`. The MCP server uses `APP_URL` to build its OAuth discovery and callback URLs and to validate session tokens server-side. If it is left as `localhost` (or any address clients can't reach), MCP OAuth fails. After changing it, run `php artisan config:clear`.
 
+### Scoping `tools/list` to the connected service
+
+MCP services only advertise the database and file services you attach to them. Connecting to `/mcp/storefront` no longer dumps every other DB on the instance into `tools/list`.
+
+**In the admin UI:** API Generation & Connections → your MCP Server service → **Exposed Services**. Multi-select the database and file services this endpoint should wrap, then save. Reconnect the MCP client.
+
+Empty always means none: custom tools, `search`/`fetch`, and global tools only — no auto-generated table/file verbs. Pick at least one service if this endpoint should query a database.
+
+On upgrade, existing MCP services are backfilled with every database and file service that existed at migrate time, so their `tools/list` does not shrink. New databases created later are not advertised until you add them to Exposed Services.
+
+To restore the instance-wide catalog (every accessible DB/file, including ones created later):
+
+```env
+MCP_SCOPE_TOOLS=false
+```
+
+Verb schemas are still sent per prefixed tool. MCP clients require a full `inputSchema` (`type: "object"`) on each tool, so JSON Schema `$ref` sharing is not used. Descriptions are short; query syntax lives once in the server instructions. Cross-service `all_*` tools register only when two or more services of that category are in the catalog.
+
 ### Authentication
 
 The MCP service uses OAuth-based authentication. Users must authenticate with DreamFactory via OAuth to obtain a session token. The Laravel controller validates requests and passes the session token to the daemon via the `X-DreamFactory-Session-Token` header.

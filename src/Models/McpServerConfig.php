@@ -2,6 +2,8 @@
 
 namespace DreamFactory\Core\McpServer\Models;
 
+use DreamFactory\Core\Enums\ServiceTypeGroups;
+use DreamFactory\Core\McpServer\Utility\AvailableServices;
 use DreamFactory\Core\Models\BaseServiceConfigModel;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
@@ -19,12 +21,16 @@ class McpServerConfig extends BaseServiceConfigModel
         'custom_login_url',
         'auto_oauth_service',
         'disabled_tools',
+        'exposed_services',
+        'scope_tools',
     ];
 
     protected $casts = [
         'service_id' => 'integer',
         'app_id' => 'integer',
         'disabled_tools' => 'array',
+        'exposed_services' => 'array',
+        'scope_tools' => 'boolean',
     ];
 
     /**
@@ -34,6 +40,10 @@ class McpServerConfig extends BaseServiceConfigModel
         'app_id',
         'disabled_tools',
         'custom_tools',
+        // Tri-state (true / false / inherit MCP_SCOPE_TOOLS). A boolean
+        // checkbox cannot represent "unset", so this stays API-only. Admins
+        // pick backends via Exposed Services.
+        'scope_tools',
     ];
 
     /**
@@ -66,6 +76,7 @@ class McpServerConfig extends BaseServiceConfigModel
         unset($config['custom_tools']);
 
         parent::setConfig($id, $config, $local_config);
+        self::warnIfEmptyExposed($id, $config);
 
         if ($id && is_array($customTools)) {
             self::syncCustomTools((int) $id, $customTools);
@@ -82,10 +93,28 @@ class McpServerConfig extends BaseServiceConfigModel
         unset($config['custom_tools']);
 
         parent::storeConfig($id, $config);
+        self::warnIfEmptyExposed($id, $config);
 
         if ($id && is_array($customTools)) {
             self::syncCustomTools((int) $id, $customTools);
         }
+    }
+
+    /**
+     * Empty Exposed Services means no auto-generated DB/file tools. Log it so
+     * an admin who saved without picking backends can find the cause in logs.
+     * Custom-tools-only MCP services are valid — this is not a validation error.
+     */
+    private static function warnIfEmptyExposed($id, array $config): void
+    {
+        $names = AvailableServices::names($config['exposed_services'] ?? null);
+        if ($names !== []) {
+            return;
+        }
+
+        \Log::warning('MCP service has no Exposed Services selected; tools/list will not include database or file tools', [
+            'service_id' => $id,
+        ]);
     }
 
     private static function syncCustomTools(int $serviceId, array $customTools): void
@@ -145,6 +174,48 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['description'] = 'Optional. Name of a DF OAuth service (e.g. "google", "okta"). When set, MCP clients skip the login page entirely and go straight to that provider. Takes precedence over Custom Login URL. Use this for SSO-only environments.';
                 $schema['type'] = 'text';
                 break;
+            case 'exposed_services':
+                $schema['type'] = 'multi_picklist';
+                $schema['label'] = 'Exposed Services';
+                $schema['legend'] = 'Database and file services this MCP endpoint exposes as tools';
+                $schema['description'] = 'Pick at least one database or file service or this MCP endpoint will not expose table/file tools (custom tools, search, and fetch still register). Empty always means none — it does not fall back to every service on the instance.';
+                $schema['values'] = self::backendServiceChoices();
+                break;
+        }
+    }
+
+    /**
+     * Database + file services the admin can attach to this MCP endpoint.
+     *
+     * @return array<int, array{name: string, label: string}>
+     */
+    private static function backendServiceChoices(): array
+    {
+        try {
+            /** @var \DreamFactory\Core\Services\ServiceManager $sm */
+            $sm = app('df.service');
+            $fields = ['name', 'label'];
+            $services = array_merge(
+                $sm->getServiceListByGroup(ServiceTypeGroups::DATABASE, $fields, true),
+                $sm->getServiceListByGroup(ServiceTypeGroups::FILE, $fields, true)
+            );
+
+            $values = [];
+            foreach ($services as $service) {
+                $name = (string) ($service['name'] ?? '');
+                if ($name === '') {
+                    continue;
+                }
+                $label = (string) ($service['label'] ?? $name);
+                $values[] = [
+                    'name'  => $name,
+                    'label' => $label === $name ? $name : $label . ' (' . $name . ')',
+                ];
+            }
+
+            return $values;
+        } catch (\Throwable $e) {
+            return [];
         }
     }
 

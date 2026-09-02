@@ -66,10 +66,7 @@ function parseAvailableServicesList(services: unknown[], rootUrl: string): ApiCo
       category?: string;
     }>;
 
-    if (typed.length === 0) {
-      return null;
-    }
-
+    // Empty is a real catalog (scoped connection with no backends), not "missing".
     return typed.map(s => ({
       name: s.name,
       baseUrl: `${rootUrl}/${s.name}`,
@@ -99,10 +96,11 @@ function parseAvailableServicesHeader(req: Request, rootUrl: string): ApiConfig[
       category?: string;
     }>;
 
-    if (!Array.isArray(services) || services.length === 0) {
+    if (!Array.isArray(services)) {
       return null;
     }
 
+    // Empty array is authoritative — PHP scoped the catalog to nothing.
     return services.map(s => ({
       name: s.name,
       baseUrl: `${rootUrl}/${s.name}`,
@@ -128,19 +126,21 @@ export async function discoverServices(
   req?: Request,
   availableServicesFromBody?: unknown[]
 ): Promise<ApiConfig[]> {
-  // Prefer pre-resolved services from body envelope (new path)
-  if (availableServicesFromBody && availableServicesFromBody.length > 0) {
+  // Prefer pre-resolved services from body envelope (new path).
+  // An empty array is authoritative: PHP scoped the catalog to no backends.
+  // Falling through would rediscover every DB/file service and undo scoping.
+  if (Array.isArray(availableServicesFromBody)) {
     const parsed = parseAvailableServicesList(availableServicesFromBody, rootUrl);
-    if (parsed && parsed.length > 0) {
+    if (parsed !== null) {
       console.log('[discoverServices] Using pre-resolved services from body:', parsed.map(s => s.name));
       return parsed;
     }
   }
 
-  // Fallback: pre-resolved services from header (legacy path)
+  // Fallback: pre-resolved services from header (legacy path), including []
   if (req) {
     const preResolved = parseAvailableServicesHeader(req, rootUrl);
-    if (preResolved && preResolved.length > 0) {
+    if (preResolved !== null) {
       console.log('[discoverServices] Using pre-resolved services from header:', preResolved.map(s => s.name));
       return preResolved;
     }
@@ -213,7 +213,8 @@ export function createServer(
     '',
     '## Tool Usage Guide',
     'All database tools are prefixed with the API name (e.g., db_get_tables, mysql_get_table_data).',
-    'Use the list_apis tool to see all available APIs.',
+    'The same verb on every database shares the same parameters — only the prefix changes.',
+    dbApis.length > 1 ? 'Use the list_apis tool to see all available APIs.' : '',
     '',
     `1. \`{prefix}_get_data_model\` - START HERE. Condensed schema with columns, FKs, and patterns.`,
     `2. \`{prefix}_get_api_spec\` - OpenAPI spec with query syntax hints. Use compact=true (default).`,
