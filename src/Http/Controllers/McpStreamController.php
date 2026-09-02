@@ -6,11 +6,10 @@ use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
 use DreamFactory\Core\McpServer\Models\McpCustomTool;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
+use DreamFactory\Core\McpServer\Utility\AvailableServices;
 use DreamFactory\Core\McpServer\Utility\RequestLogger;
-use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\Utility\Session as SessionUtilities;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 
 class McpStreamController extends Controller
 {
@@ -129,7 +128,9 @@ class McpStreamController extends Controller
 
         // Resolve available services server-side so the daemon doesn't need
         // to call GET /api/v2/system/service (which requires system permissions).
-        $availableServices = $this->getAvailableServices();
+        // Scoped to this MCP service when scope_tools / exposed_services / MCP_SCOPE_TOOLS
+        // is set — otherwise the historical instance-wide catalog.
+        $availableServices = AvailableServices::resolve($mcpService, is_array($config) ? $config : []);
 
         $client = new McpDaemonClient();
         try {
@@ -224,81 +225,6 @@ class McpStreamController extends Controller
                 $tool['function'] = $content;
             }
         }
-    }
-
-    /**
-     * Get available database and file services, filtered by the user's role.
-     *
-     * Uses ServiceManager internally (bypasses HTTP RBAC middleware), then
-     * filters the result using the session's role.services — the same pattern
-     * used by Service::getUserAccessibleServices().
-     *
-     * @return array List of services with name, label, type, and category
-     */
-    private function getAvailableServices(): array
-    {
-        try {
-            /** @var \DreamFactory\Core\Services\ServiceManager $serviceManager */
-            $serviceManager = app('df.service');
-            $fields = ['id', 'name', 'label', 'type'];
-
-            $dbServices = $serviceManager->getServiceListByGroup(ServiceTypeGroups::DATABASE, $fields, true);
-            $fileServices = $serviceManager->getServiceListByGroup(ServiceTypeGroups::FILE, $fields, true);
-
-            $allServices = array_merge(
-                array_map(fn($s) => array_merge($s, ['category' => 'database']), $dbServices),
-                array_map(fn($s) => array_merge($s, ['category' => 'file']), $fileServices)
-            );
-
-            // Sysadmins get all services; non-admin users are filtered by role
-            if (!SessionUtilities::isSysAdmin()) {
-                $accessibleIds = $this->getUserAccessibleServiceIds();
-                if ($accessibleIds === null) {
-                    // null means role grants access to all services — no filtering needed
-                } elseif (!empty($accessibleIds)) {
-                    $allServices = array_values(array_filter(
-                        $allServices,
-                        fn($s) => in_array((int)($s['id'] ?? 0), $accessibleIds, true)
-                    ));
-                } else {
-                    $allServices = [];
-                }
-            }
-
-            return $allServices;
-        } catch (\Throwable $e) {
-            Log::warning('Failed to resolve available services for MCP daemon', [
-                'error' => $e->getMessage(),
-            ]);
-            return [];
-        }
-    }
-
-    /**
-     * Get service IDs the current user's role has access to.
-     *
-     * Mirrors Service::getUserAccessibleServices() — reads the role_service_access
-     * entries stored in the session by Session::setSessionData().
-     *
-     * @return int[]|null  Array of service IDs, or null if role grants access to ALL services.
-     */
-    private function getUserAccessibleServiceIds(): ?array
-    {
-        $roleServices = (array)SessionUtilities::get('role.services');
-        $ids = [];
-
-        foreach ($roleServices as $serviceAccess) {
-            $serviceId = $serviceAccess['service_id'] ?? null;
-            if ($serviceId === null || $serviceId === 0 || $serviceId === '') {
-                // A null service_id entry means "all services"
-                return null;
-            }
-            if (is_numeric($serviceId) && $serviceId > 0) {
-                $ids[] = (int)$serviceId;
-            }
-        }
-
-        return array_unique($ids);
     }
 
     /**

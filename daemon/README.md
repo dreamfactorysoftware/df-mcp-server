@@ -115,3 +115,7 @@ The daemon exposes the following tools via the MCP protocol:
 |------|-------------|
 | `search` | Stub search implementation for connectors that require it |
 | `fetch` | Stub fetch implementation for connectors that require it |
+
+Prefixed verb tools (`{api}_{verb}`) share one Zod schema per verb; descriptions are short and the full query-syntax guide lives in the server `instructions` so `tools/list` does not repeat a ~400-token essay once per database. Cross-service aggregators (`all_get_tables`, `all_find_table`, `all_list_files`, …) are registered only when two or more services of that category are in the connection's catalog.
+
+Which backend services appear in the catalog is decided by PHP (`AvailableServices`) before the daemon sees the list. Admins pick them on **Exposed Services** (API Generation & Connections → MCP Server). An empty list means no auto DB/file tools — the daemon will not rediscover every service on the instance. Set `MCP_SCOPE_TOOLS=false` to restore the instance-wide catalog when the list is also empty.

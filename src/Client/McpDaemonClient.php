@@ -86,9 +86,9 @@ class McpDaemonClient
                 // For non-POST requests, pass config via headers (these are smaller
                 // requests like session resumption that don't carry disabled_tools).
                 $headers['X-Mcp-Config'] = json_encode($config);
-                if (!empty($availableServices)) {
-                    $headers['X-Mcp-Available-Services'] = json_encode($availableServices);
-                }
+                // Always send the list, including [] — an omitted header makes
+                // the daemon fall back to GET /system/service and undo scoping.
+                $headers['X-Mcp-Available-Services'] = json_encode(array_values($availableServices));
             }
 
             $daemonPath = "/mcp/{$mcpService}";

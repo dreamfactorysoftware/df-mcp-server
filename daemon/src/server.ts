@@ -273,8 +273,10 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     }
 
     const hasCustomTools = customTools !== undefined && customTools.length > 0;
+    const catalogFromPhp = Array.isArray(availableServicesFromBody)
+      || Boolean(req.header('X-Mcp-Available-Services'));
 
-    if (apiConfigs.length === 0 && !hasCustomTools) {
+    if (apiConfigs.length === 0 && !hasCustomTools && !catalogFromPhp) {
       res.status(400).json({
         jsonrpc: '2.0',
         error: {
