@@ -7,9 +7,12 @@ use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\McpServer\Models\McpOAuthAuthorizationCode;
 use DreamFactory\Core\McpServer\Models\McpOAuthClient;
 use DreamFactory\Core\McpServer\Models\McpServerConfig;
-use GuzzleHttp\Client;
+use DreamFactory\Core\Enums\Verbs;
+use DreamFactory\Core\Utility\JWTUtilities;
+use DreamFactory\Core\Utility\Session as DfSession;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use ServiceManager;
 
 /**
  * OAuth 2.0 Authorization Server for MCP
@@ -18,14 +21,6 @@ use Illuminate\Support\Facades\Log;
  */
 class McpOAuthController extends Controller
 {
-    private string $dfUrl;
-
-    public function __construct()
-    {
-        // Internal API URL for server-to-server calls (not proxied)
-        $this->dfUrl = rtrim(config('app.url', env('DF_URL', 'http://localhost')), '/');
-    }
-
     /**
      * Get frontend URL for login redirects
      *
@@ -923,59 +918,64 @@ class McpOAuthController extends Controller
     }
 
     /**
-     * Authenticate with DreamFactory
+     * Authenticate with DreamFactory.
+     *
+     * Runs in-process (ServiceManager) rather than over HTTP to APP_URL: the
+     * HTTP round trip needed a second PHP-FPM worker from the same pool, so a
+     * busy pool made valid logins fail with "Invalid credentials" (#50).
      */
     private function authenticateWithDreamFactory(string $email, string $password): array
     {
-        $client = new Client(['timeout' => 30]);
+        $credentials = ['email' => $email, 'password' => $password];
 
         // Try user session first
         try {
-            $response = $client->post("{$this->dfUrl}/api/v2/user/session", [
-                'json' => [
-                    'email' => $email,
-                    'password' => $password,
-                ],
-                'headers' => [
-                    'Accept' => 'application/json',
-                ],
-            ]);
-
-            return json_decode($response->getBody()->getContents(), true);
+            return $this->dfRequest('user', Verbs::POST, 'session', $credentials);
         } catch (\Exception $e) {
             // Fall back to admin session endpoint
             Log::debug('MCP OAuth: User session failed, trying admin session', ['error' => $e->getMessage()]);
         }
 
         // Try admin session
-        $response = $client->post("{$this->dfUrl}/api/v2/system/admin/session", [
-            'json' => [
-                'email' => $email,
-                'password' => $password,
-            ],
-            'headers' => [
-                'Accept' => 'application/json',
-            ],
-        ]);
-
-        return json_decode($response->getBody()->getContents(), true);
+        return $this->dfRequest('system', Verbs::POST, 'admin/session', $credentials);
     }
 
     /**
-     * Validate DreamFactory session token
+     * Validate a DreamFactory session token (JWT) and return the session info,
+     * exactly as GET /api/v2/user/session would. Throws if the token is
+     * expired, blacklisted, invalid, or belongs to an unknown user.
      */
     private function validateDreamFactorySession(string $token): array
     {
-        $client = new Client(['timeout' => 30]);
+        \JWTAuth::setToken($token);
+        $payload = \JWTAuth::getPayload();
+        JWTUtilities::verifyUser($payload);
 
-        $response = $client->get("{$this->dfUrl}/api/v2/user/session", [
-            'headers' => [
-                'Accept' => 'application/json',
-                'X-DreamFactory-Session-Token' => $token,
-            ],
-        ]);
+        DfSession::setSessionToken($token);
+        DfSession::setSessionData(null, $payload->get('user_id'));
 
-        return json_decode($response->getBody()->getContents(), true);
+        return DfSession::getPublicInfo();
+    }
+
+    /**
+     * Dispatch a REST call to a DreamFactory service in-process. The service
+     * layer converts exceptions into an error response body, so surface those
+     * as exceptions to keep the callers' try/catch semantics.
+     */
+    private function dfRequest(string $service, string $verb, string $resource, array $payload = []): array
+    {
+        $response = ServiceManager::handleRequest($service, $verb, $resource, [], [], $payload ?: null, null, false);
+        $content = $response->getContent();
+        $status = (int) $response->getStatusCode();
+
+        if ($status >= 400) {
+            $message = is_array($content)
+                ? ($content['error']['message'] ?? json_encode($content))
+                : (string) $content;
+            throw new \RuntimeException("{$service}/{$resource} failed ({$status}): {$message}", $status);
+        }
+
+        return is_array($content) ? $content : [];
     }
 
     /**
@@ -1108,15 +1108,7 @@ class McpOAuthController extends Controller
     private function getAvailableOAuthServices(): array
     {
         try {
-            $client = new Client(['timeout' => 10]);
-
-            $response = $client->get("{$this->dfUrl}/api/v2/system/environment", [
-                'headers' => [
-                    'Accept' => 'application/json',
-                ],
-            ]);
-
-            $env = json_decode($response->getBody()->getContents(), true);
+            $env = $this->dfRequest('system', Verbs::GET, 'environment');
 
             return $env['authentication']['oauth'] ?? [];
         } catch (\Exception $e) {

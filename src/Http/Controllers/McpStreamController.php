@@ -24,12 +24,20 @@ class McpStreamController extends Controller
             return $token;
         }
 
-        $accept = strtolower($request->header('Accept', ''));
-        if (!str_contains($accept, 'text/event-stream')) {
-            return response('Accept header must include text/event-stream for GET requests', 406);
-        }
-
-        return $this->processMcpRequest($request, $mcpService);
+        // Decline the server-initiated SSE stream (MCP spec allows 405; clients
+        // fall back to POST-only). Proxying it held one PHP-FPM worker per MCP
+        // session for the full daemon timeout because the stream never ends
+        // and Guzzle buffers it, which starved the pool under a handful of
+        // concurrent sessions (#50). The daemon never pushes notifications on
+        // that stream, so nothing is lost.
+        return response()->json([
+            'jsonrpc' => '2.0',
+            'id' => null,
+            'error' => [
+                'code' => -32000,
+                'message' => 'Method Not Allowed: server-initiated SSE stream is not offered (POST only)',
+            ],
+        ], 405)->header('Allow', 'POST, DELETE');
     }
 
     public function handlePost(Request $request, string $mcpService)

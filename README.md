@@ -52,11 +52,25 @@ MCP_STATELESS=true
 
 No session IDs are issued and no session state is kept — every request carries everything the daemon needs, so any node can answer any request. No load-balancer stickiness or shared cache is required. `GET /health` reports the active mode.
 
-Trade-off: the server-initiated SSE stream is unavailable (`GET` returns `405`), and the MCP server is rebuilt per request. Leave this unset for single-node installs, where the default warm-session behavior is faster.
+Trade-off: the MCP server is rebuilt per request. Leave this unset for single-node installs, where the default warm-session behavior is faster.
+
+### PHP-FPM sizing
+
+`GET /mcp/{service}` (the server-initiated SSE stream) always returns `405`; clients fall back to POST-only as the MCP spec allows. The daemon never pushes notifications on that stream, and proxying it pinned one PHP-FPM worker per MCP session for the full daemon timeout, which starved small pools.
+
+Every proxied MCP call still needs **two** PHP-FPM workers from the same pool: one holds the client's request open while the daemon works, and the daemon's own REST call back into DreamFactory needs another. Size `pm.max_children` for at least twice the expected number of concurrent MCP calls (the Debian default of 5 is exhausted by 3 concurrent calls), or point `MCP_INTERNAL_BASE_URL` at a separate FPM pool for daemon-originated traffic.
+
+```
+# Seconds one PHP worker waits for the daemon to answer a proxied MCP call (default 300).
+# The daemon caps each of its own REST sub-calls at 30s; lower this only if no tool chains many sub-calls.
+MCP_DAEMON_TIMEOUT=300
+```
+
+A call that exceeds it returns `504` with `MCP daemon did not respond within Ns` rather than holding the worker.
 
 ### Configuration
 
-Set `APP_URL` in your DreamFactory `.env` to the **external URL clients use to reach DreamFactory** — the public address (e.g. `https://df.example.com`), **not** `http://localhost`. The MCP server uses `APP_URL` to build its OAuth discovery and callback URLs and to validate session tokens server-side. If it is left as `localhost` (or any address clients can't reach), MCP OAuth fails. After changing it, run `php artisan config:clear`.
+Set `APP_URL` in your DreamFactory `.env` to the **external URL clients use to reach DreamFactory** — the public address (e.g. `https://df.example.com`), **not** `http://localhost`. The MCP server uses `APP_URL` to build its OAuth discovery and callback URLs. If it is left as `localhost` (or any address clients can't reach), MCP OAuth fails. Login and session validation run in-process and do not depend on it. After changing it, run `php artisan config:clear`.
 
 ### Authentication
 
