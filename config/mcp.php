@@ -11,6 +11,8 @@ return [
         'host' => env('MCP_DAEMON_HOST', '127.0.0.1'),
         'port' => env('MCP_DAEMON_PORT', 8006),
         'internal_base_url' => env('MCP_INTERNAL_BASE_URL'),
+        // Seconds a PHP worker waits for the daemon to answer one proxied MCP call.
+        'timeout' => (int) env('MCP_DAEMON_TIMEOUT', 300),
     ],
 
     // Per-tool-call audit log (mcp_request_log table)

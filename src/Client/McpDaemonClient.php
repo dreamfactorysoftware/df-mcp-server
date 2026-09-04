@@ -14,10 +14,15 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 class McpDaemonClient
 {
     private string $daemonUrl;
+    private int $timeout;
 
     public function __construct(?string $daemonUrl = null)
     {
         $this->daemonUrl = $daemonUrl ?? config('mcp.daemon.url', 'http://127.0.0.1:8006');
+        // Upper bound on how long one PHP-FPM worker is held per proxied call.
+        // The daemon caps each of its own REST sub-calls at 30s, so this only
+        // matters for tools that chain many sub-calls.
+        $this->timeout = (int) config('mcp.daemon.timeout', 300);
     }
 
     /**
@@ -29,7 +34,7 @@ class McpDaemonClient
     {
         try {
             $client = new \GuzzleHttp\Client([
-                'timeout' => 300,
+                'timeout' => $this->timeout,
             ]);
 
             $headers = [
@@ -126,6 +131,25 @@ class McpDaemonClient
             ], $e->getResponse()?->getStatusCode() ?? 400);
 
         } catch (\GuzzleHttp\Exception\ConnectException $e) {
+            // cURL 28 = the daemon accepted the request but did not finish
+            // answering within the timeout. Not a "daemon down" condition.
+            if (($e->getHandlerContext()['errno'] ?? null) === CURLE_OPERATION_TIMEOUTED) {
+                Log::error('MCP daemon request timed out', [
+                    'mcpService' => $mcpService,
+                    'timeout' => $this->timeout,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return response()->json([
+                    'jsonrpc' => '2.0',
+                    'id' => null,
+                    'error' => [
+                        'code' => -32000,
+                        'message' => "MCP daemon did not respond within {$this->timeout}s (backend busy or timed out)",
+                    ],
+                ], 504);
+            }
+
             Log::error('Failed to connect to MCP daemon', [
                 'daemonUrl' => $this->daemonUrl,
                 'error' => $e->getMessage(),
@@ -193,7 +217,7 @@ class McpDaemonClient
         array $availableServices,
         array $jsonRpc
     ): array {
-        $client = new \GuzzleHttp\Client(['timeout' => 300]);
+        $client = new \GuzzleHttp\Client(['timeout' => $this->timeout]);
         $url = $this->daemonUrl . "/mcp/{$mcpService}";
 
         $headers = [
