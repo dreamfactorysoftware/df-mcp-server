@@ -19,6 +19,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'custom_login_url',
         'auto_oauth_service',
         'disabled_tools',
+        'lazy_mode',
     ];
 
     protected $casts = [
@@ -139,6 +140,17 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['label'] = 'Custom Login URL';
                 $schema['description'] = 'Optional. Send users to your own branded login page during the MCP OAuth flow instead of DreamFactory\'s default. The page must call DF\'s session-create endpoint and post back; HTTPS required (localhost is exempt for dev).';
                 $schema['type'] = 'text';
+                break;
+            case 'lazy_mode':
+                $schema['label'] = 'Lazy Tool Loading';
+                $schema['description'] = 'Hide the full tool catalog behind search_tools / describe_tool / call_tool / fetch_more so AI clients spend far fewer tokens per turn. Auto: only when the catalog is large (over ~8k tokens). On: always. Off: advertise every tool (legacy). Clients that defer schemas themselves (Codex, Grok, Hermes) always get the full catalog.';
+                $schema['type'] = 'picklist';
+                $schema['default'] = 'auto';
+                $schema['values'] = [
+                    ['label' => 'Auto (large catalogs only)', 'name' => 'auto'],
+                    ['label' => 'On', 'name' => 'on'],
+                    ['label' => 'Off', 'name' => 'off'],
+                ];
                 break;
             case 'auto_oauth_service':
                 $schema['label'] = 'Auto OAuth Service';

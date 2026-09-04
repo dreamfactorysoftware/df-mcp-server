@@ -4,6 +4,7 @@ import { SessionService } from '../services/session.service.js';
 import { registerDreamFactoryTools } from '../services/tools.service.js';
 import { registerCustomTools } from '../services/custom-tools.service.js';
 import { registerGlobalTools } from '../services/global-tools.service.js';
+import { createLazyState, installLazyFacade, LAZY_INSTRUCTIONS, type LazyMode } from '../services/lazy.service.js';
 import { DreamFactoryService, type DFAuthConfig } from '../services/dreamfactory.service.js';
 import packageJson from '../../package.json' with { type: 'json' };
 import type { ApiConfig, CustomToolDefinition } from '../types.js';
@@ -186,7 +187,8 @@ export function createServer(
   apiConfigs: ApiConfig[],
   sessionManager: SessionService,
   disabledTools?: Set<string>,
-  customTools?: CustomToolDefinition[]
+  customTools?: CustomToolDefinition[],
+  lazyMode: LazyMode = 'auto'
 ): McpServer {
   const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);
   const fileApis = apiConfigs.filter(c => c.category === 'file').map(c => c.name);
@@ -261,7 +263,8 @@ export function createServer(
             `${typeDesc} Use them as described in their tool descriptions.`
           ];
         })()
-      : [])
+      : []),
+    ...(lazyMode !== 'off' ? [LAZY_INSTRUCTIONS.replaceAll('{prefix}', examplePrefix)] : [])
   ].filter(Boolean).join('\n');
 
   const server = new McpServer(
@@ -274,6 +277,9 @@ export function createServer(
     }
   );
 
+  // Must exist before any registerTool call so the registrar can catalog tools.
+  const lazy = lazyMode !== 'off' ? createLazyState(server, serviceName, lazyMode) : undefined;
+
   // Agent identity/access tools — always available, not service-prefixed.
   registerGlobalTools(server, sessionManager, disabledTools);
 
@@ -281,6 +287,10 @@ export function createServer(
 
   if (customTools && customTools.length > 0) {
     registerCustomTools(server, customTools, sessionManager, disabledTools);
+  }
+
+  if (lazy) {
+    installLazyFacade(server, lazy);
   }
 
   return server;

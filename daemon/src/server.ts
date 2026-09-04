@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
 import { runWithTrace } from './services/trace.service.js';
+import { runWithResponse, type LazyMode } from './services/lazy.service.js';
 import {
   createServer,
   getSessionId,
@@ -43,8 +44,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // Carry the platform trace id (minted by DF PHP) through every async
 // continuation of this request so DF REST sub-calls can re-attach it.
-app.use((req, _res, next) => {
-  runWithTrace(req.header('x-dreamfactory-trace-id'), next);
+app.use((req, res, next) => {
+  runWithResponse(res, () => runWithTrace(req.header('x-dreamfactory-trace-id'), next));
 });
 
 // Internal API key for PHP proxy -> daemon communication
@@ -236,6 +237,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     // This must happen before the service check so custom-tools-only roles are not rejected.
     let disabledTools: Set<string> | undefined;
     let customTools: CustomToolDefinition[] | undefined;
+    let lazyMode: LazyMode = 'auto';
     const mcpConfigData = mcpConfig ?? (() => {
       const header = req.headers['x-mcp-config'] as string | undefined;
       if (!header) return undefined;
@@ -248,6 +250,9 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     })();
 
     if (mcpConfigData) {
+      if (['auto', 'on', 'off'].includes(mcpConfigData.lazy_mode)) {
+        lazyMode = mcpConfigData.lazy_mode;
+      }
       if (Array.isArray(mcpConfigData.disabled_tools) && mcpConfigData.disabled_tools.length > 0) {
         disabledTools = new Set(mcpConfigData.disabled_tools as string[]);
         console.log(`Disabled tools (${disabledTools.size}):`, [...disabledTools]);
@@ -305,7 +310,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
         apiConfigs
       });
 
-      const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools);
+      const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode);
       const statelessTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true
@@ -321,7 +326,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       return;
     }
 
-    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools);
+    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {
