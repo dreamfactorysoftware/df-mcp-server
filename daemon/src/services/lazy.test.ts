@@ -6,6 +6,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createToolRegistrar, respond } from './tool-utils.js';
+import { registerCustomTools } from './custom-tools.service.js';
+import { SessionService } from './session.service.js';
 import { createLazyState, installLazyFacade, SearchIndex, shapeText, PAGE_CHARS, type LazyMode } from './lazy.service.js';
 
 // Run: npm test (node --import tsx --test)
@@ -32,6 +34,12 @@ function build(mode: Exclude<LazyMode, 'off'>, service = 'svc') {
   reg('db_create_records', 'Create Records', 'Create one or more records in a table.',
     z.object({ tableName: z.string(), records: z.array(z.record(z.string(), z.unknown())) }),
     async () => ({ isError: true, content: [{ type: 'text', text: 'Error during db_create_records: {"error":{"code":403,"message":"no","trace":["a","b"]}}' }] }));
+  registerCustomTools(server, [
+    { name: 'add_numbers', description: 'Add two numbers', tool_type: 'function',
+      parameters: [{ name: 'a', type: 'number', in: 'body', required: true }, { name: 'b', type: 'number', in: 'body', required: true }],
+      function: 'return { sum: a + b };' },
+    { name: 'broken_fn', description: 'Throws', tool_type: 'function', parameters: [], function: 'throw new Error("boom");' }
+  ], new SessionService());
   installLazyFacade(server, state);
   return server;
 }
@@ -69,6 +77,13 @@ test('lazy on: facade only, call_tool validates, pages, fetch_more, no list_chan
   const err = await client.callTool({ name: 'call_tool', arguments: { name: 'db_create_records', arguments: { tableName: 't', records: [{}] } } });
   assert.equal(text(err), 'Error during db_create_records: {"error":{"code":403,"message":"no"}}');
 
+  // Custom function tools run through the facade and directly, errors included.
+  assert.equal(text(await client.callTool({ name: 'call_tool', arguments: { name: 'add_numbers', arguments: { a: 2, b: 3 } } })), '{"sum":5}');
+  assert.equal(text(await client.callTool({ name: 'add_numbers', arguments: { a: 2, b: 3 } })), '{"sum":5}');
+  const boom = await client.callTool({ name: 'call_tool', arguments: { name: 'broken_fn' } });
+  assert.equal(boom.isError, true);
+  assert.equal(text(boom), 'Function execution error: boom');
+
   // Direct call to a hidden tool still works (tools remain registered).
   const direct = await client.callTool({ name: 'db_get_tables', arguments: {} });
   assert.equal(text(direct), '{"resource":[{"name":"t1"}]}');
@@ -84,7 +99,7 @@ test('passthrough client and small auto catalog get the full list, unshaped', as
   for (const [client, mode] of [['codex-cli', 'on'], ['claude-code', 'auto']] as const) {
     const { client: c } = await connect(build(mode, `svc-${client}`), client);
     const names = (await c.listTools()).tools.map(t => t.name).sort();
-    assert.deepEqual(names, ['db_create_records', 'db_get_table_data', 'db_get_tables']);
+    assert.deepEqual(names, ['add_numbers', 'broken_fn', 'db_create_records', 'db_get_table_data', 'db_get_tables']);
     const r = text(await c.callTool({ name: 'db_get_table_data', arguments: { tableName: 't' } }));
     assert.ok(r.startsWith('{\n  "rows"'), 'pretty JSON, no paging');
     assert.ok(!r.includes('[paged:'));
