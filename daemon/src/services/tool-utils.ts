@@ -2,6 +2,7 @@ import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { DFAuthConfig } from './dreamfactory.service.js';
 import type { SessionService } from './session.service.js';
+import { lazyStateFor } from './lazy.service.js';
 
 type TextBlock = { type: 'text'; text: string };
 type ImageBlock = { type: 'image'; data: string; mimeType: string };
@@ -91,6 +92,10 @@ export function createToolRegistrar(server: McpServer, disabledTools?: Set<strin
     if (disabledTools?.has(name)) {
       return;
     }
+    // Lazy mode keeps a catalog of every tool so the facade can search,
+    // describe and call them by name; results are shaped/paged when active.
+    const lazy = lazyStateFor(server);
+    lazy?.register({ name, title, description, schema, handler });
     server.registerTool(
       name,
       { title, description, inputSchema: schema },
@@ -99,10 +104,11 @@ export function createToolRegistrar(server: McpServer, disabledTools?: Set<strin
         try {
           const result = await handler(params ?? {}, context ?? {});
           console.log(`[tool] ${name} completed, isError=${result?.isError ?? false}`);
-          return result;
+          return lazy ? lazy.finish(name, result) : result;
         } catch (error) {
           console.error(`[tool] ${name} unhandled error:`, error);
-          return respondError(handleError(error, name));
+          const failed = respondError(handleError(error, name));
+          return lazy ? lazy.finish(name, failed) : failed;
         }
       }
     );

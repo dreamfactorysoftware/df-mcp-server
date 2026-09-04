@@ -1,3 +1,4 @@
+import { lazyStateFor } from './lazy.service.js';
 export const respond = (data) => {
     let text;
     try {
@@ -64,16 +65,21 @@ export function createToolRegistrar(server, disabledTools) {
         if (disabledTools?.has(name)) {
             return;
         }
+        // Lazy mode keeps a catalog of every tool so the facade can search,
+        // describe and call them by name; results are shaped/paged when active.
+        const lazy = lazyStateFor(server);
+        lazy?.register({ name, title, description, schema, handler });
         server.registerTool(name, { title, description, inputSchema: schema }, async (params, context) => {
             console.log(`[tool] ${name} called`);
             try {
                 const result = await handler(params ?? {}, context ?? {});
                 console.log(`[tool] ${name} completed, isError=${result?.isError ?? false}`);
-                return result;
+                return lazy ? lazy.finish(name, result) : result;
             }
             catch (error) {
                 console.error(`[tool] ${name} unhandled error:`, error);
-                return respondError(handleError(error, name));
+                const failed = respondError(handleError(error, name));
+                return lazy ? lazy.finish(name, failed) : failed;
             }
         });
     };

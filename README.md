@@ -54,6 +54,20 @@ No session IDs are issued and no session state is kept — every request carries
 
 Trade-off: the server-initiated SSE stream is unavailable (`GET` returns `405`), and the MCP server is rebuilt per request. Leave this unset for single-node installs, where the default warm-session behavior is faster.
 
+### Lazy tool loading (search / describe / call facade)
+
+A DreamFactory MCP service over a few hundred tables produces a tool catalog no AI client can carry cheaply: every turn re-sends every tool schema. Each MCP service has a **Lazy Tool Loading** setting (`lazy_mode`: `auto` / `on` / `off`, default `auto`):
+
+- `off` — every tool is advertised, exactly as before.
+- `on` — `tools/list` returns four facade tools (`search_tools`, `describe_tool`, `call_tool`, `fetch_more`) plus up to 8 "hot" tools this service's recent sessions actually used. The full catalog stays callable through `call_tool`.
+- `auto` — the facade is used only when the full catalog would exceed ~8k tokens (32 KB); small catalogs are served in full because they lose under a facade.
+
+Clients that already defer tool schemas themselves (`initialize.clientInfo.name` containing `codex`, `grok` or `hermes`) always get the full catalog. Override the list with `MCP_LAZY_PASSTHROUGH=codex,grok,hermes` and the threshold with `MCP_LAZY_THRESHOLD_BYTES` on the daemon.
+
+When the facade is active, tool results are also minified, stripped of PHP stack traces, and paged above 6,000 characters (`MCP_LAZY_PAGE_CHARS`); `fetch_more(handle, offset)` returns the rest. The tool list is fixed for the life of a session — the daemon never sends `notifications/tools/list_changed`, since that invalidates the client's prompt cache.
+
+Every request row in `mcp_request_log` records what lazy mode saved (`mode`, `catalog_tokens`, `preamble_saved_per_turn`, `result_chars_withheld`, `facade_calls`), and the usage aggregate exposes `tokens_saved`.
+
 ### Configuration
 
 Set `APP_URL` in your DreamFactory `.env` to the **external URL clients use to reach DreamFactory** — the public address (e.g. `https://df.example.com`), **not** `http://localhost`. The MCP server uses `APP_URL` to build its OAuth discovery and callback URLs and to validate session tokens server-side. If it is left as `localhost` (or any address clients can't reach), MCP OAuth fails. After changing it, run `php artisan config:clear`.

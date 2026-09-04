@@ -134,10 +134,13 @@ class McpStreamController extends Controller
         $client = new McpDaemonClient();
         try {
             $response = $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
+            // The daemon's savings ledger is internal — persist it, don't forward it to the MCP client.
+            $ledger = json_decode((string) $response->headers->get('X-Mcp-Ledger'), true);
+            $response->headers->remove('X-Mcp-Ledger');
             try {
                 $bytesOut = self::responseBytes($response);
                 $status = $response->getStatusCode() >= 400 ? 'error' : 'success';
-                RequestLogger::log($mcpService, $request, $token, $startNs, $bytesOut, $status);
+                RequestLogger::log($mcpService, $request, $token, $startNs, $bytesOut, $status, null, is_array($ledger) ? $ledger : null);
             } catch (\Throwable $ignored) {
                 /* audit logging must never break the response */
             }

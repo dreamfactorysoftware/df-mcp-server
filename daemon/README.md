@@ -27,7 +27,13 @@ Set environment variables or use defaults:
 ```bash
 export MCP_DAEMON_HOST=127.0.0.1
 export MCP_DAEMON_PORT=8006
+# Lazy tool loading (per-service lazy_mode auto|on|off is set in DreamFactory):
+export MCP_LAZY_PASSTHROUGH=codex,grok,hermes   # clients that always get the full catalog
+export MCP_LAZY_THRESHOLD_BYTES=32768           # auto: facade above this serialized tools/list size
+export MCP_LAZY_PAGE_CHARS=6000                 # page tool results longer than this
 ```
+
+Tests: `npm test` (node --test via tsx).
 
 ## Running
 

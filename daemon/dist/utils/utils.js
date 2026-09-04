@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerDreamFactoryTools } from '../services/tools.service.js';
 import { registerCustomTools } from '../services/custom-tools.service.js';
 import { registerGlobalTools } from '../services/global-tools.service.js';
+import { createLazyState, installLazyFacade, LAZY_INSTRUCTIONS } from '../services/lazy.service.js';
 import { DreamFactoryService } from '../services/dreamfactory.service.js';
 import packageJson from '../../package.json' with { type: 'json' };
 export function getSessionId(req) {
@@ -138,7 +139,7 @@ export async function discoverServices(rootUrl, auth, req, availableServicesFrom
         throw error;
     }
 }
-export function createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools) {
+export function createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode = 'auto') {
     const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);
     const fileApis = apiConfigs.filter(c => c.category === 'file').map(c => c.name);
     const dbPrefixes = dbApis.map(name => name.replace(/[^a-zA-Z0-9]/g, '_'));
@@ -210,7 +211,8 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
                     `${typeDesc} Use them as described in their tool descriptions.`
                 ];
             })()
-            : [])
+            : []),
+        ...(lazyMode !== 'off' ? [LAZY_INSTRUCTIONS.replaceAll('{prefix}', examplePrefix)] : [])
     ].filter(Boolean).join('\n');
     const server = new McpServer({
         name: `DreamFactory MCP (${serviceName})`,
@@ -218,11 +220,16 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
     }, {
         instructions
     });
+    // Must exist before any registerTool call so the registrar can catalog tools.
+    const lazy = lazyMode !== 'off' ? createLazyState(server, serviceName, lazyMode) : undefined;
     // Agent identity/access tools — always available, not service-prefixed.
     registerGlobalTools(server, sessionManager, disabledTools);
     registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
     if (customTools && customTools.length > 0) {
         registerCustomTools(server, customTools, sessionManager, disabledTools);
+    }
+    if (lazy) {
+        installLazyFacade(server, lazy);
     }
     return server;
 }
