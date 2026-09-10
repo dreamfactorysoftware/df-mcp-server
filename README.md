@@ -113,6 +113,7 @@ instead of the bundled data daemon. Custom tools are not supported on the system
 | --- | --- | --- |
 | `MCP_SYSTEM_DAEMON_ENABLED` | `true` | Gate the `system_mcp` type. When false, requests get a 503 naming this variable. |
 | `MCP_SYSTEM_DAEMON_URL` | `http://127.0.0.1:3700` | Base URL of the running `df-system-mcp-server`. In Docker use the service name, e.g. `http://df-system-mcp:3700`. |
+| `MCP_SYSTEM_DAEMON_BASE_URL` | *(unset)* | DreamFactory URL the system daemon calls back (sent as `X-Mcp-Base-Url`), e.g. `http://web` in Docker. Falls back to `MCP_INTERNAL_BASE_URL`, then to the incoming request's origin — which a daemon in a separate container usually can't reach, so set this for sidecar deployments. |
 | `MCP_INTERNAL_KEY` | *(unset)* | Optional shared secret. When set, DreamFactory sends `X-Mcp-Internal-Key` to **both** daemons; set the same value on the daemons so they reject direct callers. |
 | `MCP_INTERNAL_BASE_URL` | *(unset)* | Already used by the data daemon; also used here as the URL the system daemon calls back into DreamFactory with (e.g. `http://web`). |
 

@@ -23,6 +23,10 @@ return [
     'system_daemon' => [
         'enabled' => env('MCP_SYSTEM_DAEMON_ENABLED', true),
         'url' => env('MCP_SYSTEM_DAEMON_URL', 'http://127.0.0.1:3700'),
+        // DreamFactory base URL the daemon calls back (e.g. http://web in docker compose).
+        // Falls back to daemon.internal_base_url, then to the incoming request's origin,
+        // which a daemon in a separate container usually cannot reach.
+        'base_url' => env('MCP_SYSTEM_DAEMON_BASE_URL'),
     ],
 
     // Per-tool-call audit log (mcp_request_log table)

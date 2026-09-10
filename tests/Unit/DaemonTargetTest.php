@@ -86,6 +86,36 @@ class DaemonTargetTest extends TestCase
         $this->assertTrue($data['enabled'], 'data daemon defaults to enabled (matches config/mcp.php)');
     }
 
+    public function testBaseUrlPrecedence(): void
+    {
+        // Nothing configured: both daemons call back on the request's own origin.
+        $config = $this->mcpConfig();
+        $this->assertNull(DaemonTarget::forServiceType('system_mcp', $config)['base_url']);
+        $this->assertNull(DaemonTarget::forServiceType('mcp', $config)['base_url']);
+
+        // Shared internal base applies to both.
+        $config['daemon']['internal_base_url'] = 'http://127.0.0.1/';
+        $this->assertSame('http://127.0.0.1', DaemonTarget::forServiceType('mcp', $config)['base_url']);
+        $this->assertSame('http://127.0.0.1', DaemonTarget::forServiceType('system_mcp', $config)['base_url']);
+
+        // The system daemon's own base wins for system_mcp only.
+        $config['system_daemon']['base_url'] = 'http://web';
+        $this->assertSame('http://web', DaemonTarget::forServiceType('system_mcp', $config)['base_url']);
+        $this->assertSame('http://127.0.0.1', DaemonTarget::forServiceType('mcp', $config)['base_url']);
+    }
+
+    public function testApiBaseUrl(): void
+    {
+        $this->assertSame(
+            'https://df.example.com/api/v2',
+            DaemonTarget::apiBaseUrl(['base_url' => null], 'https://df.example.com/')
+        );
+        $this->assertSame(
+            'http://web/api/v2',
+            DaemonTarget::apiBaseUrl(['base_url' => 'http://web'], 'https://localhost')
+        );
+    }
+
     public function testEnumHelpers(): void
     {
         $this->assertSame(['mcp', 'system_mcp'], McpServiceTypes::all());

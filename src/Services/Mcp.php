@@ -89,10 +89,7 @@ class Mcp extends BaseRestService
         // legitimately can't reach.
         $availableServices = $this->resolveAvailableServices();
 
-        $internalBase = config('mcp.daemon.internal_base_url');
-        $baseUrl = !empty($internalBase)
-            ? rtrim($internalBase, '/') . '/api/v2'
-            : $request->getSchemeAndHttpHost() . '/api/v2';
+        $baseUrl = DaemonTarget::apiBaseUrl($target, $request->getSchemeAndHttpHost());
 
         $jsonRpc = json_decode((string) $request->getContent(), true);
         if (!is_array($jsonRpc)) {

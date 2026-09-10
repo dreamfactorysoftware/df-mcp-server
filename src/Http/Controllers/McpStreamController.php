@@ -122,18 +122,14 @@ class McpStreamController extends Controller
             $scheme = 'http';
         }
 
-        // Use internal base URL when configured (e.g. Docker where external port differs from internal)
-        $internalBase = config('mcp.daemon.internal_base_url');
-        if (!empty($internalBase)) {
-            $baseUrl = rtrim($internalBase, '/') . '/api/v2';
-        } else {
-            $baseUrl = $scheme . '://' . $host . '/api/v2';
-        }
-
         // Pick the daemon by service type: `system_mcp` -> df-system-mcp-server,
         // everything else -> the bundled data daemon.
         $serviceType = $request->attributes->get('mcp_service_type');
         $target = DaemonTarget::forServiceType(is_string($serviceType) ? $serviceType : null);
+
+        // The daemon's callback base: the target's configured base URL when set (e.g. Docker,
+        // where the external host or port differs from internal), else this request's origin.
+        $baseUrl = DaemonTarget::apiBaseUrl($target, $scheme . '://' . $host);
 
         if (!$target['enabled']) {
             try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'error', $target['label'] . ' disabled'); } catch (\Throwable $ignored) { /* never break the response */ }
