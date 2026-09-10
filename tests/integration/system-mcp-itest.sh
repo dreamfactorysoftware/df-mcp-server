@@ -15,6 +15,8 @@ WEB_EXEC=${WEB_EXEC:-sudo -n docker exec df770_web_1}
 MYSQL_EXEC=${MYSQL_EXEC:-sudo -n docker exec df770_mysql_1 mysql -udf_admin -pdf_admin -N -e}
 SVC=sysmcp
 DATA_SVC=datamcp
+# Tool catalogue size of the df-system-mcp-server under test (0.2.0 = 17, 0.3.0 = 18).
+EXP_TOOLS=${EXP_TOOLS:-18}
 PASSC=0; FAILC=0
 ok(){ echo "  PASS: $1"; PASSC=$((PASSC+1)); }
 fail(){ echo "  FAIL: $1"; FAILC=$((FAILC+1)); }
@@ -57,7 +59,7 @@ rpc(){ curl -s "${H[@]}" -X POST "$BASE/api/v2/$1/rpc" -d "$2"; }
 TL=$(rpc $SVC '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
 N=$(echo "$TL" | jq_ 'len(d["result"]["tools"])')
 echo "  tools/list -> $N tools"
-check "$([ "$N" = "17" ] && echo 1)" "system_mcp tools/list returns 17 System API tools" "$(echo $TL | head -c 400)"
+check "$([ "$N" = "$EXP_TOOLS" ] && echo 1)" "system_mcp tools/list returns $EXP_TOOLS System API tools" "$(echo $TL | head -c 400)"
 check "$(echo "$TL" | grep -q '"list_services"' && echo 1)" "tools include list_services" ""
 check "$(echo "$TL" | grep -q '"call_system_api"' && echo 1)" "tools include call_system_api" ""
 check "$(echo "$TL" | grep -q '"query_table"\|"list_tables"' && echo || echo 1)" "no data-plane tools leaked into system_mcp" "$(echo $TL | head -c 200)"
@@ -77,11 +79,11 @@ echo "## 5. disabled_tools honored"
 curl -s -o /dev/null "${H[@]}" -X PATCH "$BASE/api/v2/system/service/$SVCID" -d '{"description":"","config":{"disabled_tools":["delete_service","call_system_api"]}}'
 TL2=$(rpc $SVC '{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{}}')
 N2=$(echo "$TL2" | jq_ 'len(d["result"]["tools"])')
-check "$([ "$N2" = "15" ] && echo 1)" "after disabling 2 tools, tools/list returns 15" "n=$N2 $(echo $TL2 | head -c 200)"
+check "$([ "$N2" = "$((EXP_TOOLS-2))" ] && echo 1)" "after disabling 2 tools, tools/list returns $((EXP_TOOLS-2))" "n=$N2 $(echo $TL2 | head -c 200)"
 check "$(echo "$TL2" | grep -q '"delete_service"' && echo || echo 1)" "delete_service absent when disabled" ""
 curl -s -o /dev/null "${H[@]}" -X PATCH "$BASE/api/v2/system/service/$SVCID" -d '{"description":"","config":{"disabled_tools":[]}}'
 TL2b=$(rpc $SVC '{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}'); N2b=$(echo "$TL2b" | jq_ 'len(d["result"]["tools"])')
-check "$([ "$N2b" = "17" ] && echo 1)" "re-enabling (disabled_tools=[]) restores 17 tools" "n=$N2b"
+check "$([ "$N2b" = "$EXP_TOOLS" ] && echo 1)" "re-enabling (disabled_tools=[]) restores $EXP_TOOLS tools" "n=$N2b"
 
 echo "## 6. OAuth 2.1 flow on /mcp/$SVC (external MCP client path)"
 WK=$(curl -s "$BASE/.well-known/oauth-authorization-server/mcp/$SVC")
@@ -106,7 +108,7 @@ check "$([ -n "$SID" ] && echo 1)" "Mcp-Session-Id propagated back through PHP p
 curl -s -o /dev/null -X POST "$BASE/mcp/$SVC" -H "Authorization: Bearer $AT" -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 TL3=$(curl -s -X POST "$BASE/mcp/$SVC" -H "Authorization: Bearer $AT" -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
 N3=$(echo "$TL3" | sed -n 's/^data: //p' | head -1 | jq_ 'len(d["result"]["tools"])'); [ -z "$N3" ] && N3=$(echo "$TL3" | jq_ 'len(d["result"]["tools"])')
-check "$([ "$N3" = "17" ] && echo 1)" "OAuth bearer tools/list returns 17 tools" "n=$N3 $(echo $TL3 | head -c 300)"
+check "$([ "$N3" = "$EXP_TOOLS" ] && echo 1)" "OAuth bearer tools/list returns $EXP_TOOLS tools" "n=$N3 $(echo $TL3 | head -c 300)"
 CALL=$(curl -s -X POST "$BASE/mcp/$SVC" -H "Authorization: Bearer $AT" -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_admins","arguments":{}}}')
 check "$(echo "$CALL" | grep -q "$EMAIL" && echo 1)" "OAuth bearer tools/call list_admins returns the admin" "$(echo $CALL | head -c 300)"
 NOAUTH=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/mcp/$SVC" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
