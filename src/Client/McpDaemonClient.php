@@ -158,8 +158,8 @@ class McpDaemonClient
 
             return response()->json([
                 'error' => 'MCP daemon is not reachable at ' . $this->daemonUrl
-                    . '. Start it (data daemon: php artisan mcp:daemon; System API daemon: df-system-mcp-server)'
-                    . ' or fix MCP_DAEMON_URL / MCP_SYSTEM_DAEMON_URL.',
+                    . '. Start it (data daemon: scripts/start-daemon.sh; System API daemon:'
+                    . ' scripts/start-system-daemon.sh or its container) or fix MCP_DAEMON_URL / MCP_SYSTEM_DAEMON_URL.',
             ], 503);
 
         } catch (\GuzzleHttp\Exception\ServerException $e) {

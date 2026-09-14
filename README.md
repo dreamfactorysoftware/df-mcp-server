@@ -103,17 +103,18 @@ Cursor, ChatGPT, DreamFactory's AI chat) can *administer the instance*.
 
 The `system_mcp` type reuses everything the `mcp` type has (same `/mcp/{service}` OAuth 2.1
 front door, same `POST /api/v2/{service}/rpc` session-token bridge, same audit log,
-`disabled_tools`), but proxies to a separate daemon,
+`disabled_tools`), but proxies to a second Node daemon,
 [`df-system-mcp-server`](https://github.com/dreamfactorysoftware/df-system-mcp-server),
-instead of the bundled data daemon. Custom tools are not supported on the system server.
+instead of the bundled data daemon. Like the data daemon it normally runs on the DreamFactory
+host; it can also run as a separate container. Custom tools are not supported on the system server.
 
 ### Environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MCP_SYSTEM_DAEMON_ENABLED` | `true` | Gate the `system_mcp` type. When false, requests get a 503 naming this variable. |
-| `MCP_SYSTEM_DAEMON_URL` | `http://127.0.0.1:3700` | Base URL of the running `df-system-mcp-server`. In Docker use the service name, e.g. `http://df-system-mcp:3700`. |
-| `MCP_SYSTEM_DAEMON_BASE_URL` | *(unset)* | DreamFactory URL the system daemon calls back (sent as `X-Mcp-Base-Url`), e.g. `http://web` in Docker. Falls back to `MCP_INTERNAL_BASE_URL`, then to the incoming request's origin — which a daemon in a separate container usually can't reach, so set this for sidecar deployments. |
+| `MCP_SYSTEM_DAEMON_URL` | `http://127.0.0.1:3700` | Base URL of `df-system-mcp-server`. Keep the default for the daemon on this host; for a sidecar container use its service URL, e.g. `http://df-system-mcp:3700`. |
+| `MCP_SYSTEM_DAEMON_BASE_URL` | *(unset)* | DreamFactory URL the system daemon calls back (sent as `X-Mcp-Base-Url`). Leave unset when the daemon runs on this host. For a sidecar set an address it can reach, e.g. `http://web`. Falls back to `MCP_INTERNAL_BASE_URL`, then to the incoming request's origin. |
 | `MCP_INTERNAL_KEY` | *(unset)* | Optional shared secret. When set, DreamFactory sends `X-Mcp-Internal-Key` to **both** daemons; set the same value on the daemons so they reject direct callers. |
 | `MCP_INTERNAL_BASE_URL` | *(unset)* | Already used by the data daemon; also used here as the URL the system daemon calls back into DreamFactory with (e.g. `http://web`). |
 
@@ -121,7 +122,25 @@ Run `php artisan config:clear` after changing any of these.
 
 ### Running `df-system-mcp-server`
 
-Docker (same network as DreamFactory):
+**On the DreamFactory host (default).** Install `dreamfactory/df-system-mcp-server` with
+composer alongside this package, so it lands in `vendor/dreamfactory/df-system-mcp-server`.
+Then start it with this package's launcher, the same way as the data daemon (Node 20+):
+
+```
+vendor/dreamfactory/df-mcp-server/scripts/start-system-daemon.sh          # Linux / Docker
+vendor\dreamfactory\df-mcp-server\scripts\start-system-daemon-win.ps1     # Windows
+```
+
+The launcher installs the daemon's production dependencies on first run, listens on
+`127.0.0.1:3700`, and calls DreamFactory back on `MCP_INTERNAL_BASE_URL` or
+`http://127.0.0.1`. Because the daemon listens on loopback, it accepts DreamFactory's callback
+URL without `MCP_INTERNAL_KEY`, like the data daemon. The launcher reads
+`MCP_SYSTEM_DAEMON_HOST`, `MCP_SYSTEM_DAEMON_PORT` (keep `MCP_SYSTEM_DAEMON_URL` in step),
+`DREAMFACTORY_URL` and `DF_SYSTEM_MCP_DIR`, and passes the daemon only its own settings, not
+the rest of DreamFactory's environment. On a VM, run it from a systemd unit with
+`Restart=on-failure`, next to the data daemon's unit. No `.env` change is needed.
+
+**Sidecar container** (same Docker network as DreamFactory):
 
 ```
 git clone https://github.com/dreamfactorysoftware/df-system-mcp-server && cd df-system-mcp-server
@@ -133,17 +152,12 @@ docker run -d --name df-system-mcp --network dreamfactory_default \
 # or use the repo's docker-compose.example.yml
 ```
 
-Bare Node (20+):
+Then in DreamFactory's `.env` set `MCP_SYSTEM_DAEMON_URL=http://df-system-mcp:3700`,
+`MCP_SYSTEM_DAEMON_BASE_URL=http://web` and the same `MCP_INTERNAL_KEY`, since the sidecar
+listens on a network interface.
 
-```
-git clone https://github.com/dreamfactorysoftware/df-system-mcp-server && cd df-system-mcp-server
-npm ci
-PORT=3700 DREAMFACTORY_URL=http://127.0.0.1/api/v2 scripts/start-daemon.sh
-```
-
-Then in DreamFactory's `.env`: `MCP_SYSTEM_DAEMON_URL=http://127.0.0.1:3700` (or the
-Docker service URL) and create a service of type **System API MCP Server**, e.g. `sysmcp`.
-Its MCP endpoint is `https://<your-df>/mcp/sysmcp`.
+Either way, create a service of type **System API MCP Server**, e.g. `sysmcp`. Its MCP
+endpoint is `https://<your-df>/mcp/sysmcp`.
 
 ### Security
 
@@ -152,8 +166,9 @@ that user's role. The daemon forwards the user's session token (and the service'
 to `/api/v2/system/*`; DreamFactory's RBAC decides what is allowed. Only administrators can
 create/modify services, roles, apps and admins — a non-admin user connecting to a
 `system_mcp` service can only do what their role permits. Use `disabled_tools` in the service
-config to remove destructive tools (e.g. `delete_service`) entirely, and set
-`MCP_INTERNAL_KEY` so nothing on the host network can talk to the daemon directly.
+config to remove destructive tools (e.g. `delete_service`) entirely. When the daemon listens
+on a network interface (a sidecar), set `MCP_INTERNAL_KEY` so nothing else on that network can
+talk to it directly.
 
 ### Example client configuration
 

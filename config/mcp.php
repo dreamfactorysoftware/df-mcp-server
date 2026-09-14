@@ -19,13 +19,14 @@ return [
     ],
 
     // System API MCP daemon (df-system-mcp-server) backing the `system_mcp`
-    // service type. Exposes /api/v2/system/* as MCP tools.
+    // service type. Exposes /api/v2/system/* as MCP tools. By default it runs on
+    // this host (scripts/start-system-daemon.sh) at the URL below.
     'system_daemon' => [
         'enabled' => env('MCP_SYSTEM_DAEMON_ENABLED', true),
         'url' => env('MCP_SYSTEM_DAEMON_URL', 'http://127.0.0.1:3700'),
-        // DreamFactory base URL the daemon calls back (e.g. http://web in docker compose).
-        // Falls back to daemon.internal_base_url, then to the incoming request's origin,
-        // which a daemon in a separate container usually cannot reach.
+        // DreamFactory base URL the daemon calls back. Leave unset when the daemon runs on
+        // this host. For a sidecar container set an address it can reach (e.g. http://web).
+        // Falls back to daemon.internal_base_url, then to the incoming request's origin.
         'base_url' => env('MCP_SYSTEM_DAEMON_BASE_URL'),
     ],
 

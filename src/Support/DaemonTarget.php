@@ -35,11 +35,13 @@ final class DaemonTarget
             $label = 'System API MCP daemon';
             $enabledEnv = 'MCP_SYSTEM_DAEMON_ENABLED';
             $url = $section['url'] ?? self::SYSTEM_DEFAULT_URL;
-            // The system daemon usually runs as a separate container, so it needs its own
-            // way back to DreamFactory; the shared internal base is the next best guess.
+            // On this host (the default) the daemon can reach DreamFactory the same way the
+            // data daemon does. A sidecar container needs its own way back (base_url, e.g.
+            // http://web); the shared internal base is the next best guess.
             $baseUrl = !empty($section['base_url']) ? $section['base_url'] : $internalBase;
             $enabled = self::toBool($section['enabled'] ?? true);
-            $disabledMessage = $label . ' is disabled. Set ' . $enabledEnv . '=true and run df-system-mcp-server.';
+            $disabledMessage = $label . ' is disabled. Set ' . $enabledEnv . '=true and start df-system-mcp-server'
+                . ' (scripts/start-system-daemon.sh, or its container).';
             $resolvedType = McpServiceTypes::SYSTEM;
         } else {
             $section = (array) ($mcpConfig['daemon'] ?? []);
