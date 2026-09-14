@@ -35,6 +35,7 @@ class DaemonRoutingWiringTest extends TestCase
         $this->assertStringContainsString("if (!\$target['enabled'])", $s);
         $this->assertStringContainsString("new McpDaemonClient(\$target['url'])", $s);
         $this->assertStringContainsString("McpServiceTypes::isSystem(\$target['type'])", $s);
+        $this->assertStringContainsString('$client->withSecretFields(SecretFieldManifest::cached());', $s);
         $this->assertStringNotContainsString("config('mcp.daemon.enabled'", $s);
     }
 
@@ -46,6 +47,10 @@ class DaemonRoutingWiringTest extends TestCase
         $this->assertStringContainsString("DaemonTarget::forServiceType(\$this->getType())", $s);
         $this->assertStringContainsString("if (!\$target['enabled'])", $s);
         $this->assertStringNotContainsString('(new McpDaemonClient())', $s);
+        $this->assertMatchesRegularExpression(
+            '/McpServiceTypes::isSystem\(\$target\[\'type\'\]\)\)\s*\{\s*\$client->withSecretFields\(SecretFieldManifest::cached\(\)\);/s',
+            $s
+        );
 
         $sys = $this->src('src/Services/SystemMcp.php');
         $this->assertStringContainsString('class SystemMcp extends Mcp', $sys);

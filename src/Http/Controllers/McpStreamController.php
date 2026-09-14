@@ -6,6 +6,7 @@ use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
 use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
 use DreamFactory\Core\McpServer\Support\DaemonTarget;
+use DreamFactory\Core\McpServer\Support\SecretFieldManifest;
 use DreamFactory\Core\McpServer\Models\McpCustomTool;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\McpServer\Utility\RequestLogger;
@@ -147,6 +148,10 @@ class McpStreamController extends Controller
             : $this->getAvailableServices();
 
         $client = new McpDaemonClient($target['url']);
+        // The system daemon masks service configs using DreamFactory's own secret field metadata.
+        if (McpServiceTypes::isSystem($target['type'])) {
+            $client->withSecretFields(SecretFieldManifest::cached());
+        }
         try {
             $response = $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
             // The daemon's savings ledger is internal — persist it, don't forward it to the MCP client.

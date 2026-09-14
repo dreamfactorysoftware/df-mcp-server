@@ -5,7 +5,9 @@ namespace DreamFactory\Core\McpServer\Services;
 use DreamFactory\Core\Enums\ApiOptions;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
+use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
 use DreamFactory\Core\McpServer\Support\DaemonTarget;
+use DreamFactory\Core\McpServer\Support\SecretFieldManifest;
 use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Utility\ResourcesWrapper;
 use DreamFactory\Core\Utility\Session as SessionUtilities;
@@ -133,11 +135,18 @@ class Mcp extends BaseRestService
 
     /**
      * Daemon client bound to the daemon that serves this service's type
-     * (data daemon for `mcp`, df-system-mcp-server for `system_mcp`).
+     * (data daemon for `mcp`, df-system-mcp-server for `system_mcp`). The system daemon
+     * also gets the secret field manifest it masks service configs with.
      */
     protected function daemonClient(): McpDaemonClient
     {
-        return new McpDaemonClient(DaemonTarget::forServiceType($this->getType())['url']);
+        $target = DaemonTarget::forServiceType($this->getType());
+        $client = new McpDaemonClient($target['url']);
+        if (McpServiceTypes::isSystem($target['type'])) {
+            $client->withSecretFields(SecretFieldManifest::cached());
+        }
+
+        return $client;
     }
 
     /**

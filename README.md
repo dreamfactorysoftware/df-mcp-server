@@ -170,6 +170,13 @@ config to remove destructive tools (e.g. `delete_service`) entirely. When the da
 on a network interface (a sidecar), set `MCP_INTERNAL_KEY` so nothing else on that network can
 talk to it directly.
 
+The daemon masks credentials in tool results. Its name rules can't know every service type, so
+DreamFactory also sends it each installed type's secret config fields: the fields the type's
+config model encrypts or protects, and fields its schema types as a password or certificate
+(`username` and `account_name` stay readable). The list (`Support\SecretFieldManifest`) is
+cached for an hour; after installing a package that adds service types, `php artisan cache:clear`
+picks them up sooner.
+
 ### Example client configuration
 
 Claude Desktop / Cursor (`mcpServers`):
