@@ -43,7 +43,7 @@ if [ -z "$MANIFEST" ]; then echo "  FAIL: no manifest from PHP (see errors above
 
 echo "## 2. mask a record of every type with df-system-mcp-server"
 NODE_SCRIPT=$(cat <<'JS'
-const { maskSecrets, parseSecretFieldManifest } = require(process.env.SYSTEM_MCP_DIR + "/build/redact.js");
+const { maskSecrets, maskConfigByManifest, parseSecretFieldManifest } = require(process.env.SYSTEM_MCP_DIR + "/build/redact.js");
 const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
 const { manifest, types } = input;
 let pass = 0, fail = 0;
@@ -63,7 +63,7 @@ check(JSON.stringify({ ...parsed }) === JSON.stringify(manifest), "daemon accept
 const readable = names.filter((n) => manifest[n].secret.some((f) => f === "username" || f === "account_name"));
 check(readable.length === 0, "username and account_name stay readable", readable.join(", "));
 
-const leaks = [], overmasked = [], nameRulesMiss = [];
+const leaks = [], typeLeaks = [], overmasked = [], nameRulesMiss = [];
 let fields = 0;
 for (const type of names) {
   const entry = manifest[type];
@@ -74,6 +74,9 @@ for (const type of names) {
   fields += entry.secret.length + entry.maps.length;
   const record = { resource: [{ id: 1, name: "probe", type, config }] };
 
+  // The type pass on its own, so the name rules can't be what masks a field the manifest should cover.
+  for (const s of JSON.stringify(maskConfigByManifest(config, parsed[type])).match(/SENTINEL:[^"]+/g) || []) typeLeaks.push(s);
+
   const masked = JSON.stringify(maskSecrets(record, env, { manifest: parsed }));
   for (const s of masked.match(/SENTINEL:[^"]+/g) || []) leaks.push(s);
   for (const keep of ["keep.example.com", "keep-user", ...(entry.maps.some((m) => !entry.secret.includes(m)) ? ["keep-region"] : [])]) {
@@ -81,6 +84,7 @@ for (const type of names) {
   }
   for (const s of JSON.stringify(maskSecrets(record, env)).match(/SENTINEL:[^"]+/g) || []) nameRulesMiss.push(s.slice(9));
 }
+check(typeLeaks.length === 0, "the type pass alone masks every listed field (no reliance on name rules)", typeLeaks.join(", "));
 check(leaks.length === 0, `every secret field and credential map key masked (${fields} fields)`, leaks.join(", "));
 check(overmasked.length === 0, "non-secret config values stay readable", overmasked.join(", "));
 console.log(`  info: ${nameRulesMiss.length} field(s) masked only thanks to the manifest: ${nameRulesMiss.join(", ")}`);
