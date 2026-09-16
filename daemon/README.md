@@ -8,7 +8,7 @@ TypeScript implementation of the MCP Daemon Server for DreamFactory. This daemon
 - HTTP API compatible with Laravel's `McpDaemonClient`
 - Streamable HTTP transport with session management
 - Health check and cache management endpoints
-- OAuth-based authentication via DreamFactory session tokens
+- **Dual authentication modes**: OAuth session tokens OR API-key-only authentication
 - All DreamFactory database tools using MCP SDK's `server.tool()` pattern
 - Comprehensive error handling with user-friendly messages
 - Full support for tables, records, stored procedures, and functions
@@ -56,14 +56,31 @@ MCP_DAEMON_ENABLED=true
 MCP_DAEMON_URL=http://127.0.0.1:8006
 ```
 
-The Laravel controller will proxy all MCP requests to this Node daemon, passing the authenticated user's session token via the `X-DreamFactory-Session-Token` header.
+The Laravel controller will proxy all MCP requests to this Node daemon, passing authentication credentials via headers.
 
-## Authentication Flow
+## Authentication
+
+The daemon accepts two credential kinds. **At least one is required**; the PHP proxy authenticates every request first and forwards the credentials that were validated.
+
+| Mode | Headers | Use Case |
+|------|---------|----------|
+| **Session Token (OAuth)** | `X-DreamFactory-Session-Token` | User-based authentication via the OAuth flow |
+| **API Key Only** | `X-DreamFactory-API-Key` | App-based authentication (service must enable `allow_api_key_auth`; app must be active with a role assigned) |
+| **Both** | Both headers | Session token supplies the user identity; the API key supplies app context |
+
+### OAuth Flow (Session Token)
 
 1. User authenticates with DreamFactory via OAuth
 2. DreamFactory validates the request and obtains a session token
 3. The Laravel controller forwards MCP requests to the daemon with the session token
 4. The daemon uses the session token to make authenticated API calls to DreamFactory
+
+### API Key Only Flow
+
+1. Client sends requests with the `X-DreamFactory-API-Key` header (64-char hex key)
+2. The Laravel controller validates the key: the service's `allow_api_key_auth` flag must be on, and the key's app must exist, be active, and have a role assigned
+3. The controller forwards the key to the daemon, which attaches it to DreamFactory API calls
+4. Access is controlled by the app's assigned role permissions (same as key-only REST calls)
 
 ## Endpoints
 
@@ -78,8 +95,14 @@ The Laravel controller will proxy all MCP requests to this Node daemon, passing 
 
 | Header | Description |
 |--------|-------------|
-| `X-DreamFactory-Session-Token` | DreamFactory session token (required for authentication) |
 | `X-Mcp-Base-Url` | Base URL for DreamFactory API (e.g., `https://host/api/v2`) |
+
+### Authentication Headers (at least one required)
+
+| Header | Description |
+|--------|-------------|
+| `X-DreamFactory-Session-Token` | DreamFactory session token (OAuth flow, or layered on an API key for user RBAC) |
+| `X-DreamFactory-API-Key` | DreamFactory API key (API-key-only auth; the key's app must have a role) |
 
 ### Optional Headers
 
