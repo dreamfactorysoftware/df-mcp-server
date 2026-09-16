@@ -44,6 +44,57 @@ class ToolListScopingWiringTest extends TestCase
         $this->assertStringContainsString("['scope_tools' => false]", $src);
     }
 
+    /**
+     * The backfill writes via DB::table(), which bypasses Eloquent events, so
+     * df-core's ServiceManager would keep serving its forever-cached
+     * pre-backfill config (Cache::rememberForever('service_mgr:'.$name))
+     * until cache:clear. The migration must forget the per-service entries
+     * and the service map keys itself, and a cache-driver failure must never
+     * fail the migration.
+     */
+    public function testUpgradeBackfillPurgesTheForeverServiceConfigCache(): void
+    {
+        $src = file_get_contents(
+            __DIR__ . '/../../database/migrations/2026_09_02_000000_add_exposed_services_to_mcp_server_config.php'
+        );
+
+        $this->assertStringContainsString('purgeServiceConfigCache', $src);
+        $this->assertStringContainsString("Cache::forget('service_mgr:' . \$name)", $src);
+        $this->assertStringContainsString("'service_mgr:id_name_map_active'", $src);
+        $this->assertStringContainsString("'service_mgr:id_name_map'", $src);
+        $this->assertStringContainsString("'service_mgr:name_type_map_active'", $src);
+        $this->assertStringContainsString("'service_mgr:name_type_map'", $src);
+
+        // The purge is wrapped so cache-driver trouble cannot abort the upgrade.
+        $this->assertMatchesRegularExpression(
+            '/try\s*\{[^}]*Cache::forget/s',
+            $src
+        );
+        $this->assertStringContainsString('catch (\\Throwable', $src);
+    }
+
+    /**
+     * A 7.7.0 MCP service created via API with empty/omitted config has NO
+     * mcp_server_config row (df-core skips storeConfig for empty config) but
+     * still served the instance-wide catalog through /rpc. The migration must
+     * backfill a row for those services too — via DB::table() inserts, never
+     * the Eloquent model (whose creating() hook generates credentials).
+     */
+    public function testUpgradeBackfillsMcpServicesThatHaveNoConfigRow(): void
+    {
+        $src = file_get_contents(
+            __DIR__ . '/../../database/migrations/2026_09_02_000000_add_exposed_services_to_mcp_server_config.php'
+        );
+
+        $this->assertStringContainsString('backfillServicesWithoutConfigRow', $src);
+        $this->assertStringContainsString("->where('type', 'mcp')", $src);
+        $this->assertStringContainsString("->whereNotIn('id', \$withRows)", $src);
+        $this->assertStringContainsString("DB::table('mcp_server_config')->insert(", $src);
+        // No Eloquent writes anywhere in the migration.
+        $this->assertStringNotContainsString('McpServerConfig::', $src);
+        $this->assertStringNotContainsString('->save(', $src);
+    }
+
     public function testEmptyExposedServicesWarnsOnSave(): void
     {
         $src = file_get_contents(__DIR__ . '/../../src/Models/McpServerConfig.php');
