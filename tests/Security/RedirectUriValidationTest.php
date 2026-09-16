@@ -80,6 +80,12 @@ class RedirectUriValidationTest extends TestCase
         // Demonstrate that the model's helper, once called, rejects bypass
         // payloads. We instantiate the model with a registered https URI
         // and check that the dangerous scheme is rejected.
+        if (!class_exists(\Illuminate\Database\Eloquent\Model::class)) {
+            $this->markTestSkipped(
+                'McpOAuthClient extends Eloquent — this test needs the full DreamFactory vendor tree (standalone checkouts run the source-level assertions above).'
+            );
+        }
+
         $modelClass = \DreamFactory\Core\McpServer\Models\McpOAuthClient::class;
         $this->assertTrue(class_exists($modelClass), 'McpOAuthClient model must exist');
 

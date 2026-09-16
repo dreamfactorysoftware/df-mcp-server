@@ -6,15 +6,20 @@ if (is_file($vendor)) {
     return;
 }
 
-// Standalone checkout: load only Laravel-free helpers. Models extend Eloquent
-// and must not be autoloaded here — those tests need the real vendor tree.
+// Standalone checkout: load only classes that are safe without Laravel —
+// helpers in Utility and the parentless Client (whose tested methods are
+// pure). Models extend Eloquent and must not be autoloaded here — those
+// tests need the real vendor tree.
 spl_autoload_register(static function (string $class): void {
-    $prefix = 'DreamFactory\\Core\\McpServer\\Utility\\';
-    if (!str_starts_with($class, $prefix)) {
+    $base = 'DreamFactory\\Core\\McpServer\\';
+    if (!str_starts_with($class, $base)) {
         return;
     }
-    $rel = str_replace('\\', '/', substr($class, strlen($prefix)));
-    $file = dirname(__DIR__) . '/src/Utility/' . $rel . '.php';
+    $rel = substr($class, strlen($base));
+    if (!str_starts_with($rel, 'Utility\\') && !str_starts_with($rel, 'Client\\')) {
+        return;
+    }
+    $file = dirname(__DIR__) . '/src/' . str_replace('\\', '/', $rel) . '.php';
     if (is_file($file)) {
         require $file;
     }
