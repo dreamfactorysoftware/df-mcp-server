@@ -2,7 +2,6 @@ composer.phar
 /vendor/
 
 daemon/node_modules/
-daemon/package-lock.json
 daemon/*.log
 daemon/.env
 
