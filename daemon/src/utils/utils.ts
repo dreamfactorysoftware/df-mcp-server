@@ -19,23 +19,59 @@ export function getSessionId(req: Request): string | undefined {
   return Array.isArray(header) ? header[0] : header;
 }
 
+/**
+ * Extract and normalize a header value.
+ * Returns undefined for missing, empty, or whitespace-only values.
+ */
+function normalizeHeader(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Update session configuration from request headers.
+ *
+ * Requires the base URL and at least one auth credential (session token or
+ * API key). The stored credentials are REPLACED with exactly what this
+ * request carried: the PHP proxy authenticates every request and forwards the
+ * complete credential set for that request's auth mode, so keeping an old
+ * session token alive after a request that no longer presents one would let a
+ * stale identity outlive its authentication. The apiConfigs discovered at
+ * session init are preserved.
+ *
+ * @returns true if config was updated, false if validation failed
+ */
 export function updateSessionConfigFromHeaders(
   req: Request,
   sessionManager: SessionService,
   sessionId?: string
-) {
+): boolean {
   if (!sessionId) {
-    return;
+    return false;
   }
 
-  const baseUrl = req.header('X-Mcp-Base-Url');
-  const sessionToken = req.header('X-DreamFactory-Session-Token');
-  const apiKey = req.header('X-DreamFactory-API-Key');
-  if (!baseUrl || !sessionToken) {
-    return;
+  const baseUrl = normalizeHeader(req.header('X-Mcp-Base-Url'));
+  const sessionToken = normalizeHeader(req.header('X-DreamFactory-Session-Token'));
+  const apiKey = normalizeHeader(req.header('X-DreamFactory-API-Key'));
+
+  if (!baseUrl) {
+    return false;
   }
 
-  sessionManager.setConfig(sessionId, { url: baseUrl, sessionToken, apiKey });
+  // At least one auth method required (API-key-only is valid)
+  if (!sessionToken && !apiKey) {
+    return false;
+  }
+
+  const existingConfig = sessionManager.getConfig(sessionId);
+  sessionManager.setConfig(sessionId, {
+    url: baseUrl,
+    sessionToken,
+    apiKey,
+    apiConfigs: existingConfig?.apiConfigs
+  });
+  return true;
 }
 
 export function parseConfigFromHeaders(req: Request) {

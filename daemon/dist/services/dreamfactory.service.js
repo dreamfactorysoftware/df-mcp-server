@@ -379,16 +379,18 @@ export class DreamFactoryService {
         return params;
     }
     static async requestRaw(method, url, auth, params) {
-        if (!auth.sessionToken) {
-            throw new Error('Session token is required');
+        // Require at least one auth method (API-key-only works when the app has a role)
+        if (!auth.sessionToken && !auth.apiKey) {
+            throw new Error('Either session token or API key is required');
         }
         const target = new URL(url);
         if (params) {
             params.forEach((value, key) => target.searchParams.set(key, value));
         }
-        const headers = {
-            'X-DreamFactory-Session-Token': auth.sessionToken,
-        };
+        const headers = {};
+        if (auth.sessionToken) {
+            headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+        }
         if (auth.apiKey) {
             headers['X-DreamFactory-API-Key'] = auth.apiKey;
         }
@@ -411,8 +413,9 @@ export class DreamFactoryService {
         return response;
     }
     static async request(method, url, auth, params, body) {
-        if (!auth.sessionToken) {
-            throw new Error('Session token is required');
+        // Require at least one auth method (API-key-only works when the app has a role)
+        if (!auth.sessionToken && !auth.apiKey) {
+            throw new Error('Either session token or API key is required');
         }
         const target = new URL(url);
         if (params) {
@@ -420,8 +423,10 @@ export class DreamFactoryService {
         }
         const headers = {
             Accept: 'application/json',
-            'X-DreamFactory-Session-Token': auth.sessionToken,
         };
+        if (auth.sessionToken) {
+            headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+        }
         if (auth.apiKey) {
             headers['X-DreamFactory-API-Key'] = auth.apiKey;
         }
