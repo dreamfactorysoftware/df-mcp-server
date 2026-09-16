@@ -31,11 +31,11 @@ class AvailableServices
             $scopeByDefault = filter_var(config('mcp.scope_tools', true), FILTER_VALIDATE_BOOLEAN);
             $scoped = self::scope($services, $mcpConfig, $scopeByDefault);
 
-            $exposed = self::names($mcpConfig['exposed_services'] ?? null);
-            $explicit = self::boolOrNull($mcpConfig['scope_tools'] ?? null);
-            $scoping = $exposed !== []
-                || $explicit === true
-                || ($explicit === null && $scopeByDefault);
+            $scoping = self::scopingApplies(
+                $mcpConfig['exposed_services'] ?? null,
+                $mcpConfig['scope_tools'] ?? null,
+                $scopeByDefault
+            );
             if ($scoping && $scoped === []) {
                 Log::info('MCP tools/list scoped to an empty backend catalog', [
                     'mcp_service' => $mcpServiceName,
@@ -68,10 +68,11 @@ class AvailableServices
         bool $scopeByDefault = false
     ): array {
         $exposed = self::names($mcpConfig['exposed_services'] ?? null);
-        $explicit = self::boolOrNull($mcpConfig['scope_tools'] ?? null);
-        $scoping = $exposed !== []
-            || $explicit === true
-            || ($explicit === null && $scopeByDefault);
+        $scoping = self::scopingApplies(
+            $exposed,
+            $mcpConfig['scope_tools'] ?? null,
+            $scopeByDefault
+        );
 
         if (!$scoping) {
             return array_values($services);
@@ -88,6 +89,25 @@ class AvailableServices
             $services,
             static fn ($s) => in_array(strtolower((string) ($s['name'] ?? '')), $allowedLower, true)
         ));
+    }
+
+    /**
+     * Whether the given exposed_services / scope_tools pair actually
+     * restricts the tool catalog. Mirrors resolve()/scope(): a non-empty
+     * exposure list always scopes; with an empty list, an explicit
+     * scope_tools=false — or inheriting a disabled MCP_SCOPE_TOOLS default —
+     * serves the legacy instance-wide catalog instead, so nothing is scoped
+     * (and an empty list is nothing to warn about).
+     *
+     * Pure: no Laravel, no I/O. Safe to unit-test.
+     */
+    public static function scopingApplies(mixed $exposed, mixed $scopeTools, bool $scopeByDefault): bool
+    {
+        $explicit = self::boolOrNull($scopeTools);
+
+        return self::names($exposed) !== []
+            || $explicit === true
+            || ($explicit === null && $scopeByDefault);
     }
 
     /**

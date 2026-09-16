@@ -1,8 +1,8 @@
 <?php
 
+use DreamFactory\Core\McpServer\Support\ServiceCache;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -160,40 +160,16 @@ return new class extends Migration
      * ServiceManager::getDbConfig; the purge is normally event-driven via
      * ServiceManager::purge). Without this, upgraded MCP services see no
      * exposed_services until someone runs cache:clear — i.e. zero DB/file
-     * tools. Forget the per-service entries for every touched service plus
-     * the service-list/map keys ServiceManager::purge also clears. A cache
-     * driver failure must never fail the migration.
+     * tools. Delegates to ServiceCache::purgeConfig — the same helper the
+     * ServiceProvider's rename/delete listeners use — which forgets the
+     * per-service entries plus the service-list/map keys, and swallows cache
+     * driver failures so they can never fail the migration.
      *
      * @param int[] $serviceIds
      */
     private function purgeServiceConfigCache(array $serviceIds): void
     {
-        if ($serviceIds === []) {
-            return;
-        }
-
-        try {
-            $names = DB::table('service')
-                ->whereIn('id', array_values(array_unique($serviceIds)))
-                ->pluck('name');
-
-            foreach ($names as $name) {
-                Cache::forget('service_mgr:' . $name);
-            }
-
-            foreach ([
-                'service_mgr:id_name_map_active',
-                'service_mgr:id_name_map',
-                'service_mgr:name_type_map_active',
-                'service_mgr:name_type_map',
-            ] as $key) {
-                Cache::forget($key);
-            }
-        } catch (\Throwable $e) {
-            // A broken cache driver (or missing cache table mid-upgrade) must
-            // not abort the migration; worst case is the pre-existing
-            // stale-cache behavior, cleared by cache:clear.
-        }
+        ServiceCache::purgeConfig($serviceIds);
     }
 
     /**

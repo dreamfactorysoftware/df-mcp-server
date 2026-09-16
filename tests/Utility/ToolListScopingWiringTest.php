@@ -59,7 +59,9 @@ class ToolListScopingWiringTest extends TestCase
      * pre-backfill config (Cache::rememberForever('service_mgr:'.$name))
      * until cache:clear. The migration must forget the per-service entries
      * and the service map keys itself, and a cache-driver failure must never
-     * fail the migration.
+     * fail the migration. The purge lives in the shared ServiceCache helper
+     * so the ServiceProvider's rename/delete listeners run the exact same
+     * one; the migration must delegate to it, not fork a private copy.
      */
     public function testUpgradeBackfillPurgesTheForeverServiceConfigCache(): void
     {
@@ -68,18 +70,25 @@ class ToolListScopingWiringTest extends TestCase
         );
 
         $this->assertStringContainsString('purgeServiceConfigCache', $src);
-        $this->assertStringContainsString("Cache::forget('service_mgr:' . \$name)", $src);
-        $this->assertStringContainsString("'service_mgr:id_name_map_active'", $src);
-        $this->assertStringContainsString("'service_mgr:id_name_map'", $src);
-        $this->assertStringContainsString("'service_mgr:name_type_map_active'", $src);
-        $this->assertStringContainsString("'service_mgr:name_type_map'", $src);
+        $this->assertStringContainsString('ServiceCache::purgeConfig(', $src);
+        // No private fork of the purge left behind in the migration.
+        $this->assertStringNotContainsString('Cache::forget', $src);
 
-        // The purge is wrapped so cache-driver trouble cannot abort the upgrade.
+        $helper = file_get_contents(__DIR__ . '/../../src/Support/ServiceCache.php');
+
+        $this->assertStringContainsString("Cache::forget('service_mgr:' . \$name)", $helper);
+        $this->assertStringContainsString("'service_mgr:id_name_map_active'", $helper);
+        $this->assertStringContainsString("'service_mgr:id_name_map'", $helper);
+        $this->assertStringContainsString("'service_mgr:name_type_map_active'", $helper);
+        $this->assertStringContainsString("'service_mgr:name_type_map'", $helper);
+
+        // The purge is wrapped so cache-driver trouble cannot abort the
+        // caller (upgrade migration or service CRUD).
         $this->assertMatchesRegularExpression(
             '/try\s*\{[^}]*Cache::forget/s',
-            $src
+            $helper
         );
-        $this->assertStringContainsString('catch (\\Throwable', $src);
+        $this->assertStringContainsString('catch (\\Throwable', $helper);
     }
 
     /**

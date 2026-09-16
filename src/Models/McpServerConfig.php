@@ -107,19 +107,48 @@ class McpServerConfig extends BaseServiceConfigModel
      * Empty Exposed Services means no auto-generated DB/file tools. Log it so
      * an admin who saved without picking backends can find the cause in logs.
      * Custom-tools-only MCP services are valid — this is not a validation error.
+     *
+     * Judges the RESULTING stored config, not the request payload: df-core
+     * merges partial writes (firstOrNew + fill), so a save that simply omits
+     * exposed_services keeps the stored names and must not warn. Only the
+     * genuinely-empty outcome warns — stored list empty/null AND scoping
+     * actually applies (an explicit scope_tools=false still serves the legacy
+     * instance-wide catalog, so nothing is lost there).
+     *
      * Overridable (static:: dispatch): SystemMcpServerConfig no-ops it, since
      * the system daemon has no DB/file tool catalog at all.
      */
     protected static function warnIfEmptyExposed($id, array $config): void
     {
-        $names = AvailableServices::names($config['exposed_services'] ?? null);
-        if ($names !== []) {
-            return;
-        }
+        try {
+            // Payload values back the pre-insert validation pass ($id null),
+            // where nothing has been stored yet.
+            $exposed = $config['exposed_services'] ?? null;
+            $scopeTools = $config['scope_tools'] ?? null;
 
-        \Log::warning('MCP service has no Exposed Services selected; tools/list will not include database or file tools', [
-            'service_id' => $id,
-        ]);
+            if ($id && ($stored = static::whereServiceId($id)->first())) {
+                // parent::setConfig/storeConfig already saved: the row is the
+                // resulting state, whatever the payload carried or omitted.
+                $exposed = $stored->exposed_services;
+                $scopeTools = $stored->scope_tools;
+            }
+
+            if (AvailableServices::names($exposed) !== []) {
+                return;
+            }
+
+            $scopeByDefault = filter_var(config('mcp.scope_tools', true), FILTER_VALIDATE_BOOLEAN);
+            if (!AvailableServices::scopingApplies($exposed, $scopeTools, $scopeByDefault)) {
+                return;
+            }
+
+            \Log::warning('MCP service has no Exposed Services selected; tools/list will not include database or file tools', [
+                'service_id' => $id,
+            ]);
+        } catch (\Throwable $e) {
+            // A log-time convenience must never break config saves (e.g.
+            // table missing mid-migration).
+        }
     }
 
     private static function syncCustomTools(int $serviceId, array $customTools): void
