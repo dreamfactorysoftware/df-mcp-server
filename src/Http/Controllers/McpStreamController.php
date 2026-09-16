@@ -4,6 +4,9 @@ namespace DreamFactory\Core\McpServer\Http\Controllers;
 
 use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
+use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
+use DreamFactory\Core\McpServer\Support\DaemonTarget;
+use DreamFactory\Core\McpServer\Support\SecretFieldManifest;
 use DreamFactory\Core\McpServer\Models\McpCustomTool;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\McpServer\Utility\AvailableServices;
@@ -119,28 +122,37 @@ class McpStreamController extends Controller
             $scheme = 'http';
         }
 
-        // Use internal base URL when configured (e.g. Docker where external port differs from internal)
-        $internalBase = config('mcp.daemon.internal_base_url');
-        if (!empty($internalBase)) {
-            $baseUrl = rtrim($internalBase, '/') . '/api/v2';
-        } else {
-            $baseUrl = $scheme . '://' . $host . '/api/v2';
-        }
+        // Pick the daemon by service type: `system_mcp` -> df-system-mcp-server,
+        // everything else -> the bundled data daemon.
+        $serviceType = $request->attributes->get('mcp_service_type');
+        $target = DaemonTarget::forServiceType(is_string($serviceType) ? $serviceType : null);
 
-        if (!config('mcp.daemon.enabled', false)) {
-            try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'error', 'MCP daemon disabled'); } catch (\Throwable $ignored) { /* never break the response */ }
+        // The daemon's callback base: the target's configured base URL when set (e.g. Docker,
+        // where the external host or port differs from internal), else this request's origin.
+        $baseUrl = DaemonTarget::apiBaseUrl($target, $scheme . '://' . $host);
+
+        if (!$target['enabled']) {
+            try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'error', $target['label'] . ' disabled'); } catch (\Throwable $ignored) { /* never break the response */ }
             return response()->json([
-                'error' => 'MCP daemon is disabled. Please set MCP_DAEMON_ENABLED=true and run the Node daemon.'
+                'error' => $target['disabled_message'],
             ], 503);
         }
 
         // Resolve available services server-side so the daemon doesn't need
         // to call GET /api/v2/system/service (which requires system permissions).
-        // Scoped to this MCP service when scope_tools / exposed_services / MCP_SCOPE_TOOLS
-        // is set — otherwise the historical instance-wide catalog.
-        $availableServices = AvailableServices::resolve($mcpService, is_array($config) ? $config : []);
+        // The system daemon exposes the System API itself and never auto-mounts
+        // DB/file services, so skip the lookup for it. The data daemon's catalog
+        // is scoped to this MCP service when scope_tools / exposed_services /
+        // MCP_SCOPE_TOOLS is set — otherwise the historical instance-wide catalog.
+        $availableServices = McpServiceTypes::isSystem($target['type'])
+            ? []
+            : AvailableServices::resolve($mcpService, is_array($config) ? $config : []);
 
-        $client = new McpDaemonClient();
+        $client = new McpDaemonClient($target['url']);
+        // The system daemon masks service configs using DreamFactory's own secret field metadata.
+        if (McpServiceTypes::isSystem($target['type'])) {
+            $client->withSecretFields(SecretFieldManifest::cached());
+        }
         try {
             $response = $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
             // The daemon's savings ledger is internal — persist it, don't forward it to the MCP client.

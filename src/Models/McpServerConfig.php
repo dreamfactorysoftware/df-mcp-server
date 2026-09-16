@@ -77,7 +77,7 @@ class McpServerConfig extends BaseServiceConfigModel
         unset($config['custom_tools']);
 
         parent::setConfig($id, $config, $local_config);
-        self::warnIfEmptyExposed($id, $config);
+        static::warnIfEmptyExposed($id, $config);
 
         if ($id && is_array($customTools)) {
             self::syncCustomTools((int) $id, $customTools);
@@ -94,7 +94,7 @@ class McpServerConfig extends BaseServiceConfigModel
         unset($config['custom_tools']);
 
         parent::storeConfig($id, $config);
-        self::warnIfEmptyExposed($id, $config);
+        static::warnIfEmptyExposed($id, $config);
 
         if ($id && is_array($customTools)) {
             self::syncCustomTools((int) $id, $customTools);
@@ -105,8 +105,10 @@ class McpServerConfig extends BaseServiceConfigModel
      * Empty Exposed Services means no auto-generated DB/file tools. Log it so
      * an admin who saved without picking backends can find the cause in logs.
      * Custom-tools-only MCP services are valid — this is not a validation error.
+     * Overridable (static:: dispatch): SystemMcpServerConfig no-ops it, since
+     * the system daemon has no DB/file tool catalog at all.
      */
-    private static function warnIfEmptyExposed($id, array $config): void
+    protected static function warnIfEmptyExposed($id, array $config): void
     {
         $names = AvailableServices::names($config['exposed_services'] ?? null);
         if ($names !== []) {

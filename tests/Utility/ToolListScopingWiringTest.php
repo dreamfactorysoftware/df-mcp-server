@@ -28,8 +28,17 @@ class ToolListScopingWiringTest extends TestCase
         $src = file_get_contents(__DIR__ . '/../../src/Services/Mcp.php');
 
         $this->assertStringContainsString('AvailableServices::resolve(', $src);
-        $this->assertStringNotContainsString('function resolveAvailableServices(', $src);
+        // The hook method survives as SystemMcp's override point (it returns []
+        // there — the system daemon never auto-mounts DB/file services), but it
+        // must stay a pure delegation to the shared helper: no duplicated
+        // catalog/role logic in the bridge.
+        $this->assertMatchesRegularExpression(
+            '/function resolveAvailableServices\(\): array\s*\{\s*\$config = \$this->getConfig\(\);\s*'
+            . 'return AvailableServices::resolve\(\$this->name, is_array\(\$config\) \? \$config : \[\]\);\s*\}/s',
+            $src
+        );
         $this->assertStringNotContainsString('getServiceListByGroup', $src);
+        $this->assertStringNotContainsString("get('role.services')", $src);
     }
 
     public function testUpgradeBackfillsExistingRowsWithCurrentBackends(): void
