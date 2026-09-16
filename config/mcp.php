@@ -13,6 +13,21 @@ return [
         'internal_base_url' => env('MCP_INTERNAL_BASE_URL'),
         // Seconds a PHP worker waits for the daemon to answer one proxied MCP call.
         'timeout' => (int) env('MCP_DAEMON_TIMEOUT', 300),
+        // Shared secret sent as X-Mcp-Internal-Key to BOTH daemons when set
+        // (the daemons enforce it when MCP_INTERNAL_KEY is set on their side).
+        'internal_key' => env('MCP_INTERNAL_KEY'),
+    ],
+
+    // System API MCP daemon (df-system-mcp-server) backing the `system_mcp`
+    // service type. Exposes /api/v2/system/* as MCP tools. By default it runs on
+    // this host (scripts/start-system-daemon.sh) at the URL below.
+    'system_daemon' => [
+        'enabled' => env('MCP_SYSTEM_DAEMON_ENABLED', true),
+        'url' => env('MCP_SYSTEM_DAEMON_URL', 'http://127.0.0.1:3700'),
+        // DreamFactory base URL the daemon calls back. Leave unset when the daemon runs on
+        // this host. For a sidecar container set an address it can reach (e.g. http://web).
+        // Falls back to daemon.internal_base_url, then to the incoming request's origin.
+        'base_url' => env('MCP_SYSTEM_DAEMON_BASE_URL'),
     ],
 
     // Per-tool-call audit log (mcp_request_log table)
