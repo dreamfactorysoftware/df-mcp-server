@@ -167,6 +167,26 @@ class AvailableServicesTest extends TestCase
         $this->assertSame(['a', 'b'], AvailableServices::names(['a', 'b', '']));
     }
 
+    /**
+     * The one predicate behind resolve()/scope() and the save-time
+     * empty-Exposed-Services warning: with an empty list, scoping only
+     * applies when scope_tools is explicitly true or inherits an enabled
+     * default — an explicit false serves the legacy instance-wide catalog.
+     */
+    public function testScopingAppliesMatrix(): void
+    {
+        // A non-empty list always scopes, whatever the flags say.
+        $this->assertTrue(AvailableServices::scopingApplies(['mysql'], false, false));
+        $this->assertTrue(AvailableServices::scopingApplies('mysql, files', null, false));
+
+        // Empty list: explicit flag wins, then the instance default.
+        $this->assertTrue(AvailableServices::scopingApplies([], true, false));
+        $this->assertTrue(AvailableServices::scopingApplies(null, null, true));
+        $this->assertFalse(AvailableServices::scopingApplies([], false, true));
+        $this->assertFalse(AvailableServices::scopingApplies(null, 'false', true));
+        $this->assertFalse(AvailableServices::scopingApplies('', null, false));
+    }
+
     public function testBoolOrNullHelper(): void
     {
         $this->assertNull(AvailableServices::boolOrNull(null));

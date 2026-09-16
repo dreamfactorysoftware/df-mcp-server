@@ -10,6 +10,8 @@ use DreamFactory\Core\McpServer\Models\McpServerConfig;
 use DreamFactory\Core\McpServer\Models\SystemMcpServerConfig;
 use DreamFactory\Core\McpServer\Services\Mcp;
 use DreamFactory\Core\McpServer\Services\SystemMcp;
+use DreamFactory\Core\McpServer\Support\ExposedServicesSync;
+use DreamFactory\Core\Models\Service;
 use DreamFactory\Core\Services\ServiceManager;
 use DreamFactory\Core\Services\ServiceType;
 use Illuminate\Contracts\Http\Kernel;
@@ -71,6 +73,64 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 \DreamFactory\Core\McpServer\Commands\PruneRequestLogs::class,
             ]);
         }
+
+        $this->registerServiceSyncListeners();
+    }
+
+    /**
+     * mcp_server_config.exposed_services stores backend service NAMES, which
+     * df-core does not track: without these listeners, renaming a backend
+     * silently drops it from every MCP endpoint's tools/list, and deleting
+     * one leaves the stale name behind so a service recreated under it
+     * silently inherits the exposure (name-squatting). Rewrites are handled
+     * by ExposedServicesSync; a listener failure must never break service
+     * CRUD, hence the Throwable guards.
+     */
+    private function registerServiceSyncListeners(): void
+    {
+        if (!class_exists(Service::class)) {
+            // Package checkout without df-core (e.g. static analysis).
+            return;
+        }
+
+        Service::updated(function (Service $service): void {
+            try {
+                if (!$service->wasChanged('name')) {
+                    return;
+                }
+                // Inside the `updated` event getOriginal() still returns the
+                // pre-save attributes (syncOriginal runs later, in finishSave).
+                $oldName = (string) $service->getOriginal('name');
+                $newName = (string) $service->getAttribute('name');
+                if ($oldName === '' || $newName === '' || $oldName === $newName) {
+                    return;
+                }
+                ExposedServicesSync::serviceRenamed($oldName, $newName);
+            } catch (\Throwable $e) {
+                \Log::warning('Failed to sync MCP exposed_services after a service rename', [
+                    'service_id' => $service->getKey(),
+                    'error'      => $e->getMessage(),
+                ]);
+            }
+        });
+
+        Service::deleted(function (Service $service): void {
+            try {
+                // Fires for soft deletes too — treat the service as gone
+                // either way; a restore is a rename-free re-expose decision
+                // the admin makes explicitly.
+                $name = (string) $service->getAttribute('name');
+                if ($name === '') {
+                    return;
+                }
+                ExposedServicesSync::serviceDeleted($name);
+            } catch (\Throwable $e) {
+                \Log::warning('Failed to sync MCP exposed_services after a service delete', [
+                    'service_id' => $service->getKey(),
+                    'error'      => $e->getMessage(),
+                ]);
+            }
+        });
     }
 
     /**

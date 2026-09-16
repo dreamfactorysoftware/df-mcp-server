@@ -72,15 +72,21 @@ class DaemonRoutingWiringTest extends TestCase
 
     public function testConfigDeclaresSystemDaemonAndInternalKey(): void
     {
+        $raw = $this->src('config/mcp.php');
+        $this->assertStringContainsString("env('MCP_SYSTEM_DAEMON_ENABLED', true)", $raw);
+        $this->assertStringContainsString("env('MCP_SYSTEM_DAEMON_URL', 'http://127.0.0.1:3700')", $raw);
+        $this->assertStringContainsString("env('MCP_INTERNAL_KEY')", $raw);
+
+        if (!function_exists('env')) {
+            $this->markTestSkipped(
+                'config/mcp.php calls env() — evaluating it needs the Laravel vendor tree (standalone checkouts run the raw-source assertions above).'
+            );
+        }
+
         $config = require __DIR__ . '/../../config/mcp.php';
         $this->assertArrayHasKey('system_daemon', $config);
         $this->assertArrayHasKey('enabled', $config['system_daemon']);
         $this->assertArrayHasKey('url', $config['system_daemon']);
         $this->assertArrayHasKey('internal_key', $config['daemon']);
-
-        $raw = $this->src('config/mcp.php');
-        $this->assertStringContainsString("env('MCP_SYSTEM_DAEMON_ENABLED', true)", $raw);
-        $this->assertStringContainsString("env('MCP_SYSTEM_DAEMON_URL', 'http://127.0.0.1:3700')", $raw);
-        $this->assertStringContainsString("env('MCP_INTERNAL_KEY')", $raw);
     }
 }
