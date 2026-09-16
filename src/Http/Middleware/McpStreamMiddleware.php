@@ -52,7 +52,7 @@ class McpStreamMiddleware
         return [
             'Access-Control-Allow-Origin' => '*',
             'Access-Control-Allow-Methods' => 'GET, POST, DELETE, OPTIONS',
-            'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id',
+            'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id, X-DreamFactory-API-Key, X-DreamFactory-Session-Token',
             'Access-Control-Expose-Headers' => 'WWW-Authenticate',
         ];
     }

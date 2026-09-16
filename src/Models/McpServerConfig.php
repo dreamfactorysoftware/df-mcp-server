@@ -20,6 +20,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'oauth_client_secret',
         'custom_login_url',
         'auto_oauth_service',
+        'allow_api_key_auth',
         'disabled_tools',
         'lazy_mode',
         'exposed_services',
@@ -29,6 +30,7 @@ class McpServerConfig extends BaseServiceConfigModel
     protected $casts = [
         'service_id' => 'integer',
         'app_id' => 'integer',
+        'allow_api_key_auth' => 'boolean',
         'disabled_tools' => 'array',
         'exposed_services' => 'array',
         'scope_tools' => 'boolean',
@@ -192,6 +194,12 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['legend'] = 'Database and file services this MCP endpoint exposes as tools';
                 $schema['description'] = 'Pick at least one database or file service or this MCP endpoint will not expose table/file tools (custom tools, search, and fetch still register). Empty always means none — it does not fall back to every service on the instance.';
                 $schema['values'] = self::backendServiceChoices();
+                break;
+            case 'allow_api_key_auth':
+                $schema['label'] = 'Allow API Key Authentication';
+                $schema['description'] = 'Enable API key authentication as an alternative to OAuth. When enabled, clients can authenticate using the X-DreamFactory-API-Key header; the key\'s app must be active and have a role assigned, and that role scopes access. Optionally include X-DreamFactory-Session-Token for user-specific RBAC. OAuth Bearer tokens always take precedence when both are sent.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = false;
                 break;
         }
     }
