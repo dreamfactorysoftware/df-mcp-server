@@ -5,8 +5,11 @@ namespace DreamFactory\Core\McpServer;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpUsageController;
 use DreamFactory\Core\McpServer\Http\Middleware\McpStreamMiddleware;
+use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
 use DreamFactory\Core\McpServer\Models\McpServerConfig;
+use DreamFactory\Core\McpServer\Models\SystemMcpServerConfig;
 use DreamFactory\Core\McpServer\Services\Mcp;
+use DreamFactory\Core\McpServer\Services\SystemMcp;
 use DreamFactory\Core\Services\ServiceManager;
 use DreamFactory\Core\Services\ServiceType;
 use Illuminate\Contracts\Http\Kernel;
@@ -23,13 +26,24 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
 
         $this->app->resolving('df.service', function (ServiceManager $df) {
             $df->addType(new ServiceType([
-                'name'           => 'mcp',
+                'name'           => McpServiceTypes::DATA,
                 'label'          => 'MCP Server Service',
                 'description'    => 'MCP Server service for Model Context Protocol.',
                 'group'          => ServiceTypeGroups::MCP,
                 'config_handler' => McpServerConfig::class,
                 'factory'        => function ($config) {
                     return new Mcp($config);
+                },
+            ]));
+
+            $df->addType(new ServiceType([
+                'name'           => McpServiceTypes::SYSTEM,
+                'label'          => 'System API MCP Server',
+                'description'    => 'MCP server exposing the DreamFactory System API (services, roles, apps/API keys, admins, environment) so AI clients can administer this instance.',
+                'group'          => ServiceTypeGroups::MCP,
+                'config_handler' => SystemMcpServerConfig::class,
+                'factory'        => function ($config) {
+                    return new SystemMcp($config);
                 },
             ]));
         });

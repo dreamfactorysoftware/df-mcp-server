@@ -104,6 +104,8 @@ MCP_SCOPE_TOOLS=false
 
 Verb schemas are still sent per prefixed tool. MCP clients require a full `inputSchema` (`type: "object"`) on each tool, so JSON Schema `$ref` sharing is not used. Descriptions are short; query syntax lives once in the server instructions. Cross-service `all_*` tools register only when two or more services of that category are in the catalog.
 
+Exposed Services applies only to the data-plane `mcp` type. The `system_mcp` type (see [System API MCP Server](#system-api-mcp-server)) exposes the System API itself and has no DB/file tool catalog, so the picker is hidden there and `exposed_services` / `scope_tools` / `MCP_SCOPE_TOOLS` are ignored.
+
 ### Authentication
 
 By default the MCP service uses OAuth-based authentication. Users authenticate with DreamFactory via OAuth to obtain a session token; the Laravel controller validates requests and passes the session token to the daemon via the `X-DreamFactory-Session-Token` header.
@@ -123,6 +125,7 @@ Rules:
 - With the flag off (the default), behavior is exactly as before: requests without a Bearer token get `401` with OAuth discovery info.
 - Key-only requests run under the key app's role (same as API-key-only calls to the REST API). Key + session-token requests use the token's user identity on top of the app context.
 - API-key-authenticated calls are recorded in the `mcp_request_log` audit table like OAuth calls (with the app/role attribution and no OAuth client).
+- The flag applies to `system_mcp` ([System API MCP Server](#system-api-mcp-server)) services too — the config model is shared, so an admin can opt a System API MCP endpoint into key auth the same way. It stays OAuth-only until then (the flag defaults off), and a key-authenticated session's role gates the System API calls the daemon makes exactly as it gates them through the REST API.
 
 Example key-only call:
 
@@ -134,6 +137,117 @@ curl -X POST https://df.example.com/mcp/my-mcp \
 ```
 
 See `daemon/README.md` for advanced options, available tools, and management endpoints.
+
+## System API MCP Server
+
+Besides the data-plane `mcp` service type, this package registers a second service type,
+**`system_mcp` ("System API MCP Server")**. Create it from the MCP group of the service
+type list. Instead of exposing tables/schemas/files it exposes DreamFactory's own
+**System API** (`/api/v2/system/*`) as MCP tools — list/create/update/delete services,
+roles, apps/API keys, admins, and read the environment — so an AI client (Claude Desktop,
+Cursor, ChatGPT, DreamFactory's AI chat) can *administer the instance*.
+
+The `system_mcp` type reuses everything the `mcp` type has (same `/mcp/{service}` OAuth 2.1
+front door, same `POST /api/v2/{service}/rpc` session-token bridge, same audit log,
+`disabled_tools`), but proxies to a second Node daemon,
+[`df-system-mcp-server`](https://github.com/dreamfactorysoftware/df-system-mcp-server),
+instead of the bundled data daemon. Like the data daemon it normally runs on the DreamFactory
+host; it can also run as a separate container. Custom tools are not supported on the system server.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MCP_SYSTEM_DAEMON_ENABLED` | `true` | Gate the `system_mcp` type. When false, requests get a 503 naming this variable. |
+| `MCP_SYSTEM_DAEMON_URL` | `http://127.0.0.1:3700` | Base URL of `df-system-mcp-server`. Keep the default for the daemon on this host; for a sidecar container use its service URL, e.g. `http://df-system-mcp:3700`. |
+| `MCP_SYSTEM_DAEMON_BASE_URL` | *(unset)* | DreamFactory URL the system daemon calls back (sent as `X-Mcp-Base-Url`). Leave unset when the daemon runs on this host. For a sidecar set an address it can reach, e.g. `http://web`. Falls back to `MCP_INTERNAL_BASE_URL`, then to the incoming request's origin. |
+| `MCP_INTERNAL_KEY` | *(unset)* | Optional shared secret. When set, DreamFactory sends `X-Mcp-Internal-Key` to **both** daemons; set the same value on the daemons so they reject direct callers. |
+| `MCP_INTERNAL_BASE_URL` | *(unset)* | Already used by the data daemon; also used here as the URL the system daemon calls back into DreamFactory with (e.g. `http://web`). |
+
+Run `php artisan config:clear` after changing any of these.
+
+### Running `df-system-mcp-server`
+
+**On the DreamFactory host (default).** Install `dreamfactory/df-system-mcp-server` with
+composer alongside this package, so it lands in `vendor/dreamfactory/df-system-mcp-server`.
+Then start it with this package's launcher, the same way as the data daemon (Node 20+):
+
+```
+vendor/dreamfactory/df-mcp-server/scripts/start-system-daemon.sh          # Linux / Docker
+vendor\dreamfactory\df-mcp-server\scripts\start-system-daemon-win.ps1     # Windows
+```
+
+The launcher installs the daemon's production dependencies on first run, listens on
+`127.0.0.1:3700`, and calls DreamFactory back on `MCP_INTERNAL_BASE_URL` or
+`http://127.0.0.1`. Because the daemon listens on loopback, it accepts DreamFactory's callback
+URL without `MCP_INTERNAL_KEY`, like the data daemon. The launcher reads
+`MCP_SYSTEM_DAEMON_HOST`, `MCP_SYSTEM_DAEMON_PORT` (keep `MCP_SYSTEM_DAEMON_URL` in step),
+`DREAMFACTORY_URL` and `DF_SYSTEM_MCP_DIR`, and passes the daemon only its own settings, not
+the rest of DreamFactory's environment. On a VM, run it from a systemd unit with
+`Restart=on-failure`, next to the data daemon's unit. No `.env` change is needed.
+
+**Sidecar container** (same Docker network as DreamFactory):
+
+```
+git clone https://github.com/dreamfactorysoftware/df-system-mcp-server && cd df-system-mcp-server
+docker build -t df-system-mcp .
+docker run -d --name df-system-mcp --network dreamfactory_default \
+  -e DREAMFACTORY_URL=http://web/api/v2 \
+  -e MCP_INTERNAL_KEY=<same value as DreamFactory> \
+  -p 3700:3700 df-system-mcp
+# or use the repo's docker-compose.example.yml
+```
+
+Then in DreamFactory's `.env` set `MCP_SYSTEM_DAEMON_URL=http://df-system-mcp:3700`,
+`MCP_SYSTEM_DAEMON_BASE_URL=http://web` and the same `MCP_INTERNAL_KEY`, since the sidecar
+listens on a network interface.
+
+Either way, create a service of type **System API MCP Server**, e.g. `sysmcp`. Its MCP
+endpoint is `https://<your-df>/mcp/sysmcp`.
+
+### Security
+
+Every tool call runs **as the OAuth'd (or session-authenticated) DreamFactory user**, under
+that user's role. The daemon forwards the user's session token (and the service's API key)
+to `/api/v2/system/*`; DreamFactory's RBAC decides what is allowed. Only administrators can
+create/modify services, roles, apps and admins — a non-admin user connecting to a
+`system_mcp` service can only do what their role permits. Use `disabled_tools` in the service
+config to remove destructive tools (e.g. `delete_service`) entirely. When the daemon listens
+on a network interface (a sidecar), set `MCP_INTERNAL_KEY` so nothing else on that network can
+talk to it directly.
+
+The daemon masks credentials in tool results. Its name rules can't know every service type, so
+DreamFactory also sends it each installed type's secret config fields: the fields the type's
+config model encrypts or protects, and fields its schema types as a password or certificate
+(`username` and `account_name` stay readable). The list (`Support\SecretFieldManifest`) is
+cached for an hour; after installing a package that adds service types, `php artisan cache:clear`
+picks them up sooner.
+
+### Example client configuration
+
+Claude Desktop / Cursor (`mcpServers`):
+
+```json
+{
+  "mcpServers": {
+    "dreamfactory-admin": {
+      "url": "https://df.example.com/mcp/sysmcp"
+    }
+  }
+}
+```
+
+The client discovers the OAuth endpoints via `/.well-known/oauth-authorization-server/mcp/sysmcp`,
+registers dynamically, and opens the DreamFactory login page; after login it receives a bearer
+token and can call `tools/list` / `tools/call`.
+
+First-party callers with a DreamFactory session token can skip OAuth:
+
+```
+curl -X POST https://df.example.com/api/v2/sysmcp/rpc \
+  -H "X-DreamFactory-Session-Token: <token>" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
 
 ## Feedback and Contributions
 

@@ -94,11 +94,20 @@ class ApiKeyRoleScopingTest extends TestCase
     {
         // The daemon only skips rediscovery when PHP hands it a catalog, so
         // the proxy must send one on every request shape — including [].
+        // Since the system_mcp merge, both POST paths build their body through
+        // the shared envelope() helper (which also carries _mcpSecretFields
+        // for the System API daemon), so the catalog is attached in exactly
+        // one place and neither path can drop it independently.
         $src = file_get_contents(__DIR__ . '/../../src/Client/McpDaemonClient.php');
 
         $this->assertSame(
-            2,
+            1,
             substr_count($src, "'_mcpAvailableServices' => \$availableServices ?: []"),
+            'the shared envelope() builder attaches the catalog'
+        );
+        $this->assertSame(
+            2,
+            substr_count($src, '$this->envelope('),
             'both the proxy and the stateless RPC bridge envelope the catalog'
         );
         $this->assertStringContainsString(

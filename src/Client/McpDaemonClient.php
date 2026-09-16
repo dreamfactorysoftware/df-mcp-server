@@ -15,6 +15,8 @@ class McpDaemonClient
 {
     private string $daemonUrl;
     private int $timeout;
+    /** @var array<string, array{secret: string[], maps: string[]}>|null sent as _mcpSecretFields on POSTs */
+    private ?array $secretFields = null;
 
     public function __construct(?string $daemonUrl = null)
     {
@@ -23,6 +25,33 @@ class McpDaemonClient
         // The daemon caps each of its own REST sub-calls at 30s, so this only
         // matters for tools that chain many sub-calls.
         $this->timeout = (int) config('mcp.daemon.timeout', 300);
+    }
+
+    /**
+     * Send a secret field manifest (see SecretFieldManifest) with every POST envelope, as
+     * `_mcpSecretFields`. Only the System API MCP daemon reads it. GET/DELETE requests carry
+     * their config in a header, so the manifest is never added there.
+     */
+    public function withSecretFields(array $manifest): self
+    {
+        $this->secretFields = $manifest;
+
+        return $this;
+    }
+
+    /** The POST envelope sent to the daemon. */
+    private function envelope(mixed $payload, array $config, array $availableServices): object
+    {
+        $envelope = (object) [
+            '_mcpPayload' => $payload,
+            '_mcpConfig' => $config,
+            '_mcpAvailableServices' => $availableServices ?: [],
+        ];
+        if ($this->secretFields) {
+            $envelope->_mcpSecretFields = $this->secretFields;
+        }
+
+        return $envelope;
     }
 
     /**
@@ -47,6 +76,7 @@ class McpDaemonClient
                 // sub-calls so all rows of one MCP action join on one id.
                 \DreamFactory\Core\Utility\TraceId::HEADER => \DreamFactory\Core\Utility\TraceId::get(),
             ];
+            $headers += self::internalKeyHeader();
 
             // Session token when present (OAuth, or API key + layered session
             // token). Absent for API-key-only auth — the daemon's DF REST
@@ -97,12 +127,7 @@ class McpDaemonClient
                 // Use json_decode WITHOUT assoc flag to preserve empty objects ({} vs [])
                 // PHP's json_decode($str, true) converts {} to [] which breaks JSON-RPC schemas
                 $mcpPayload = json_decode($originalBody);
-                $envelope = (object)[
-                    '_mcpPayload' => $mcpPayload,
-                    '_mcpConfig' => $config,
-                    '_mcpAvailableServices' => $availableServices ?: [],
-                ];
-                $body = json_encode($envelope);
+                $body = json_encode($this->envelope($mcpPayload, $config, $availableServices));
                 // Override Content-Type since we're wrapping the payload
                 $headers['content-type'] = 'application/json';
             } else {
@@ -174,7 +199,9 @@ class McpDaemonClient
             ]);
 
             return response()->json([
-                'error' => 'MCP daemon is not running. Please start it with: php artisan mcp:daemon',
+                'error' => 'MCP daemon is not reachable at ' . $this->daemonUrl
+                    . '. Start it (data daemon: scripts/start-daemon.sh; System API daemon:'
+                    . ' scripts/start-system-daemon.sh or its container) or fix MCP_DAEMON_URL / MCP_SYSTEM_DAEMON_URL.',
             ], 503);
 
         } catch (\GuzzleHttp\Exception\ServerException $e) {
@@ -244,6 +271,7 @@ class McpDaemonClient
             'Content-Type'                 => 'application/json',
             'Accept'                       => 'application/json, text/event-stream',
         ];
+        $headers += self::internalKeyHeader();
         if ($appId = ($config['app_id'] ?? null)) {
             if ($apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId)) {
                 $headers['X-DreamFactory-API-Key'] = $apiKey;
@@ -267,11 +295,7 @@ class McpDaemonClient
         // the message as invalid JSON-RPC.
         $jsonRpc = self::restoreEmptyJsonObjects($jsonRpc);
 
-        $envelope = fn (array $payload) => json_encode([
-            '_mcpPayload'           => $payload,
-            '_mcpConfig'            => $config,
-            '_mcpAvailableServices' => $availableServices ?: [],
-        ]);
+        $envelope = fn (array $payload) => json_encode($this->envelope($payload, $config, $availableServices));
         // $headers is captured by reference — the Mcp-Session-Id added after
         // initialize must be sent on the follow-up POSTs.
         $post = function (array $payload) use ($client, $url, &$headers, $envelope) {
@@ -303,6 +327,23 @@ class McpDaemonClient
         $resp = $post($jsonRpc);
 
         return $this->decodeDaemonBody((string) $resp->getBody());
+    }
+
+    /**
+     * Shared-secret header for the daemons. Both the data daemon and
+     * df-system-mcp-server reject /mcp/* calls without a matching
+     * x-mcp-internal-key when MCP_INTERNAL_KEY is set on their side.
+     *
+     * @return array<string, string>
+     */
+    private static function internalKeyHeader(): array
+    {
+        $key = config('mcp.daemon.internal_key');
+        if (is_string($key) && $key !== '') {
+            return ['X-Mcp-Internal-Key' => $key];
+        }
+
+        return [];
     }
 
     /**

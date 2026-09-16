@@ -58,6 +58,21 @@ return new class extends Migration
         $rows = DB::table('mcp_server_config')->get();
         $touched = [];
 
+        // mcp_server_config is shared with the `system_mcp` service type,
+        // whose daemon serves the System API and never auto-mounts DB/file
+        // services — exposed_services/scope_tools are meaningless there.
+        // Backfill only rows that belong to type-`mcp` services, matching
+        // the rowless-service half below.
+        if (Schema::hasTable('service')) {
+            $mcpServiceIds = [];
+            foreach (DB::table('service')->where('type', 'mcp')->pluck('id') as $id) {
+                $mcpServiceIds[] = (int) $id;
+            }
+            $rows = $rows->filter(
+                fn ($row) => in_array((int) $row->service_id, $mcpServiceIds, true)
+            )->values();
+        }
+
         foreach ($rows as $row) {
             $current = $row->exposed_services ?? null;
             $decoded = is_string($current) ? json_decode($current, true) : $current;
