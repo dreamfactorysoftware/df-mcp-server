@@ -126,7 +126,7 @@ echo "$USAGE" | sed 's/^/  /'
 check "$(echo "$USAGE" | grep -q "tools/call" && echo 1)" "mcp_request_log recorded tools/call rows for $SVC (service_id=$SVCID)" "$USAGE"
 
 echo "## 9. daemon disabled -> clear 503"
-$WEB_EXEC bash -c 'cd /opt/dreamfactory && sed -i "s/^MCP_SYSTEM_DAEMON_ENABLED=.*/MCP_SYSTEM_DAEMON_ENABLED=false/" .env && php artisan config:clear -q'
+$WEB_EXEC bash -c 'cd /opt/dreamfactory && (grep -q "^MCP_SYSTEM_DAEMON_ENABLED=" .env && sed -i "s/^MCP_SYSTEM_DAEMON_ENABLED=.*/MCP_SYSTEM_DAEMON_ENABLED=false/" .env || echo "MCP_SYSTEM_DAEMON_ENABLED=false" >> .env) && php artisan config:clear -q'
 DIS=$(curl -s -X POST "$BASE/mcp/$SVC" -H "Authorization: Bearer $AT" -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":9,"method":"tools/list","params":{}}')
 check "$(echo "$DIS" | grep -qi 'MCP_SYSTEM_DAEMON_ENABLED' && echo 1)" "disabled system daemon yields actionable error naming MCP_SYSTEM_DAEMON_ENABLED" "$(echo $DIS | head -c 300)"
 $WEB_EXEC bash -c 'cd /opt/dreamfactory && sed -i "s/^MCP_SYSTEM_DAEMON_ENABLED=.*/MCP_SYSTEM_DAEMON_ENABLED=true/" .env && php artisan config:clear -q'
