@@ -112,6 +112,17 @@ class ApiKeyAuthTest extends TestCase
         $this->assertFalse(ApiKeyAuth::isValidKeyFormat("' OR 1=1 --" . str_repeat('a', 53)));
     }
 
+    /**
+     * Without the /D modifier, PCRE's $ matches before a final newline, so a
+     * key pasted with a trailing "\n" would slip past the format gate.
+     */
+    public function testRejectsKeysWithTrailingNewline(): void
+    {
+        $this->assertFalse(ApiKeyAuth::isValidKeyFormat(self::VALID_KEY . "\n"));
+        $this->assertFalse(ApiKeyAuth::isValidKeyFormat(self::VALID_KEY . "\r\n"));
+        $this->assertFalse(ApiKeyAuth::isValidKeyFormat("\n" . self::VALID_KEY));
+    }
+
     // ---------------------------------------------------------------
     // App-record gate: exists + active + role assigned
     // ---------------------------------------------------------------

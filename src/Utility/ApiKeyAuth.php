@@ -44,8 +44,10 @@ final class ApiKeyAuth
      * App::generateApiKey in df-core). Enforced before any database lookup so
      * malformed or oversized values never reach the cache/DB layer. The same
      * pattern is used by the daemon's auth utils (daemon/src/utils/auth.utils.ts).
+     * The D modifier anchors $ to the true end of the string, so a key with a
+     * trailing newline ("<64 hex>\n") can never pass.
      */
-    private const API_KEY_PATTERN = '/^[a-fA-F0-9]{64}$/';
+    private const API_KEY_PATTERN = '/^[a-fA-F0-9]{64}$/D';
 
     /**
      * Whether the Authorization header carries a Bearer credential.
