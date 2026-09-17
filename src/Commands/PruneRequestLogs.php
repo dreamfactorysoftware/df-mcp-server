@@ -9,13 +9,13 @@ use Illuminate\Console\Command;
 
 /**
  * Drops mcp_request_log rows older than the configured retention window.
- * Mirrors df-ai's `ai:prune-usage-logs` so customers can schedule both with
- * the same cron pattern.
+ * Mirrors df-ai's `ai:prune-usage-logs`.
  *
- * Run manually:  php artisan mcp:prune-request-logs
- * Run scheduled: register $schedule->command('mcp:prune-request-logs')->daily()
- *                in the app's Console\Kernel (not done in this package — the
- *                operating customer chooses when to prune).
+ * Run manually:  php artisan mcp:prune-request-logs [--days=N]
+ * Run scheduled: daily, registered by the ServiceProvider when
+ *                mcp.audit_logging.enabled is true and retention_days > 0
+ *                (MCP_AUDIT_LOGGING_ENABLED / MCP_AUDIT_RETENTION_DAYS). Needs
+ *                the standard `* * * * * php artisan schedule:run` cron entry.
  */
 class PruneRequestLogs extends Command
 {

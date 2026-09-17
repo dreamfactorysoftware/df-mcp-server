@@ -14,6 +14,7 @@ use DreamFactory\Core\McpServer\Support\ExposedServicesSync;
 use DreamFactory\Core\Models\Service;
 use DreamFactory\Core\Services\ServiceManager;
 use DreamFactory\Core\Services\ServiceType;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Support\Facades\Route;
 
@@ -72,6 +73,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             $this->commands([
                 \DreamFactory\Core\McpServer\Commands\PruneRequestLogs::class,
             ]);
+            $this->scheduleRequestLogPrune();
         }
 
         $this->registerServiceSyncListeners();
@@ -129,6 +131,28 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                     'service_id' => $service->getKey(),
                     'error'      => $e->getMessage(),
                 ]);
+            }
+        });
+    }
+
+    /**
+     * Run mcp:prune-request-logs daily while audit logging is on and a
+     * retention window is set, so mcp_request_log stays bounded without the
+     * customer wiring up the schedule. Hooked on Schedule resolution, so it
+     * only does anything under schedule:run / schedule:list.
+     *
+     * Deliberately no withoutOverlapping()/onOneServer(): both take a lock
+     * through the cache store, and where that store is unreachable (e.g. the
+     * redis driver with REDIS_HOST unset) schedule:run silently skips the
+     * task. An overlapping or per-node duplicate run just finds nothing left
+     * to delete.
+     */
+    private function scheduleRequestLogPrune(): void
+    {
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
+            if (config('mcp.audit_logging.enabled', true)
+                && (int) config('mcp.audit_logging.retention_days', 90) > 0) {
+                $schedule->command('mcp:prune-request-logs')->daily();
             }
         });
     }
