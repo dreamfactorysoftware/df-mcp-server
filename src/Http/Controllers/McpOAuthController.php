@@ -141,7 +141,7 @@ class McpOAuthController extends Controller
 
         Log::info('MCP OAuth: Client registration', [
             'client_name' => $clientName,
-            'redirect_uris' => $validatedRedirectUris,
+            'redirect_uris' => array_values($validatedRedirectUris),
             'service' => $mcpService,
         ]);
 
