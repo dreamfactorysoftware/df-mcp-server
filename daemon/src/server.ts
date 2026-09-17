@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { SessionService } from './services/session.service.js';
 import { runWithTrace } from './services/trace.service.js';
 import { runWithResponse, type LazyMode } from './services/lazy.service.js';
+import type { ToolStyle } from './types.js';
 import {
   createServer,
   getSessionId,
@@ -264,6 +265,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     let disabledTools: Set<string> | undefined;
     let customTools: CustomToolDefinition[] | undefined;
     let lazyMode: LazyMode = 'auto';
+    let toolStyle: ToolStyle = 'prefixed';
     const mcpConfigData = mcpConfig ?? (() => {
       const header = req.headers['x-mcp-config'] as string | undefined;
       if (!header) return undefined;
@@ -278,6 +280,9 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     if (mcpConfigData) {
       if (['auto', 'on', 'off'].includes(mcpConfigData.lazy_mode)) {
         lazyMode = mcpConfigData.lazy_mode;
+      }
+      if (['prefixed', 'merged'].includes(mcpConfigData.tool_style)) {
+        toolStyle = mcpConfigData.tool_style;
       }
       if (Array.isArray(mcpConfigData.disabled_tools) && mcpConfigData.disabled_tools.length > 0) {
         disabledTools = new Set(mcpConfigData.disabled_tools as string[]);
@@ -338,7 +343,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
         apiConfigs
       });
 
-      const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode);
+      const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle);
       const statelessTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true
@@ -354,7 +359,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       return;
     }
 
-    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode);
+    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode, toolStyle);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {

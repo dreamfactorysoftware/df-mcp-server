@@ -7,7 +7,7 @@ import { registerGlobalTools } from '../services/global-tools.service.js';
 import { createLazyState, installLazyFacade, LAZY_INSTRUCTIONS, type LazyMode } from '../services/lazy.service.js';
 import { DreamFactoryService, type DFAuthConfig } from '../services/dreamfactory.service.js';
 import packageJson from '../../package.json' with { type: 'json' };
-import type { ApiConfig, CustomToolDefinition } from '../types.js';
+import type { ToolStyle, ApiConfig, CustomToolDefinition } from '../types.js';
 
 export type { ApiConfig };
 
@@ -224,13 +224,19 @@ export function createServer(
   sessionManager: SessionService,
   disabledTools?: Set<string>,
   customTools?: CustomToolDefinition[],
-  lazyMode: LazyMode = 'auto'
+  lazyMode: LazyMode = 'auto',
+  toolStyle: ToolStyle = 'prefixed'
 ): McpServer {
   const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);
   const fileApis = apiConfigs.filter(c => c.category === 'file').map(c => c.name);
 
   const dbPrefixes = dbApis.map(name => name.replace(/[^a-zA-Z0-9]/g, '_'));
   const examplePrefix = dbPrefixes[0] ?? 'db';
+  // Merged mode drops the per-service prefix, so the tool-usage guide below
+  // must describe bare verbs instead or the model hunts for tools that do not exist.
+  const merged = toolStyle === 'merged';
+  const multiDb = dbApis.length > 1;
+  const svcArg = merged && multiDb ? "service='<name>'" : '';
 
   const instructions = [
     `You are connected to the DreamFactory service "${serviceName}".`,
@@ -250,18 +256,24 @@ export function createServer(
     '- Row counts per table',
     '',
     '## Tool Usage Guide',
-    'All database tools are prefixed with the API name (e.g., db_get_tables, mysql_get_table_data).',
-    'The same verb on every database shares the same parameters — only the prefix changes.',
+    merged
+      ? (multiDb
+          ? `Database tools are shared across every API. Pass ${svcArg} to choose which database a call targets (one of: ${dbApis.join(', ')}).`
+          : `Database tools act on the "${dbApis[0] ?? 'database'}" API directly — no service argument is needed.`)
+      : 'All database tools are prefixed with the API name (e.g., db_get_tables, mysql_get_table_data).',
+    merged
+      ? 'Every verb takes the same parameters regardless of which database you target.'
+      : 'The same verb on every database shares the same parameters — only the prefix changes.',
     dbApis.length > 1 ? 'Use the list_apis tool to see all available APIs.' : '',
     '',
-    `1. \`{prefix}_get_data_model\` - START HERE. Condensed schema with columns, FKs, and patterns.`,
-    `2. \`{prefix}_get_api_spec\` - OpenAPI spec with query syntax hints. Use compact=true (default).`,
-    `3. \`{prefix}_get_table_data\` - Query data with filter, order, limit, offset, fields, related`,
-    `4. \`{prefix}_aggregate_data\` - Compute SUM/COUNT/AVG/MIN/MAX in ONE call (no manual pagination needed)`,
-    `5. \`{prefix}_get_table_schema\` - Full schema for a single table (if you need more detail)`,
-    `6. \`{prefix}_create_records\` / \`update_records\` / \`delete_records\` - CRUD operations`,
-    `7. \`{prefix}_get_stored_procedures\` / \`call_stored_procedure\` - Stored procedure access`,
-    `8. \`{prefix}_get_stored_functions\` / \`call_stored_function\` - Stored function access`,
+    `1. \`${merged ? '' : examplePrefix + '_'}get_data_model\` - START HERE. Condensed schema with columns, FKs, and patterns.`,
+    `2. \`${merged ? '' : examplePrefix + '_'}get_api_spec\` - OpenAPI spec with query syntax hints. Use compact=true (default).`,
+    `3. \`${merged ? '' : examplePrefix + '_'}get_table_data\` - Query data with filter, order, limit, offset, fields, related`,
+    `4. \`${merged ? '' : examplePrefix + '_'}aggregate_data\` - Compute SUM/COUNT/AVG/MIN/MAX in ONE call (no manual pagination needed)`,
+    `5. \`${merged ? '' : examplePrefix + '_'}get_table_schema\` - Full schema for a single table (if you need more detail)`,
+    `6. \`${merged ? '' : examplePrefix + '_'}create_records\` / \`update_records\` / \`delete_records\` - CRUD operations`,
+    `7. \`${merged ? '' : examplePrefix + '_'}get_stored_procedures\` / \`call_stored_procedure\` - Stored procedure access`,
+    `8. \`${merged ? '' : examplePrefix + '_'}get_stored_functions\` / \`call_stored_function\` - Stored function access`,
     '',
     fileApis.length > 0 ? 'File tools: list_files, get_file_content, create_folder, delete_file (also prefixed per file API).\n' : '',
     '## Query Syntax Quick Reference',
@@ -273,7 +285,7 @@ export function createServer(
     '- Related: include related records via foreign keys (e.g., `related=parent_table_by_fk_field`)',
     '- Pagination: use `limit` and `offset`, set `includeCount=true` for total count',
     '- Counting: use `countOnly=true` to get just the count without data',
-    '- Aggregation: use `{prefix}_aggregate_data` for SUM/COUNT/AVG/MIN/MAX — it pushes computation to the database server',
+    `- Aggregation: use \`${merged ? '' : examplePrefix + '_'}aggregate_data\` for SUM/COUNT/AVG/MIN/MAX — it pushes computation to the database server`,
     '- Max page size: 1000 records. Always paginate for tables with more rows.',
     '',
     '## Key Data Modeling Hints',
@@ -320,7 +332,7 @@ export function createServer(
   // Agent identity/access tools — always available, not service-prefixed.
   registerGlobalTools(server, sessionManager, disabledTools);
 
-  registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools);
+  registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools, toolStyle);
 
   if (customTools && customTools.length > 0) {
     registerCustomTools(server, customTools, sessionManager, disabledTools);

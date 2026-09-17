@@ -25,6 +25,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'lazy_mode',
         'exposed_services',
         'scope_tools',
+        'tool_style',
     ];
 
     protected $casts = [
@@ -202,6 +203,16 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['label'] = 'Custom Login URL';
                 $schema['description'] = 'Optional. Send users to your own branded login page during the MCP OAuth flow instead of DreamFactory\'s default. The page must call DF\'s session-create endpoint and post back; HTTPS required (localhost is exempt for dev).';
                 $schema['type'] = 'text';
+                break;
+            case 'tool_style':
+                $schema['label'] = 'Database Tool Style';
+                $schema['description'] = 'How database tools are exposed. Prefixed (default, unchanged): every verb is emitted once per database, so five databases produce five near-identical copies of all 16 tools. Merged: each verb is registered once and takes a "service" argument naming the database; endpoints exposing a single database omit the argument entirely. Merged cuts catalog size and token cost roughly in proportion to the number of databases, at the cost of breaking client configs that call the prefixed tool names.';
+                $schema['type'] = 'picklist';
+                $schema['default'] = 'prefixed';
+                $schema['values'] = [
+                    ['label' => 'Prefixed per service (default)', 'name' => 'prefixed'],
+                    ['label' => 'Merged with a service argument', 'name' => 'merged'],
+                ];
                 break;
             case 'lazy_mode':
                 $schema['label'] = 'Lazy Tool Loading';
