@@ -5,7 +5,7 @@ import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { normalizeObjectSchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 import { respond, respondError, handleError } from './tool-utils.js';
-const FACADE = new Set(['search_tools', 'describe_tool', 'call_tool', 'fetch_more']);
+const FACADE = new Set(['search_tools', 'describe_tool', 'call_tool', 'fetch_more', 'list_tools']);
 const HOT_MAX = 8;
 const PAGE_KEEP = 64;
 const FETCH_MAX = 12_000;
@@ -311,6 +311,32 @@ export class LazyState {
         }
         return out;
     }
+    /**
+     * Every catalog tool, in registration order. search() ranks and can only
+     * return what scores against a query, so with the facade on there is
+     * otherwise no way for a client to learn the full inventory.
+     */
+    list(offset = 0, limit = 100, namesOnly = false) {
+        const names = [...this.catalog.keys()].filter(n => !FACADE.has(n));
+        const start = Math.min(Math.max(0, offset), names.length);
+        const page = names.slice(start, start + Math.max(1, limit));
+        const out = {
+            total: names.length,
+            offset: start,
+            count: page.length,
+            tools: namesOnly
+                ? page
+                : page.map(n => {
+                    const t = this.catalog.get(n);
+                    return { name: n, description: shortDesc(t.description), read_only: isReadOnly(n) };
+                })
+        };
+        const next = start + page.length;
+        if (next < names.length) {
+            out.next_offset = next;
+        }
+        return out;
+    }
     describe(name) {
         const t = this.catalog.get(name);
         if (!t || FACADE.has(name))
@@ -374,6 +400,15 @@ export function installLazyFacade(server, state) {
         limit: z.number().int().min(1).max(50).optional().describe('Max hits (default 8)')
     }), async ({ query, limit }) => {
         const r = respond(state.search(String(query).slice(0, 500), limit ?? 8));
+        state.ledger({ facade_calls: 1 });
+        return r;
+    });
+    facade('list_tools', 'List Tools', 'Enumerate the whole tool catalog, in registration order — search_tools ranks, this one lists. Paged; pass names_only for the cheapest full inventory.', z.object({
+        offset: z.number().int().min(0).optional().describe('Index to start from (default 0)'),
+        limit: z.number().int().min(1).max(500).optional().describe('Max tools per page (default 100)'),
+        names_only: z.boolean().optional().describe('Return names only, without descriptions')
+    }), async ({ offset, limit, names_only }) => {
+        const r = respond(state.list(offset ?? 0, limit ?? 100, names_only === true));
         state.ledger({ facade_calls: 1 });
         return r;
     });
