@@ -38,8 +38,10 @@ class ProxyWorkerStarvationTest extends TestCase
         $this->assertNotFalse($start);
         $body = substr($src, $start, $end - $start);
 
-        // Token still validated first so unauthenticated GETs get 401 + WWW-Authenticate.
-        $this->assertStringContainsString('validateBearerToken', $body);
+        // Credentials still validated first so unauthenticated GETs get
+        // 401 + WWW-Authenticate. authenticateRequest wraps the Bearer path
+        // and the per-service opt-in API-key path.
+        $this->assertStringContainsString('authenticateRequest', $body);
         $this->assertStringContainsString('405', $body);
         $this->assertStringContainsString("'Allow'", $body);
         // The GET must never reach the daemon proxy.

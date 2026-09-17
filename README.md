@@ -108,7 +108,33 @@ Exposed Services applies only to the data-plane `mcp` type. The `system_mcp` typ
 
 ### Authentication
 
-The MCP service uses OAuth-based authentication. Users must authenticate with DreamFactory via OAuth to obtain a session token. The Laravel controller validates requests and passes the session token to the daemon via the `X-DreamFactory-Session-Token` header.
+By default the MCP service uses OAuth-based authentication. Users authenticate with DreamFactory via OAuth to obtain a session token; the Laravel controller validates requests and passes the session token to the daemon via the `X-DreamFactory-Session-Token` header.
+
+#### API key authentication (per-service opt-in)
+
+Each MCP service can additionally accept a static DreamFactory API key by enabling **Allow API Key Authentication** (`allow_api_key_auth`, default off) in its config. When enabled, clients may send:
+
+| Header | Description |
+|--------|-------------|
+| `X-DreamFactory-API-Key` | A DreamFactory app API key (64-char hex). The app must be **active** and have a **role assigned**; that role scopes every tool call. |
+| `X-DreamFactory-Session-Token` | Optional DF session JWT layered on top of the key to add user identity and user-specific RBAC. |
+
+Rules:
+
+- An `Authorization: Bearer ...` header **always wins** — such requests go through the unchanged OAuth path, regardless of any API-key headers.
+- With the flag off (the default), behavior is exactly as before: requests without a Bearer token get `401` with OAuth discovery info.
+- Key-only requests run under the key app's role (same as API-key-only calls to the REST API). Key + session-token requests use the token's user identity on top of the app context.
+- API-key-authenticated calls are recorded in the `mcp_request_log` audit table like OAuth calls (with the app/role attribution and no OAuth client).
+- The flag applies to `system_mcp` ([System API MCP Server](#system-api-mcp-server)) services too — the config model is shared, so an admin can opt a System API MCP endpoint into key auth the same way. It stays OAuth-only until then (the flag defaults off), and a key-authenticated session's role gates the System API calls the daemon makes exactly as it gates them through the REST API.
+
+Example key-only call:
+
+```bash
+curl -X POST https://df.example.com/mcp/my-mcp \
+  -H 'Content-Type: application/json' \
+  -H 'X-DreamFactory-API-Key: <64-char-hex-app-key>' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
+```
 
 See `daemon/README.md` for advanced options, available tools, and management endpoints.
 
