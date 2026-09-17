@@ -2,8 +2,8 @@ import type { ApiConfig } from '../types.js';
 
 export type SessionConfig = {
   url: string;
-  sessionToken: string; // DF JWT for user authentication
-  apiKey?: string; // DF API key (required for non-admin users)
+  sessionToken?: string; // DF JWT for user authentication (absent for API-key-only auth)
+  apiKey?: string; // DF API key (required for non-admin users; usable alone when the app has a role)
   apiConfigs?: ApiConfig[]; // Discovered database API configurations
 };
 

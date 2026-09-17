@@ -57,9 +57,12 @@ class McpDaemonClient
     /**
      * Proxy request to daemon server
      *
+     * @param array $authResult Auth result from McpStreamController with keys:
+     *        auth_type ('oauth'|'api_key'), session_token (?string),
+     *        api_key (?string), app_id (?int)
      * @param array $availableServices Pre-resolved list of available services (bypasses RBAC)
      */
-    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl, string $dfSessionToken, array $availableServices = []): Response|JsonResponse|StreamedResponse
+    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl, array $authResult, array $availableServices = []): Response|JsonResponse|StreamedResponse
     {
         try {
             $client = new \GuzzleHttp\Client([
@@ -68,7 +71,6 @@ class McpDaemonClient
 
             $headers = [
                 'X-Mcp-Base-Url' => $baseUrl,
-                'X-DreamFactory-Session-Token' => $dfSessionToken,
                 'Accept' => 'application/json, text/event-stream',
                 // Platform trace id: the daemon re-attaches this to its DF REST
                 // sub-calls so all rows of one MCP action join on one id.
@@ -76,14 +78,30 @@ class McpDaemonClient
             ];
             $headers += self::internalKeyHeader();
 
-            // Pass API key if configured (required for non-admin users)
-            $appId = $config['app_id'] ?? null;
-            Log::debug('MCP API Key lookup', ['app_id' => $appId, 'config_keys' => array_keys($config)]);
-            if ($appId) {
-                $apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId);
-                Log::debug('MCP API Key result', ['app_id' => $appId, 'api_key_found' => !empty($apiKey)]);
-                if ($apiKey) {
-                    $headers['X-DreamFactory-API-Key'] = $apiKey;
+            // Session token when present (OAuth, or API key + layered session
+            // token). Absent for API-key-only auth — the daemon's DF REST
+            // calls then run on the key alone, under the key app's role.
+            $dfSessionToken = $authResult['session_token'] ?? null;
+            if (!empty($dfSessionToken)) {
+                $headers['X-DreamFactory-Session-Token'] = $dfSessionToken;
+            }
+
+            $clientApiKey = $authResult['api_key'] ?? null;
+            if (!empty($clientApiKey)) {
+                // API-key auth: forward the caller's own key so downstream DF
+                // REST calls carry the same app/role identity that was gated.
+                $headers['X-DreamFactory-API-Key'] = $clientApiKey;
+                Log::debug('MCP using client-provided API key', ['auth_type' => $authResult['auth_type'] ?? null]);
+            } else {
+                // OAuth auth: pass the configured app's key (required for non-admin users)
+                $appId = $config['app_id'] ?? null;
+                Log::debug('MCP API Key lookup', ['app_id' => $appId, 'config_keys' => array_keys($config)]);
+                if ($appId) {
+                    $apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId);
+                    Log::debug('MCP API Key result', ['app_id' => $appId, 'api_key_found' => !empty($apiKey)]);
+                    if ($apiKey) {
+                        $headers['X-DreamFactory-API-Key'] = $apiKey;
+                    }
                 }
             }
 

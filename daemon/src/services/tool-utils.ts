@@ -71,11 +71,13 @@ export function getAuth(sessionManager: SessionService, sessionId?: string): DFA
   // Always consult the manager: in stateless mode there is no session ID and the
   // per-request config is served from the default slot.
   const sessionConfig = sessionManager.getConfig(sessionId);
-  const sessionToken = sessionConfig?.sessionToken ?? '';
-  const apiKey = sessionConfig?.apiKey;
+  const sessionToken = sessionConfig?.sessionToken || undefined;
+  const apiKey = sessionConfig?.apiKey || undefined;
 
-  if (!sessionToken) {
-    throw new Error('DreamFactory session not found. Please authenticate via OAuth.');
+  // At least one credential is required. API-key-only auth is valid when the
+  // key's app has a role assigned (validated by the PHP proxy).
+  if (!sessionToken && !apiKey) {
+    throw new Error('DreamFactory session not found. Please authenticate via OAuth or provide an API key.');
   }
 
   return { sessionToken, apiKey };

@@ -24,8 +24,10 @@ async function dfFetch(
 ): Promise<unknown> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    'X-DreamFactory-Session-Token': auth.sessionToken,
   };
+  if (auth.sessionToken) {
+    headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+  }
   if (auth.apiKey) {
     headers['X-DreamFactory-API-Key'] = auth.apiKey;
   }

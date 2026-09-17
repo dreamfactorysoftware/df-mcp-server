@@ -14,6 +14,11 @@ import {
   discoverServices,
   type ApiConfig
 } from './utils/utils.js';
+import {
+  extractAndValidateAuth,
+  getAuthModeDescription,
+  type AuthValidationResult
+} from './utils/auth.utils.js';
 import type { CustomToolDefinition } from './types.js';
 
 type SessionEntry = {
@@ -52,17 +57,26 @@ app.use((req, res, next) => {
 const INTERNAL_API_KEY = process.env.MCP_INTERNAL_KEY ?? '';
 
 /**
- * Send 401 Unauthorized response
+ * Send 401 Unauthorized response with optional custom message
  */
-function sendUnauthorized(res: Response): void {
+function sendUnauthorized(res: Response, message?: string): void {
   res.status(401).json({
     jsonrpc: '2.0',
     id: null,
     error: {
       code: -32001,
-      message: 'Unauthorized: DreamFactory session token required',
+      message: message ?? 'Unauthorized: DreamFactory session token or API key required',
     },
   });
+}
+
+/**
+ * Log authentication mode for a service
+ */
+function logAuthMode(serviceName: string, authResult: AuthValidationResult): void {
+  if (authResult.valid && authResult.mode) {
+    console.log(`[${serviceName}] Auth: ${getAuthModeDescription(authResult.mode)}`);
+  }
 }
 
 const sessionManager = new SessionService();
@@ -136,14 +150,26 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
   const sessionIdHeader = getSessionId(req);
   const existingSession = !STATELESS && sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
 
-  // Get DreamFactory session token from header (passed by PHP after OAuth validation)
-  const dfSessionToken = req.headers['x-dreamfactory-session-token'] as string | undefined;
-  // Get API key (required for non-admin users)
-  const dfApiKey = req.headers['x-dreamfactory-api-key'] as string | undefined;
+  // Authentication modes (at least one credential required; the PHP proxy has
+  // already authenticated the caller and forwards the matching credentials):
+  // 1. Session token (OAuth): user authenticated via OAuth, JWT passed by PHP
+  // 2. API key only: app-based auth — the key's app has a role assigned
+  // 3. Both: session token for user identity + API key for app context
+  // Format strictness stays off here: the PHP proxy already enforces the
+  // 64-hex key format on client-supplied keys, and OAuth-config app keys are
+  // trusted values looked up server-side.
+  const authResult = extractAndValidateAuth(req, false);
 
-  if (!dfSessionToken) {
-    return sendUnauthorized(res);
+  if (!authResult.valid) {
+    console.warn(`[${serviceName}] Auth failed: ${authResult.error}`);
+    return sendUnauthorized(res, `Unauthorized: ${authResult.error}`);
   }
+
+  // Log the authentication mode for debugging/auditing
+  logAuthMode(serviceName, authResult);
+
+  const dfSessionToken = authResult.credentials?.sessionToken;
+  const dfApiKey = authResult.credentials?.apiKey;
 
   // Extract config and MCP payload from body envelope (POST) or headers (GET/DELETE).
   // The PHP proxy wraps the original MCP JSON-RPC payload + DreamFactory config into
@@ -403,7 +429,11 @@ app.listen(PORT, HOST, () => {
   console.log(`  GET  /health - Health check`);
   console.log(`  GET  /ping - Ping`);
   console.log(`  POST /mcp/cache/clear - Clear session cache`);
-  console.log(`  ALL  /mcp/:serviceName - MCP protocol (requires X-DreamFactory-Session-Token header)`);
+  console.log(`  ALL  /mcp/:serviceName - MCP protocol`);
+  console.log('');
+  console.log('Authentication (at least one required):');
+  console.log('  X-DreamFactory-Session-Token - OAuth session token');
+  console.log('  X-DreamFactory-API-Key - API key (app must have role assigned)');
 });
 
 async function gracefulShutdown(signal: string) {

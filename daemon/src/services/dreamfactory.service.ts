@@ -1,8 +1,8 @@
 import { currentTraceId } from './trace.service.js';
 
 export type DFAuthConfig = {
-  sessionToken: string;
-  apiKey?: string;
+  sessionToken?: string; // Optional for API-key-only auth
+  apiKey?: string; // Can be used alone when the app has a role assigned
 };
 
 export type FileContentResult =
@@ -506,8 +506,9 @@ export class DreamFactoryService {
     auth: DFAuthConfig,
     params?: URLSearchParams
   ): Promise<Response> {
-    if (!auth.sessionToken) {
-      throw new Error('Session token is required');
+    // Require at least one auth method (API-key-only works when the app has a role)
+    if (!auth.sessionToken && !auth.apiKey) {
+      throw new Error('Either session token or API key is required');
     }
 
     const target = new URL(url);
@@ -515,9 +516,11 @@ export class DreamFactoryService {
       params.forEach((value, key) => target.searchParams.set(key, value));
     }
 
-    const headers: Record<string, string> = {
-      'X-DreamFactory-Session-Token': auth.sessionToken,
-    };
+    const headers: Record<string, string> = {};
+
+    if (auth.sessionToken) {
+      headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+    }
 
     if (auth.apiKey) {
       headers['X-DreamFactory-API-Key'] = auth.apiKey;
@@ -554,8 +557,9 @@ export class DreamFactoryService {
     params?: URLSearchParams,
     body?: Record<string, unknown> | string
   ): Promise<unknown> {
-    if (!auth.sessionToken) {
-      throw new Error('Session token is required');
+    // Require at least one auth method (API-key-only works when the app has a role)
+    if (!auth.sessionToken && !auth.apiKey) {
+      throw new Error('Either session token or API key is required');
     }
 
     const target = new URL(url);
@@ -566,8 +570,11 @@ export class DreamFactoryService {
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      'X-DreamFactory-Session-Token': auth.sessionToken,
     };
+
+    if (auth.sessionToken) {
+      headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+    }
 
     if (auth.apiKey) {
       headers['X-DreamFactory-API-Key'] = auth.apiKey;
