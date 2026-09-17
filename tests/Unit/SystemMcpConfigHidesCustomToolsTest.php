@@ -24,6 +24,12 @@ class SystemMcpConfigHidesCustomToolsTest extends TestCase
     {
         $this->assertStringContainsString('class SystemMcpServerConfig extends McpServerConfig', $this->contents);
 
+        if (!class_exists(\Illuminate\Database\Eloquent\Model::class)) {
+            $this->markTestSkipped(
+                'SystemMcpServerConfig extends Eloquent — reflecting it needs the full DreamFactory vendor tree (standalone checkouts run the source-level assertion above).'
+            );
+        }
+
         $ref = new \ReflectionClass(\DreamFactory\Core\McpServer\Models\SystemMcpServerConfig::class);
         $this->assertSame(\DreamFactory\Core\McpServer\Models\McpServerConfig::class, $ref->getParentClass()->getName());
 

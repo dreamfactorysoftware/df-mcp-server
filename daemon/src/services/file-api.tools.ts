@@ -157,7 +157,11 @@ export function registerFileApiTools(
     }
   }
 
-  // Register cross-file-service tools
+  // Cross-service aggregator only pays off with 2+ file services.
+  if (fileConfigs.length < 2) {
+    return;
+  }
+
   registerTool(
     'all_list_files',
     'List Files from All Storage Services',

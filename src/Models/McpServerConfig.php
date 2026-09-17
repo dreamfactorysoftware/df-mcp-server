@@ -2,6 +2,8 @@
 
 namespace DreamFactory\Core\McpServer\Models;
 
+use DreamFactory\Core\Enums\ServiceTypeGroups;
+use DreamFactory\Core\McpServer\Utility\AvailableServices;
 use DreamFactory\Core\Models\BaseServiceConfigModel;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
@@ -20,12 +22,16 @@ class McpServerConfig extends BaseServiceConfigModel
         'auto_oauth_service',
         'disabled_tools',
         'lazy_mode',
+        'exposed_services',
+        'scope_tools',
     ];
 
     protected $casts = [
         'service_id' => 'integer',
         'app_id' => 'integer',
         'disabled_tools' => 'array',
+        'exposed_services' => 'array',
+        'scope_tools' => 'boolean',
     ];
 
     /**
@@ -35,6 +41,10 @@ class McpServerConfig extends BaseServiceConfigModel
         'app_id',
         'disabled_tools',
         'custom_tools',
+        // Tri-state (true / false / inherit MCP_SCOPE_TOOLS). A boolean
+        // checkbox cannot represent "unset", so this stays API-only. Admins
+        // pick backends via Exposed Services.
+        'scope_tools',
     ];
 
     /**
@@ -67,6 +77,7 @@ class McpServerConfig extends BaseServiceConfigModel
         unset($config['custom_tools']);
 
         parent::setConfig($id, $config, $local_config);
+        static::warnIfEmptyExposed($id, $config);
 
         if ($id && is_array($customTools)) {
             self::syncCustomTools((int) $id, $customTools);
@@ -83,9 +94,58 @@ class McpServerConfig extends BaseServiceConfigModel
         unset($config['custom_tools']);
 
         parent::storeConfig($id, $config);
+        static::warnIfEmptyExposed($id, $config);
 
         if ($id && is_array($customTools)) {
             self::syncCustomTools((int) $id, $customTools);
+        }
+    }
+
+    /**
+     * Empty Exposed Services means no auto-generated DB/file tools. Log it so
+     * an admin who saved without picking backends can find the cause in logs.
+     * Custom-tools-only MCP services are valid — this is not a validation error.
+     *
+     * Judges the RESULTING stored config, not the request payload: df-core
+     * merges partial writes (firstOrNew + fill), so a save that simply omits
+     * exposed_services keeps the stored names and must not warn. Only the
+     * genuinely-empty outcome warns — stored list empty/null AND scoping
+     * actually applies (an explicit scope_tools=false still serves the legacy
+     * instance-wide catalog, so nothing is lost there).
+     *
+     * Overridable (static:: dispatch): SystemMcpServerConfig no-ops it, since
+     * the system daemon has no DB/file tool catalog at all.
+     */
+    protected static function warnIfEmptyExposed($id, array $config): void
+    {
+        try {
+            // Payload values back the pre-insert validation pass ($id null),
+            // where nothing has been stored yet.
+            $exposed = $config['exposed_services'] ?? null;
+            $scopeTools = $config['scope_tools'] ?? null;
+
+            if ($id && ($stored = static::whereServiceId($id)->first())) {
+                // parent::setConfig/storeConfig already saved: the row is the
+                // resulting state, whatever the payload carried or omitted.
+                $exposed = $stored->exposed_services;
+                $scopeTools = $stored->scope_tools;
+            }
+
+            if (AvailableServices::names($exposed) !== []) {
+                return;
+            }
+
+            $scopeByDefault = filter_var(config('mcp.scope_tools', true), FILTER_VALIDATE_BOOLEAN);
+            if (!AvailableServices::scopingApplies($exposed, $scopeTools, $scopeByDefault)) {
+                return;
+            }
+
+            \Log::warning('MCP service has no Exposed Services selected; tools/list will not include database or file tools', [
+                'service_id' => $id,
+            ]);
+        } catch (\Throwable $e) {
+            // A log-time convenience must never break config saves (e.g.
+            // table missing mid-migration).
         }
     }
 
@@ -157,6 +217,48 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['description'] = 'Optional. Name of a DF OAuth service (e.g. "google", "okta"). When set, MCP clients skip the login page entirely and go straight to that provider. Takes precedence over Custom Login URL. Use this for SSO-only environments.';
                 $schema['type'] = 'text';
                 break;
+            case 'exposed_services':
+                $schema['type'] = 'multi_picklist';
+                $schema['label'] = 'Exposed Services';
+                $schema['legend'] = 'Database and file services this MCP endpoint exposes as tools';
+                $schema['description'] = 'Pick at least one database or file service or this MCP endpoint will not expose table/file tools (custom tools, search, and fetch still register). Empty always means none — it does not fall back to every service on the instance.';
+                $schema['values'] = self::backendServiceChoices();
+                break;
+        }
+    }
+
+    /**
+     * Database + file services the admin can attach to this MCP endpoint.
+     *
+     * @return array<int, array{name: string, label: string}>
+     */
+    private static function backendServiceChoices(): array
+    {
+        try {
+            /** @var \DreamFactory\Core\Services\ServiceManager $sm */
+            $sm = app('df.service');
+            $fields = ['name', 'label'];
+            $services = array_merge(
+                $sm->getServiceListByGroup(ServiceTypeGroups::DATABASE, $fields, true),
+                $sm->getServiceListByGroup(ServiceTypeGroups::FILE, $fields, true)
+            );
+
+            $values = [];
+            foreach ($services as $service) {
+                $name = (string) ($service['name'] ?? '');
+                if ($name === '') {
+                    continue;
+                }
+                $label = (string) ($service['label'] ?? $name);
+                $values[] = [
+                    'name'  => $name,
+                    'label' => $label === $name ? $name : $label . ' (' . $name . ')',
+                ];
+            }
+
+            return $values;
+        } catch (\Throwable $e) {
+            return [];
         }
     }
 

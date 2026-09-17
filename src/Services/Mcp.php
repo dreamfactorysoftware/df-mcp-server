@@ -3,14 +3,13 @@
 namespace DreamFactory\Core\McpServer\Services;
 
 use DreamFactory\Core\Enums\ApiOptions;
-use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
 use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
 use DreamFactory\Core\McpServer\Support\DaemonTarget;
 use DreamFactory\Core\McpServer\Support\SecretFieldManifest;
+use DreamFactory\Core\McpServer\Utility\AvailableServices;
 use DreamFactory\Core\Services\BaseRestService;
 use DreamFactory\Core\Utility\ResourcesWrapper;
-use DreamFactory\Core\Utility\Session as SessionUtilities;
 use Illuminate\Support\Str;
 
 class Mcp extends BaseRestService
@@ -86,9 +85,11 @@ class Mcp extends BaseRestService
 
         $config = $this->getConfig();
 
-        // Resolve accessible services server-side (role-filtered) so the daemon
-        // never has to call GET /system/service — which a least-privilege role
-        // legitimately can't reach.
+        // Resolve accessible services server-side (role-filtered, then scoped
+        // to this MCP service when configured) so the daemon never has to call
+        // GET /system/service — which a least-privilege role legitimately can't
+        // reach. SystemMcp overrides the hook with [] — the system daemon never
+        // auto-mounts DB/file services.
         $availableServices = $this->resolveAvailableServices();
 
         $baseUrl = DaemonTarget::apiBaseUrl($target, $request->getSchemeAndHttpHost());
@@ -150,73 +151,19 @@ class Mcp extends BaseRestService
     }
 
     /**
-     * Role-filtered DB + file service list the daemon auto-exposes as tools.
-     *
-     * ponytail: mirrors McpStreamController::getAvailableServices /
-     * getUserAccessibleServiceIds. Extract to a shared helper if this internal
-     * bridge outlives the demo rather than letting the two copies drift.
+     * Role-filtered DB + file service list the daemon auto-exposes as tools,
+     * scoped to this MCP service's Exposed Services selection when configured
+     * (see AvailableServices — the same helper the OAuth stream path uses).
+     * SystemMcp overrides this with [] — the system daemon serves the System
+     * API itself and never auto-mounts DB/file services.
      *
      * @return array<int, array<string, mixed>>
      */
     protected function resolveAvailableServices(): array
     {
-        try {
-            /** @var \DreamFactory\Core\Services\ServiceManager $sm */
-            $sm = app('df.service');
-            $fields = ['id', 'name', 'label', 'type'];
+        $config = $this->getConfig();
 
-            $services = array_merge(
-                array_map(
-                    fn ($s) => array_merge($s, ['category' => 'database']),
-                    $sm->getServiceListByGroup(ServiceTypeGroups::DATABASE, $fields, true),
-                ),
-                array_map(
-                    fn ($s) => array_merge($s, ['category' => 'file']),
-                    $sm->getServiceListByGroup(ServiceTypeGroups::FILE, $fields, true),
-                ),
-            );
-
-            if (!SessionUtilities::isSysAdmin()) {
-                $ids = $this->accessibleServiceIds();
-                if ($ids === null) {
-                    // null => role grants all services; no filtering.
-                } elseif (!empty($ids)) {
-                    $services = array_values(array_filter(
-                        $services,
-                        fn ($s) => in_array((int) ($s['id'] ?? 0), $ids, true),
-                    ));
-                } else {
-                    $services = [];
-                }
-            }
-
-            return $services;
-        } catch (\Throwable $e) {
-            return [];
-        }
-    }
-
-    /**
-     * Service ids the current session's role can reach, or null when the role
-     * grants access to every service.
-     *
-     * @return int[]|null
-     */
-    protected function accessibleServiceIds(): ?array
-    {
-        $roleServices = (array) SessionUtilities::get('role.services');
-        $ids = [];
-        foreach ($roleServices as $access) {
-            $sid = $access['service_id'] ?? null;
-            if ($sid === null || $sid === 0 || $sid === '') {
-                return null; // "all services"
-            }
-            if (is_numeric($sid) && $sid > 0) {
-                $ids[] = (int) $sid;
-            }
-        }
-
-        return array_values(array_unique($ids));
+        return AvailableServices::resolve($this->name, is_array($config) ? $config : []);
     }
 
     /**
