@@ -217,6 +217,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
         let disabledTools;
         let customTools;
         let lazyMode = 'auto';
+        let toolStyle = 'prefixed';
         const mcpConfigData = mcpConfig ?? (() => {
             const header = req.headers['x-mcp-config'];
             if (!header)
@@ -232,6 +233,9 @@ app.all('/mcp/:serviceName', async (req, res) => {
         if (mcpConfigData) {
             if (['auto', 'on', 'off'].includes(mcpConfigData.lazy_mode)) {
                 lazyMode = mcpConfigData.lazy_mode;
+            }
+            if (['prefixed', 'merged'].includes(mcpConfigData.tool_style)) {
+                toolStyle = mcpConfigData.tool_style;
             }
             if (Array.isArray(mcpConfigData.disabled_tools) && mcpConfigData.disabled_tools.length > 0) {
                 disabledTools = new Set(mcpConfigData.disabled_tools);
@@ -287,7 +291,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
                 apiKey: dfApiKey,
                 apiConfigs
             });
-            const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode);
+            const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle);
             const statelessTransport = new StreamableHTTPServerTransport({
                 sessionIdGenerator: undefined,
                 enableJsonResponse: true
@@ -300,7 +304,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
             await statelessTransport.handleRequest(req, res, req.body);
             return;
         }
-        const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode);
+        const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode, toolStyle);
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => {
                 const sessionId = randomUUID();
