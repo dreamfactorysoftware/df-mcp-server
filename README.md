@@ -54,6 +54,45 @@ No session IDs are issued and no session state is kept — every request carries
 
 Trade-off: the MCP server is rebuilt per request. Leave this unset for single-node installs, where the default warm-session behavior is faster.
 
+### Checking the install: `GET /_internal/ai/mcp-health`
+
+Most "I created an MCP service and nothing happens" reports come down to a daemon that is not running, or an `APP_URL` that does not match the address in the browser (OAuth then redirects in a loop with nothing in the log). This admin-only endpoint reports both. The System page shows it and the MCP service page shows a one-line status chip from the same data.
+
+```
+curl -H "X-DreamFactory-Session-Token: $ADMIN_TOKEN" https://df.example.com/_internal/ai/mcp-health
+```
+
+It never throws and never takes longer than a few seconds (each daemon probe times out after 2s). Non-admins get `403`.
+
+```json
+{
+  "status": "error",
+  "daemons": [
+    { "type": "mcp", "label": "MCP daemon", "enabled": true, "url": "http://127.0.0.1:8006",
+      "reachable": false, "latency_ms": 1, "version": null, "mode": null, "tools": null,
+      "error": "cURL error 7: Failed to connect to 127.0.0.1 port 8006" },
+    { "type": "system_mcp", "label": "System API MCP daemon", "enabled": true, "url": "http://127.0.0.1:3700",
+      "reachable": true, "latency_ms": 4, "version": "1.2.0", "mode": "stateful", "tools": 42, "error": null }
+  ],
+  "checks": [
+    { "id": "daemon.mcp", "status": "error", "message": "MCP daemon is not reachable at http://127.0.0.1:8006: ... Start it (scripts/start-daemon.sh) or fix MCP_DAEMON_URL in .env, then run php artisan config:clear.", "details": { "...": "the daemon record above" } },
+    { "id": "app_url", "status": "warn", "message": "APP_URL (http://localhost) does not match the address this request came from (https://df.example.com). OAuth redirects go to APP_URL, so MCP clients will loop or fail to log in. ...", "details": { "app_url": "http://localhost", "request_origin": "https://df.example.com" } }
+  ]
+}
+```
+
+`status` is the worst of all checks (`ok` < `warn` < `error`). Every check carries a plain-language `message` that says what to do. The checks:
+
+| `id` | What it looks at | `warn` | `error` |
+| --- | --- | --- | --- |
+| `daemon.mcp` | `GET {MCP_DAEMON_URL}/health` (data daemon). `details` is the daemon record: `reachable`, `latency_ms`, `version`, `mode`, `tools`, `error`. | `MCP_DAEMON_ENABLED=false` | enabled but not reachable, non-2xx, or not JSON (something else on the port) |
+| `daemon.system_mcp` | Same for `MCP_SYSTEM_DAEMON_URL` (`df-system-mcp-server`; it also reports `tools`). | `MCP_SYSTEM_DAEMON_ENABLED=false` | as above |
+| `app_url` | `APP_URL` vs the scheme/host/port the request arrived on (trailing slash, case and default ports ignored). | unset, or different from the request origin: OAuth redirects will loop | – |
+| `internal_base_url` | `MCP_INTERNAL_BASE_URL`. | unset while an enabled daemon runs on a non-loopback host (it calls DreamFactory back at the request origin, which must be reachable from there) | – |
+| `internal_key` | `MCP_INTERNAL_KEY`. | unset while an enabled daemon listens on a non-loopback address (anyone who can reach it can call it) | – |
+| `node` | `node --version` on the web host (2s timeout; `ok` with `details.skipped` when the web server may not shell out). | not found and the daemons are configured on another host | not found while the data daemon is expected on this host and is down (it cannot start) |
+| `stateless` | The data daemon's reported session mode; `details.stateless` is `true`/`false`, `null` when unreachable. Informational, always `ok`. | – | – |
+
 ### PHP-FPM sizing
 
 `GET /mcp/{service}` (the server-initiated SSE stream) always returns `405`; clients fall back to POST-only as the MCP spec allows. The daemon never pushes notifications on that stream, and proxying it pinned one PHP-FPM worker per MCP session for the full daemon timeout, which starved small pools.

@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
@@ -41,6 +42,10 @@ const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
 // is required behind a load balancer — MCP clients do not return affinity
 // cookies. Trade-off: no server-initiated SSE stream (GET returns 405).
 const STATELESS = (process.env.MCP_STATELESS ?? '').toLowerCase() === 'true';
+
+// Reported by /health so DreamFactory's MCP health check can show it.
+// ../package.json resolves from both src/ (tsx) and dist/ (tsc).
+const VERSION: string = createRequire(import.meta.url)('../package.json').version;
 
 // MCP clients (Claude Desktop, etc.) are external — CORS must be permissive.
 // The daemon is already protected by requiring a DreamFactory session token.
@@ -87,6 +92,7 @@ const sessions = new Map<string, SessionEntry>();
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
+    version: VERSION,
     timestamp: Math.floor(Date.now() / 1000),
     mode: STATELESS ? 'stateless' : 'stateful',
     active_sessions: sessions.size,

@@ -3,6 +3,7 @@
 namespace DreamFactory\Core\McpServer;
 
 use DreamFactory\Core\Enums\ServiceTypeGroups;
+use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpHealthController;
 use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpUsageController;
 use DreamFactory\Core\McpServer\Http\Middleware\McpStreamMiddleware;
 use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
@@ -166,6 +167,12 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         Route::middleware('df.auth_check')->get(
             '_internal/ai/mcp-usage',
             [InternalMcpUsageController::class, 'usage']
+        );
+        // Daemon + install sanity report for the System page and the MCP
+        // service status chip. Admin-only (checked in the controller).
+        Route::middleware('df.auth_check')->get(
+            '_internal/ai/mcp-health',
+            [InternalMcpHealthController::class, 'health']
         );
     }
 
