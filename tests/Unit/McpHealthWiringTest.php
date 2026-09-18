@@ -44,6 +44,7 @@ class McpHealthWiringTest extends TestCase
         $this->assertStringContainsString("'http_errors'     => false", $s);
         $this->assertStringContainsString('X-Mcp-Internal-Key', $s);
         $this->assertStringContainsString("new Process(['node', '--version'])", $s);
+        $this->assertStringContainsString("McpHealth::forwardedOrigin(\$request->headers->get('X-Forwarded-Proto'), \$request->headers->get('X-Forwarded-Host'), \$origin)", $s);
         $this->assertStringContainsString('$p->setTimeout(McpHealth::DAEMON_TIMEOUT_SECONDS)', $s);
     }
 

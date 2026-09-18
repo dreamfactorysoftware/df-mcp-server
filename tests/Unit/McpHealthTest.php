@@ -151,6 +151,72 @@ class McpHealthTest extends TestCase
         $this->assertStringContainsString('not set', $this->check($r, 'app_url')['message']);
     }
 
+    /** TLS terminated at nginx/ALB with no trusted-proxy config: PHP sees http://, the client used https://. */
+    public function testForwardedHttpsBehindProxyMatchesHttpsAppUrl(): void
+    {
+        $fwd = McpHealth::forwardedOrigin('https', 'df.example.com', 'http://df.example.com');
+        $this->assertSame('https://df.example.com', $fwd);
+
+        $r = McpHealth::report($this->config(), self::ORIGIN, 'http://df.example.com', $this->upProbe(), fn () => 'v20', $fwd);
+
+        $c = $this->check($r, 'app_url');
+        $this->assertSame('ok', $c['status']);
+        $this->assertSame('http://df.example.com', $c['details']['request_origin']);
+        $this->assertSame('https://df.example.com', $c['details']['forwarded_origin']);
+        $this->assertNull($this->findCheck($r, 'app_url_scheme'));
+        $this->assertSame('ok', $r['status']);
+    }
+
+    public function testSchemeOnlyMismatchWithoutForwardedHeadersIsASoftNote(): void
+    {
+        $r = McpHealth::report($this->config(), self::ORIGIN, 'http://df.example.com', $this->upProbe(), fn () => 'v20');
+
+        $this->assertSame('ok', $this->check($r, 'app_url')['status']);
+        $note = $this->check($r, 'app_url_scheme');
+        $this->assertSame('ok', $note['status']);
+        $this->assertStringContainsString('TLS', $note['message']);
+        $this->assertStringContainsString('trusted proxies', $note['message']);
+        $this->assertNull($note['details']['forwarded_origin']);
+        $this->assertSame('ok', $r['status']);
+    }
+
+    public function testGenuineHostMismatchWarnsEvenWithForwardedHeaders(): void
+    {
+        $fwd = McpHealth::forwardedOrigin('https', 'api.internal.example.com', 'http://10.0.0.5');
+        $r = McpHealth::report($this->config(), self::ORIGIN, 'http://10.0.0.5', $this->upProbe(), fn () => 'v20', $fwd);
+
+        $c = $this->check($r, 'app_url');
+        $this->assertSame('warn', $c['status']);
+        $this->assertStringContainsString('https://api.internal.example.com', $c['message']);
+        $this->assertSame('warn', $r['status']);
+
+        // non-default port is part of the identity
+        $r = McpHealth::report($this->config(), 'https://df.example.com:8443', 'http://df.example.com', $this->upProbe(), fn () => 'v20', 'https://df.example.com');
+        $this->assertSame('warn', $this->check($r, 'app_url')['status']);
+    }
+
+    public function testForwardedOriginParsing(): void
+    {
+        $this->assertNull(McpHealth::forwardedOrigin(null, null, 'http://h'));
+        $this->assertNull(McpHealth::forwardedOrigin('', '', 'http://h'));
+        // first value of a comma list wins; missing half comes from the raw origin
+        $this->assertSame('https://h:8081', McpHealth::forwardedOrigin('https, http', null, 'http://h:8081'));
+        $this->assertSame('http://pub.example.com', McpHealth::forwardedOrigin(null, 'pub.example.com, inner', 'http://h'));
+        // garbage proto falls back to the raw scheme
+        $this->assertSame('http://pub.example.com', McpHealth::forwardedOrigin('ftp', 'PUB.example.com', 'http://h'));
+    }
+
+    private function findCheck(array $report, string $id): ?array
+    {
+        foreach ($report['checks'] as $c) {
+            if ($c['id'] === $id) {
+                return $c;
+            }
+        }
+
+        return null;
+    }
+
     public function testRemoteDaemonWithoutInternalKeyOrBaseUrlWarns(): void
     {
         $cfg = $this->config(['daemon' => ['url' => 'http://mcp-daemon:8006']]);

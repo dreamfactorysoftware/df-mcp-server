@@ -25,12 +25,17 @@ class InternalMcpHealthController extends Controller
             return response()->json(['error' => ['message' => 'Admin access required.']], 403);
         }
 
+        $origin = $request->getSchemeAndHttpHost();
         $report = McpHealth::report(
             (array) config('mcp', []),
             config('app.url'),
-            $request->getSchemeAndHttpHost(),
+            $origin,
             [self::class, 'probe'],
-            [self::class, 'nodeVersion']
+            [self::class, 'nodeVersion'],
+            // Diagnostic only: behind a TLS-terminating proxy PHP sees http://
+            // while APP_URL is https://; the forwarded headers say what the
+            // client used. Read raw (not via Symfony's trusted-proxy logic) on purpose.
+            McpHealth::forwardedOrigin($request->headers->get('X-Forwarded-Proto'), $request->headers->get('X-Forwarded-Host'), $origin)
         );
 
         return response()->json($report);

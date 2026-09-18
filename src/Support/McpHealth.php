@@ -23,12 +23,14 @@ final class McpHealth
     /**
      * @param array           $mcpConfig     config('mcp')
      * @param string|null     $appUrl        config('app.url')
-     * @param string          $requestOrigin scheme://host[:port] of the incoming request
+     * @param string          $requestOrigin scheme://host[:port] as PHP saw the request
      * @param callable        $probe         fn(string $healthUrl): array{status:int, body:string}; may throw
      * @param callable        $nodeVersion   fn(): ?string  version string, null when node is missing;
      *                                       throws when shelling out is not permitted
+     * @param string|null     $forwardedOrigin origin from X-Forwarded-Proto/-Host (see forwardedOrigin()),
+     *                                       null when the request carried neither header
      */
-    public static function report(array $mcpConfig, ?string $appUrl, string $requestOrigin, callable $probe, callable $nodeVersion): array
+    public static function report(array $mcpConfig, ?string $appUrl, string $requestOrigin, callable $probe, callable $nodeVersion, ?string $forwardedOrigin = null): array
     {
         $daemons = [
             self::probeDaemon(DaemonTarget::forServiceType(McpServiceTypes::DATA, $mcpConfig), $probe),
@@ -39,7 +41,7 @@ final class McpHealth
         foreach ($daemons as $d) {
             $checks[] = self::daemonCheck($d);
         }
-        $checks[] = self::appUrlCheck($appUrl, $requestOrigin);
+        array_push($checks, ...self::appUrlChecks($appUrl, $requestOrigin, $forwardedOrigin));
         $checks[] = self::internalBaseUrlCheck($mcpConfig, $daemons);
         $checks[] = self::internalKeyCheck($mcpConfig, $daemons);
         $checks[] = self::nodeCheck($nodeVersion, $daemons[0]);
@@ -126,18 +128,61 @@ final class McpHealth
         );
     }
 
-    private static function appUrlCheck(?string $appUrl, string $requestOrigin): array
+    /**
+     * APP_URL vs where the request came from. Host and port decide `app_url`
+     * (a wrong host or port loops OAuth). A scheme-only difference is the
+     * normal shape of TLS terminated at a proxy with no trusted-proxy config,
+     * so it is a separate `app_url_scheme` note, not a warning. Forwarded
+     * headers, when present, are used for the comparison (diagnostic only).
+     *
+     * @return array[] one or two checks
+     */
+    private static function appUrlChecks(?string $appUrl, string $requestOrigin, ?string $forwardedOrigin): array
     {
-        $details = ['app_url' => $appUrl, 'request_origin' => $requestOrigin];
-        $configured = self::originOf((string) $appUrl);
+        $details = ['app_url' => $appUrl, 'request_origin' => $requestOrigin, 'forwarded_origin' => $forwardedOrigin];
+        $configured = self::originParts((string) $appUrl);
+        $seen = $forwardedOrigin ?? $requestOrigin;
         if ($configured === null) {
-            return self::check('app_url', 'warn', 'APP_URL is not set. OAuth clients are redirected to APP_URL, so set it to the address you use in the browser (' . $requestOrigin . ').', $details);
+            return [self::check('app_url', 'warn', 'APP_URL is not set. OAuth clients are redirected to APP_URL, so set it to the address you use in the browser (' . $seen . ').', $details)];
         }
-        if ($configured !== self::originOf($requestOrigin)) {
-            return self::check('app_url', 'warn', "APP_URL ({$appUrl}) does not match the address this request came from ({$requestOrigin}). OAuth redirects go to APP_URL, so MCP clients will loop or fail to log in. Set APP_URL to the public address and run php artisan config:clear.", $details);
+        $effective = self::originParts($seen);
+        $hostMatch = $effective !== null
+            && $effective['host'] === $configured['host']
+            && ($effective['port'] === $configured['port'] || ($effective['default_port'] && $configured['default_port']));
+        if (!$hostMatch) {
+            return [self::check('app_url', 'warn', "APP_URL ({$appUrl}) does not match the address this request came from ({$seen}). OAuth redirects go to APP_URL, so MCP clients will loop or fail to log in. Set APP_URL to the public address and run php artisan config:clear.", $details)];
         }
 
-        return self::check('app_url', 'ok', "APP_URL matches the request origin ({$requestOrigin}).", $details);
+        $checks = [self::check('app_url', 'ok', "APP_URL matches the request host ({$seen}).", $details)];
+        if ($effective['scheme'] !== $configured['scheme']) {
+            $checks[] = self::check('app_url_scheme', 'ok', "APP_URL is {$configured['scheme']} but PHP saw this request as {$effective['scheme']} on the same host. This is expected when TLS terminates at a reverse proxy or load balancer (nginx, ALB); OAuth uses APP_URL, so it still works. If clients still loop, make sure the proxy sends X-Forwarded-Proto and that DreamFactory trusts it (trusted proxies).", $details);
+        }
+
+        return $checks;
+    }
+
+    /**
+     * Origin implied by X-Forwarded-Proto / X-Forwarded-Host, or null when the
+     * request carried neither. Only the first value of each list is used; the
+     * missing half comes from the raw origin. Diagnostic only, never for auth.
+     */
+    public static function forwardedOrigin(?string $forwardedProto, ?string $forwardedHost, string $requestOrigin): ?string
+    {
+        $proto = strtolower(trim(explode(',', (string) $forwardedProto)[0]));
+        $host = strtolower(trim(explode(',', (string) $forwardedHost)[0]));
+        if ($proto === '' && $host === '') {
+            return null;
+        }
+        $raw = self::originParts($requestOrigin);
+        $scheme = in_array($proto, ['http', 'https'], true) ? $proto : ($raw['scheme'] ?? 'http');
+        if ($host === '') {
+            $host = $raw['host'] ?? '';
+            if ($raw && !$raw['default_port']) {
+                $host .= ':' . $raw['port'];
+            }
+        }
+
+        return $scheme . '://' . $host;
     }
 
     private static function internalBaseUrlCheck(array $mcpConfig, array $daemons): array
@@ -218,17 +263,20 @@ final class McpHealth
         return $host === 'localhost' || $host === '::1' || str_starts_with($host, '127.');
     }
 
-    /** scheme://host:port with default ports applied; null when unparseable. */
-    private static function originOf(string $url): ?string
+    /**
+     * @return array{scheme:string, host:string, port:int, default_port:bool}|null null when unparseable
+     */
+    private static function originParts(string $url): ?array
     {
         $p = parse_url(trim($url));
         if (!is_array($p) || empty($p['host'])) {
             return null;
         }
         $scheme = strtolower($p['scheme'] ?? 'http');
-        $port = $p['port'] ?? ($scheme === 'https' ? 443 : 80);
+        $default = $scheme === 'https' ? 443 : 80;
+        $port = (int) ($p['port'] ?? $default);
 
-        return $scheme . '://' . strtolower($p['host']) . ':' . $port;
+        return ['scheme' => $scheme, 'host' => strtolower($p['host']), 'port' => $port, 'default_port' => $port === $default];
     }
 
     private static function check(string $id, string $status, string $message, array $details): array
