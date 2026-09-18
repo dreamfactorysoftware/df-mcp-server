@@ -18,8 +18,11 @@ cd "${DAEMON_DIR}"
 : "${MCP_DAEMON_HOST:=127.0.0.1}"
 : "${MCP_DAEMON_PORT:=8006}"
 : "${NODE_ENV:=production}"
+# Stateless (no session IDs, any node can answer any request) is the default.
+# Set MCP_STATELESS=false for single-node installs that want warm sessions.
+: "${MCP_STATELESS:=true}"
 
-export MCP_DAEMON_HOST MCP_DAEMON_PORT NODE_ENV
+export MCP_DAEMON_HOST MCP_DAEMON_PORT NODE_ENV MCP_STATELESS
 
 echo "[mcp-daemon] Starting on ${MCP_DAEMON_HOST}:${MCP_DAEMON_PORT}"
 exec node dist/server.js "$@"

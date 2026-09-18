@@ -6,7 +6,7 @@ TypeScript implementation of the MCP Daemon Server for DreamFactory. This daemon
 
 - Long-lived process with cached MCP Server instances
 - HTTP API compatible with Laravel's `McpDaemonClient`
-- Streamable HTTP transport with session management
+- Streamable HTTP transport, stateless by default (any node can answer any request); `MCP_STATELESS=false` for process-pinned sessions
 - Health check and cache management endpoints
 - **Dual authentication modes**: OAuth session tokens OR API-key-only authentication
 - All DreamFactory database tools using MCP SDK's `server.tool()` pattern
@@ -27,6 +27,9 @@ Set environment variables or use defaults:
 ```bash
 export MCP_DAEMON_HOST=127.0.0.1
 export MCP_DAEMON_PORT=8006
+# Session mode: stateless (default) issues no Mcp-Session-Id and keeps no state, so
+# load-balanced nodes need no stickiness. false = warm sessions pinned to this process.
+export MCP_STATELESS=true
 # Lazy tool loading (per-service lazy_mode auto|on|off is set in DreamFactory):
 export MCP_LAZY_PASSTHROUGH=codex,grok,hermes   # clients that always get the full catalog
 export MCP_LAZY_THRESHOLD_BYTES=32768           # auto: facade above this serialized tools/list size
@@ -108,7 +111,8 @@ The daemon accepts two credential kinds. **At least one is required**; the PHP p
 
 | Header | Description |
 |--------|-------------|
-| `Mcp-Session-Id` | Session ID for existing MCP sessions |
+| `Mcp-Session-Id` | Session ID for existing MCP sessions (`MCP_STATELESS=false` only; ignored in stateless mode) |
+| `X-Mcp-Client-Name` | Client name the PHP proxy resolved (OAuth client registration or API-key app); decides lazy passthrough when the request carries no `initialize` |
 
 ## Available MCP Tools
 

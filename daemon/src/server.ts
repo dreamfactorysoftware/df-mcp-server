@@ -5,7 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
 import { runWithTrace } from './services/trace.service.js';
-import { runWithResponse, type LazyMode } from './services/lazy.service.js';
+import { runWithResponse, lazyStateFor, type LazyMode } from './services/lazy.service.js';
 import type { ToolStyle } from './types.js';
 import {
   createServer,
@@ -34,13 +34,15 @@ const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
 
-// Stateless mode: issue no session IDs and keep no session state between
-// requests. Every input a session would cache (DreamFactory token, API key,
-// resolved apiConfigs) is sent by the PHP proxy on each request, so a server is
-// built per request and discarded. This lets any node answer any request, which
-// is required behind a load balancer — MCP clients do not return affinity
-// cookies. Trade-off: no server-initiated SSE stream (GET returns 405).
-const STATELESS = (process.env.MCP_STATELESS ?? '').toLowerCase() === 'true';
+// Stateless mode (default): issue no session IDs and keep no session state
+// between requests. Every input a session would cache (DreamFactory token, API
+// key, resolved apiConfigs) is sent by the PHP proxy on each request, so a
+// server is built per request and discarded. This lets any node answer any
+// request, which is required behind a load balancer — MCP clients do not
+// return affinity cookies. Trade-off: no server-initiated SSE stream (GET
+// returns 405). MCP_STATELESS=false opts back into warm, process-pinned
+// sessions for single-node installs.
+const STATELESS = !['false', '0', 'no', 'off'].includes((process.env.MCP_STATELESS ?? 'true').trim().toLowerCase());
 
 // MCP clients (Claude Desktop, etc.) are external — CORS must be permissive.
 // The daemon is already protected by requiring a DreamFactory session token.
@@ -344,6 +346,14 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       });
 
       const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle);
+      // No session remembers that the client already listed tools or who the
+      // client is, so decide lazy behaviour per request from the catalog and
+      // the client name PHP forwards (X-Mcp-Client-Name).
+      const lazy = lazyStateFor(statelessServer);
+      if (lazy) {
+        lazy.clientHint = req.header('x-mcp-client-name');
+        await lazy.prime();
+      }
       const statelessTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true
@@ -426,8 +436,10 @@ setInterval(() => {
   }
 }, 2 * 60 * 1000).unref?.();
 
-app.listen(PORT, HOST, () => {
-  console.log(`MCP Daemon listening on http://${HOST}:${PORT}`);
+const listener = app.listen(PORT, HOST, () => {
+  const addr = listener.address();
+  const port = addr && typeof addr === 'object' ? addr.port : PORT;
+  console.log(`MCP Daemon listening on http://${HOST}:${port}`);
   console.log(`Session mode: ${STATELESS ? 'stateless (no session IDs; load-balancer safe)' : 'stateful (sessions pinned to this process)'}`);
   console.log('');
   console.log('Endpoints:');
