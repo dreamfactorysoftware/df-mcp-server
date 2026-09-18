@@ -33,6 +33,7 @@ export type CatalogEntry = {
 };
 
 const FACADE = new Set(['search_tools', 'describe_tool', 'call_tool', 'fetch_more', 'list_tools']);
+export const isFacadeTool = (name: string) => FACADE.has(name);
 const HOT_MAX = 8;
 const PAGE_KEEP = 64;
 const FETCH_MAX = 12_000;
@@ -247,6 +248,16 @@ export class LazyState {
       this.facadeBytes = JSON.stringify({ tools: facade }).length;
     }
     return this.fullList;
+  }
+
+  /**
+   * The catalog as tools/list advertises it with the facade off, and its
+   * serialized size (what `auto` compares against LAZY_THRESHOLD_BYTES).
+   * For the catalog preview; needs a prior tools/list on this server.
+   */
+  async catalogTools(): Promise<{ tools: Array<{ name: string; title?: string; description?: string }>; bytes: number }> {
+    const all = await this.allTools();
+    return { tools: all.filter((t: any) => !FACADE.has(t.name)) as any, bytes: this.catalogBytes };
   }
 
   decide(): LazyDecision {

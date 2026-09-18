@@ -5,6 +5,7 @@ namespace DreamFactory\Core\McpServer;
 use DreamFactory\Core\Enums\ServiceTypeGroups;
 use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpAccessController;
 use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpHealthController;
+use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpCatalogController;
 use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpUsageController;
 use DreamFactory\Core\McpServer\Http\Middleware\McpStreamMiddleware;
 use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
@@ -160,8 +161,9 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
     }
 
     /**
-     * Powers the MCP section of the AI Gateway dashboard. Handler lives in
-     * InternalMcpUsageController so it can be unit-tested in isolation.
+     * Admin-only internal routes for the admin UI: the MCP section of the AI
+     * Gateway dashboard, and the per-role tools/list catalog preview.
+     * Handlers live in controllers so they can be unit-tested in isolation.
      */
     private function registerInternalRoutes(): void
     {
@@ -179,6 +181,10 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         Route::middleware('df.auth_check')->get(
             '_internal/ai/mcp-health',
             [InternalMcpHealthController::class, 'health']
+        );
+        Route::middleware('df.auth_check')->get(
+            '_internal/ai/mcp-catalog',
+            [InternalMcpCatalogController::class, 'preview']
         );
     }
 

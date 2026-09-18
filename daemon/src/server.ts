@@ -6,12 +6,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
 import { runWithTrace } from './services/trace.service.js';
-import { runWithResponse, lazyStateFor, type LazyMode } from './services/lazy.service.js';
-import type { ToolStyle } from './types.js';
+import { runWithResponse, lazyStateFor } from './services/lazy.service.js';
+import { previewCatalog } from './services/catalog-preview.service.js';
 import {
   createServer,
   getSessionId,
   parseConfigFromHeaders,
+  parseMcpConfig,
   updateSessionConfigFromHeaders,
   discoverServices,
   type ApiConfig
@@ -21,7 +22,6 @@ import {
   getAuthModeDescription,
   type AuthValidationResult
 } from './utils/auth.utils.js';
-import type { CustomToolDefinition } from './types.js';
 
 type SessionEntry = {
   server: McpServer;
@@ -132,6 +132,25 @@ app.post('/mcp/cache/clear', (req, res) => {
     }
     sessions.clear();
     res.json({ message: 'All cache cleared' });
+  }
+});
+
+// Catalog preview (issue #64): what tools/list would advertise for a given
+// service config + PHP-scoped backend catalog + client name, computed in a
+// throwaway server. Nothing is executed: no DreamFactory calls, no MCP
+// session, no audit row. Internal-key gated like /mcp/cache/clear.
+app.post('/mcp/catalog/preview', async (req, res) => {
+  if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
+    return res.status(403).json({ error: 'Forbidden: invalid internal key' });
+  }
+  try {
+    const result = await previewCatalog(req.body && typeof req.body === 'object' ? req.body : {});
+    // tools/list attaches the savings ledger to the current response; this is not a proxied MCP call.
+    res.removeHeader('X-Mcp-Ledger');
+    res.json(result);
+  } catch (error) {
+    console.error('[catalog/preview] failed:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Server error' });
   }
 });
 
@@ -270,11 +289,6 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
 
     // Parse disabled tools and custom tools from service config (body envelope or header fallback)
     // This must happen before the service check so custom-tools-only roles are not rejected.
-    let disabledTools: Set<string> | undefined;
-    let customTools: CustomToolDefinition[] | undefined;
-    let lazyMode: LazyMode = 'auto';
-    let toolStyle: ToolStyle = 'prefixed';
-    let allowWrites = true;
     const mcpConfigData = mcpConfig ?? (() => {
       const header = req.headers['x-mcp-config'] as string | undefined;
       if (!header) return undefined;
@@ -285,42 +299,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
         return undefined;
       }
     })();
-
-    if (mcpConfigData) {
-      if (['auto', 'on', 'off'].includes(mcpConfigData.lazy_mode)) {
-        lazyMode = mcpConfigData.lazy_mode;
-      }
-      if (['prefixed', 'merged'].includes(mcpConfigData.tool_style)) {
-        toolStyle = mcpConfigData.tool_style;
-      }
-      // Default true (column default); only an explicit off switches writes off.
-      if ([false, 0, '0', 'false'].includes(mcpConfigData.allow_writes)) {
-        allowWrites = false;
-        console.log('Writes disabled (allow_writes=false): write verbs will not be registered');
-      }
-      if (Array.isArray(mcpConfigData.disabled_tools) && mcpConfigData.disabled_tools.length > 0) {
-        disabledTools = new Set(mcpConfigData.disabled_tools as string[]);
-        console.log(`Disabled tools (${disabledTools.size}):`, [...disabledTools]);
-      }
-      if (Array.isArray(mcpConfigData.custom_tools) && mcpConfigData.custom_tools.length > 0) {
-        customTools = (mcpConfigData.custom_tools as any[])
-          .filter((t: any) => t.enabled !== false && t.enabled !== 0)
-          .map((t: any): CustomToolDefinition => ({
-            name: t.name,
-            description: t.description ?? '',
-            tool_type: t.tool_type ?? 'api',
-            http_method: t.http_method ?? undefined,
-            url: t.url ?? undefined,
-            parameters: Array.isArray(t.parameters) ? t.parameters : [],
-            headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
-            function: t.function ?? undefined,
-            secrets: t.secrets && typeof t.secrets === 'object' && !Array.isArray(t.secrets) ? t.secrets : undefined,
-          }));
-        if (customTools.length > 0) {
-          console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
-        }
-      }
-    }
+    const { disabledTools, customTools, lazyMode, toolStyle, allowWrites } = parseMcpConfig(mcpConfigData);
 
     const hasCustomTools = customTools !== undefined && customTools.length > 0;
     const catalogFromPhp = Array.isArray(availableServicesFromBody)
@@ -458,6 +437,7 @@ const listener = app.listen(PORT, HOST, () => {
   console.log(`  GET  /health - Health check`);
   console.log(`  GET  /ping - Ping`);
   console.log(`  POST /mcp/cache/clear - Clear session cache`);
+  console.log(`  POST /mcp/catalog/preview - tools/list preview for a config + scoped catalog (no session)`);
   console.log(`  ALL  /mcp/:serviceName - MCP protocol`);
   console.log('');
   console.log('Authentication (at least one required):');
