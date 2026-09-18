@@ -29,6 +29,8 @@ class SystemMcpServerConfig extends McpServerConfig
         'custom_tools',
         'scope_tools',
         'exposed_services',
+        // The system daemon has no DB/file write verbs for the switch to hide.
+        'allow_writes',
     ];
 
     /**

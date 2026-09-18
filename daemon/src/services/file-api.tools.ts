@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { DreamFactoryService, type DFAuthConfig, type FileContentResult } from './dreamfactory.service.js';
 import { SessionService } from './session.service.js';
 import type { ApiConfig } from '../types.js';
-import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
+import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar, WRITE_VERBS } from './tool-utils.js';
 
 type FileToolDefinition = {
   name: string;
@@ -122,9 +122,11 @@ export function registerFileApiTools(
   server: McpServer,
   sessionManager: SessionService,
   apiConfigs: ApiConfig[],
-  disabledTools?: Set<string>
+  disabledTools?: Set<string>,
+  allowWrites = true
 ) {
   const fileConfigs = apiConfigs.filter(c => c.category === 'file');
+  const tools = allowWrites ? FILE_TOOLS : FILE_TOOLS.filter(t => !WRITE_VERBS.has(t.name));
 
   if (fileConfigs.length === 0) {
     console.log('[registerFileApiTools] No file services found, skipping file tools registration');
@@ -139,7 +141,7 @@ export function registerFileApiTools(
   for (const apiConfig of fileConfigs) {
     const prefix = sanitizeApiName(apiConfig.name);
 
-    for (const tool of FILE_TOOLS) {
+    for (const tool of tools) {
       const prefixedName = `${prefix}_${tool.name}`;
       const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
       const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;

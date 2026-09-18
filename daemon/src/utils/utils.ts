@@ -225,7 +225,8 @@ export function createServer(
   disabledTools?: Set<string>,
   customTools?: CustomToolDefinition[],
   lazyMode: LazyMode = 'auto',
-  toolStyle: ToolStyle = 'prefixed'
+  toolStyle: ToolStyle = 'prefixed',
+  allowWrites = true
 ): McpServer {
   const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);
   const fileApis = apiConfigs.filter(c => c.category === 'file').map(c => c.name);
@@ -237,9 +238,22 @@ export function createServer(
   const merged = toolStyle === 'merged';
   const multiDb = dbApis.length > 1;
   const svcArg = merged && multiDb ? "service='<name>'" : '';
+  const p = merged ? '' : examplePrefix + '_';
+
+  // Read-only server: a custom tool can write too, unless it is a plain GET
+  // request. Function tools run arbitrary server-side code, so they are hidden.
+  const hiddenCustom = allowWrites
+    ? []
+    : (customTools ?? []).filter(t => t.tool_type === 'function' || (t.http_method ?? 'GET').toUpperCase() !== 'GET');
+  if (hiddenCustom.length > 0) {
+    console.log(`[allow_writes=false] hiding ${hiddenCustom.length} custom tool(s):`, hiddenCustom.map(t => t.name));
+    customTools = customTools!.filter(t => !hiddenCustom.includes(t));
+  }
 
   const instructions = [
     `You are connected to the DreamFactory service "${serviceName}".`,
+    allowWrites ? '' : 'THIS SERVER IS READ-ONLY: writes are disabled by the administrator. No tool can create, update or delete records or files, or execute stored procedures/functions. Do not look for such tools or ask to have them enabled — answer from reads and aggregates only.',
+    hiddenCustom.length > 0 ? `${hiddenCustom.length} custom tool${hiddenCustom.length === 1 ? '' : 's'} hidden because writes are off.` : '',
     dbApis.length > 0 ? `Available database APIs: ${dbApis.join(', ')}` : '',
     fileApis.length > 0 ? `Available file storage APIs: ${fileApis.join(', ')}` : '',
     '',
@@ -271,11 +285,19 @@ export function createServer(
     `3. \`${merged ? '' : examplePrefix + '_'}get_table_data\` - Query data with filter, order, limit, offset, fields, related`,
     `4. \`${merged ? '' : examplePrefix + '_'}aggregate_data\` - Compute SUM/COUNT/AVG/MIN/MAX in ONE call (no manual pagination needed)`,
     `5. \`${merged ? '' : examplePrefix + '_'}get_table_schema\` - Full schema for a single table (if you need more detail)`,
-    `6. \`${merged ? '' : examplePrefix + '_'}create_records\` / \`update_records\` / \`delete_records\` - CRUD operations`,
-    `7. \`${merged ? '' : examplePrefix + '_'}get_stored_procedures\` / \`call_stored_procedure\` - Stored procedure access`,
-    `8. \`${merged ? '' : examplePrefix + '_'}get_stored_functions\` / \`call_stored_function\` - Stored function access`,
+    allowWrites
+      ? `6. \`${p}create_records\` / \`update_records\` / \`delete_records\` - CRUD operations`
+      : '',
+    allowWrites
+      ? `7. \`${p}get_stored_procedures\` / \`call_stored_procedure\` - Stored procedure access`
+      : `6. \`${p}get_stored_procedures\` / \`get_stored_functions\` - List stored procedures/functions (read-only server: they cannot be called)`,
+    allowWrites ? `8. \`${p}get_stored_functions\` / \`call_stored_function\` - Stored function access` : '',
     '',
-    fileApis.length > 0 ? 'File tools: list_files, get_file_content, create_folder, delete_file (also prefixed per file API).\n' : '',
+    fileApis.length > 0
+      ? (allowWrites
+          ? 'File tools: list_files, get_file_content, create_folder, delete_file (also prefixed per file API).\n'
+          : 'File tools: list_files, get_file (also prefixed per file API). Read-only server: no create/delete.\n')
+      : '',
     '## Query Syntax Quick Reference',
     '- Filter: `field=value`, `field>10`, `field LIKE %text%`, `field IN (1,2,3)`, `field BETWEEN 1 AND 10`, `field IS NULL`',
     '- IMPORTANT: Use field names exactly as they appear in the schema — do NOT add quotes, brackets, backticks, or URL-encoding around field names. Spaces in field names are valid as-is. Example: `Production Day=2026-03-16` (NOT `[Production Day]`, NOT `"Production Day"`, NOT `Production%20Day`)',
@@ -332,7 +354,7 @@ export function createServer(
   // Agent identity/access tools — always available, not service-prefixed.
   registerGlobalTools(server, sessionManager, disabledTools);
 
-  registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools, toolStyle);
+  registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools, toolStyle, allowWrites);
 
   if (customTools && customTools.length > 0) {
     registerCustomTools(server, customTools, sessionManager, disabledTools);

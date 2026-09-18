@@ -133,6 +133,20 @@ Merged is the default for new services because prefixed style bloats client cont
 
 Exposed Services applies only to the data-plane `mcp` type. The `system_mcp` type (see [System API MCP Server](#system-api-mcp-server)) exposes the System API itself and has no DB/file tool catalog, so the picker is hidden there and `exposed_services` / `scope_tools` / `MCP_SCOPE_TOOLS` are ignored.
 
+### Read-only servers (Allow writes)
+
+Each MCP service has an **Allow writes** switch (`allow_writes`, default on). Turn it off to guarantee the server can never change data, whatever the connected role or per-tool settings allow:
+
+- The write tools are not registered at all — `create_records`, `update_records`, `delete_records`, `call_stored_procedure`, `call_stored_function`, `create_file`, `create_folder` and `delete_file` disappear from `tools/list` in both the prefixed and the merged tool style, and the lazy facade's `call_tool` / `describe_tool` / `search_tools` cannot reach them either.
+- Reads, `aggregate_data`, `list_apis` and the `all_*` aggregators are unaffected. Custom tools are kept only if they are API tools using `GET`; non-GET API tools and function tools are hidden too (the daemon logs which, and the instructions say how many).
+- The server instructions tell the model the server is read-only, so it does not hunt for write tools.
+
+Clients must reconnect to pick up a change. The switch is hidden for `system_mcp` services, whose daemon has no DB/file write verbs.
+
+#### Role denials are permission errors
+
+When DreamFactory refuses a tool call because the session's role lacks access (a `403`, or the `401 "User is not authenticated"` df-core returns for a key-only role with no access), the tool result is `isError: true` with a message starting `Permission Error: the session's role may not <tool>` and a note that re-authenticating will not help. It is never reported as an authentication error, so the model does not waste turns retrying login.
+
 ### Authentication
 
 By default the MCP service uses OAuth-based authentication. Users authenticate with DreamFactory via OAuth to obtain a session token; the Laravel controller validates requests and passes the session token to the daemon via the `X-DreamFactory-Session-Token` header.

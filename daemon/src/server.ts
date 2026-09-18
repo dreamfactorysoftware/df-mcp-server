@@ -268,6 +268,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
     let customTools: CustomToolDefinition[] | undefined;
     let lazyMode: LazyMode = 'auto';
     let toolStyle: ToolStyle = 'prefixed';
+    let allowWrites = true;
     const mcpConfigData = mcpConfig ?? (() => {
       const header = req.headers['x-mcp-config'] as string | undefined;
       if (!header) return undefined;
@@ -285,6 +286,11 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       }
       if (['prefixed', 'merged'].includes(mcpConfigData.tool_style)) {
         toolStyle = mcpConfigData.tool_style;
+      }
+      // Default true (column default); only an explicit off switches writes off.
+      if ([false, 0, '0', 'false'].includes(mcpConfigData.allow_writes)) {
+        allowWrites = false;
+        console.log('Writes disabled (allow_writes=false): write verbs will not be registered');
       }
       if (Array.isArray(mcpConfigData.disabled_tools) && mcpConfigData.disabled_tools.length > 0) {
         disabledTools = new Set(mcpConfigData.disabled_tools as string[]);
@@ -345,7 +351,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
         apiConfigs
       });
 
-      const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle);
+      const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle, allowWrites);
       // No session remembers that the client already listed tools or who the
       // client is, so decide lazy behaviour per request from the catalog and
       // the client name PHP forwards (X-Mcp-Client-Name).
@@ -369,7 +375,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       return;
     }
 
-    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode, toolStyle);
+    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode, toolStyle, allowWrites);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {

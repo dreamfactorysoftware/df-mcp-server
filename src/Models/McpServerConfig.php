@@ -28,6 +28,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'exposed_services',
         'scope_tools',
         'tool_style',
+        'allow_writes',
     ];
 
     protected $casts = [
@@ -38,6 +39,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'disabled_tools' => 'array',
         'exposed_services' => 'array',
         'scope_tools' => 'boolean',
+        'allow_writes' => 'boolean',
         'redirect_uris' => 'array',
     ];
 
@@ -296,6 +298,12 @@ class McpServerConfig extends BaseServiceConfigModel
             case 'require_role_access':
                 $schema['label'] = 'Require Role Access';
                 $schema['description'] = 'When on, a user or API key can only connect to this MCP server if its role has been granted access to this service (Roles > Access). Their role still decides which of the exposed APIs they can use once connected. When off, anyone who can log in to DreamFactory can connect and sees whatever their role already allows. Existing servers keep this off after upgrade; new servers start with it on.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = true;
+                break;
+            case 'allow_writes':
+                $schema['label'] = 'Allow writes';
+                $schema['description'] = 'On (default): tools can create, update and delete records and files and call stored procedures/functions, subject to the role. Off: this MCP server is read-only — the write tools are not offered to clients at all, regardless of role or per-tool settings. Clients must reconnect to pick up a change.';
                 $schema['type'] = 'boolean';
                 $schema['default'] = true;
                 break;
