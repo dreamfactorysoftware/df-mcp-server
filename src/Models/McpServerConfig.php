@@ -262,12 +262,12 @@ class McpServerConfig extends BaseServiceConfigModel
                 break;
             case 'tool_style':
                 $schema['label'] = 'Database Tool Style';
-                $schema['description'] = 'How database tools are exposed. Prefixed (default, unchanged): every verb is emitted once per database, so five databases produce five near-identical copies of all 16 tools. Merged: each verb is registered once and takes a "service" argument naming the database; endpoints exposing a single database omit the argument entirely. Merged cuts catalog size and token cost roughly in proportion to the number of databases, at the cost of breaking client configs that call the prefixed tool names.';
+                $schema['description'] = 'How database tools are exposed. Merged (default for new services): each verb is registered once and takes a "service" argument naming the database; endpoints exposing a single database omit the argument entirely. Prefixed (legacy): every verb is emitted once per database, so five databases produce five near-identical copies of all 16 tools, which bloats client context and confuses tool selection. Merged cuts catalog size and token cost roughly in proportion to the number of databases; switching an existing service to it renames its tools, so client configs that call prefixed names must be updated. Existing services keep Prefixed until you switch them here.';
                 $schema['type'] = 'picklist';
-                $schema['default'] = 'prefixed';
+                $schema['default'] = 'merged';
                 $schema['values'] = [
-                    ['label' => 'Prefixed per service (default)', 'name' => 'prefixed'],
-                    ['label' => 'Merged with a service argument', 'name' => 'merged'],
+                    ['label' => 'Merged with a service argument (default)', 'name' => 'merged'],
+                    ['label' => 'Prefixed per service (legacy)', 'name' => 'prefixed'],
                 ];
                 break;
             case 'lazy_mode':
@@ -461,6 +461,12 @@ class McpServerConfig extends BaseServiceConfigModel
             // Existing rows keep the column default (false) from the migration.
             if (is_null($model->require_role_access)) {
                 $model->require_role_access = true;
+            }
+            // New services default to merged database tools. Existing rows
+            // are never touched here: a null tool_style on them still reads
+            // as 'prefixed' in the daemon, so their clients keep working.
+            if (empty($model->tool_style)) {
+                $model->tool_style = 'merged';
             }
         });
     }
