@@ -34,8 +34,12 @@ class ProxyWorkerStarvationTest extends TestCase
     {
         $src = $this->src('src/Http/Controllers/McpStreamController.php');
         $start = strpos($src, 'public function handleGet(');
-        $end = strpos($src, 'public function handlePost(');
         $this->assertNotFalse($start);
+        // End at handleGet's own closing brace, not at the next named method:
+        // anything inserted after it (handleHead) would otherwise drag its
+        // docblock into $body and trip the processMcpRequest assertion below.
+        $end = strpos($src, "\n    }\n", $start);
+        $this->assertNotFalse($end);
         $body = substr($src, $start, $end - $start);
 
         // Credentials still validated first so unauthenticated GETs get
