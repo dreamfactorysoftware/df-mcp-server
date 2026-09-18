@@ -102,7 +102,18 @@ To restore the instance-wide catalog (every accessible DB/file, including ones c
 MCP_SCOPE_TOOLS=false
 ```
 
-Verb schemas are still sent per prefixed tool. MCP clients require a full `inputSchema` (`type: "object"`) on each tool, so JSON Schema `$ref` sharing is not used. Descriptions are short; query syntax lives once in the server instructions. Cross-service `all_*` tools register only when two or more services of that category are in the catalog.
+MCP clients require a full `inputSchema` (`type: "object"`) on each tool, so JSON Schema `$ref` sharing is not used. Descriptions are short; query syntax lives once in the server instructions. Cross-service `all_*` tools register only when two or more services of that category are in the catalog.
+
+### Database tool style (merged vs prefixed)
+
+Each MCP service has a **Database Tool Style** setting (`tool_style`) that controls how the database verbs are advertised:
+
+| Style | What `tools/list` contains | Default for |
+|-------|----------------------------|-------------|
+| `merged` | Each verb once (`list_tables`, `query_records`, ...) with a `service` argument naming the database. A service exposing a single database omits the argument. 3 databases = 26 tools. | New MCP services |
+| `prefixed` | Each verb once per database (`storefront_list_tables`, `warehouse_list_tables`, ...). 3 databases = 58 tools. | MCP services created before this setting existed |
+
+Merged is the default for new services because prefixed style bloats client context and makes tool selection ambiguous once several databases are attached. Existing services keep `prefixed` until you switch them in the admin UI (API Generation & Connections → your MCP Server service → **Database Tool Style**). Switching renames the tools, so update any client configuration that calls prefixed names by name, then reconnect the client.
 
 Exposed Services applies only to the data-plane `mcp` type. The `system_mcp` type (see [System API MCP Server](#system-api-mcp-server)) exposes the System API itself and has no DB/file tool catalog, so the picker is hidden there and `exposed_services` / `scope_tools` / `MCP_SCOPE_TOOLS` are ignored.
 
