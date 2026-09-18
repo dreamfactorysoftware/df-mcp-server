@@ -2,7 +2,16 @@ import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { DFAuthConfig } from './dreamfactory.service.js';
 import type { SessionService } from './session.service.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { lazyStateFor } from './lazy.service.js';
+import { annotationsFor, registerArgSpec, specFor } from './args.js';
+
+export type RegisterOptions = {
+  /** Override the verb-prefix heuristic (custom tools know their HTTP method). */
+  annotations?: ToolAnnotations;
+  /** Merged mode: lowercased service name/label -> name, so `service` accepts labels. */
+  serviceNames?: Map<string, string>;
+};
 
 type TextBlock = { type: 'text'; text: string };
 type ImageBlock = { type: 'image'; data: string; mimeType: string };
@@ -103,18 +112,22 @@ export function createToolRegistrar(server: McpServer, disabledTools?: Set<strin
     title: string,
     description: string,
     schema: z.ZodTypeAny,
-    handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>
+    handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>,
+    opts: RegisterOptions = {}
   ) => {
     if (disabledTools?.has(name)) {
       return;
     }
+    const annotations = opts.annotations ?? annotationsFor(name);
+    const spec = specFor(schema, opts.serviceNames);
+    registerArgSpec(server, name, spec);
     // Lazy mode keeps a catalog of every tool so the facade can search,
     // describe and call them by name; results are shaped/paged when active.
     const lazy = lazyStateFor(server);
-    lazy?.register({ name, title, description, schema, handler });
+    lazy?.register({ name, title, description, schema, handler, annotations, spec });
     server.registerTool(
       name,
-      { title, description, inputSchema: schema },
+      { title, description, inputSchema: schema, annotations },
       async (params, context) => {
         console.log(`[tool] ${name} called`);
         try {

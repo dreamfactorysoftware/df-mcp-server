@@ -5,6 +5,7 @@ import { registerDreamFactoryTools } from '../services/tools.service.js';
 import { registerCustomTools } from '../services/custom-tools.service.js';
 import { registerGlobalTools } from '../services/global-tools.service.js';
 import { createLazyState, installLazyFacade, LAZY_INSTRUCTIONS, type LazyMode } from '../services/lazy.service.js';
+import { installArgNormalizer } from '../services/args.js';
 import { DreamFactoryService, type DFAuthConfig } from '../services/dreamfactory.service.js';
 import packageJson from '../../package.json' with { type: 'json' };
 import type { ToolStyle, ApiConfig, CustomToolDefinition } from '../types.js';
@@ -109,6 +110,7 @@ export function parseAvailableServicesList(services: unknown[], rootUrl: string)
       baseUrl: `${rootUrl}/${s.name}`,
       category: (s.category ?? 'database') as 'database' | 'file',
       type: s.type,
+      label: s.label,
     }));
   } catch (e) {
     console.warn('[parseAvailableServicesList] Failed to parse services:', e);
@@ -143,6 +145,7 @@ function parseAvailableServicesHeader(req: Request, rootUrl: string): ApiConfig[
       baseUrl: `${rootUrl}/${s.name}`,
       category: (s.category ?? 'database') as 'database' | 'file',
       type: s.type,
+      label: s.label,
     }));
   } catch (e) {
     console.warn('[parseAvailableServicesHeader] Failed to parse header:', e);
@@ -327,6 +330,7 @@ export function createServer(
     '- Row counts per table',
     '',
     '## Tool Usage Guide',
+    'Argument names are snake_case (table_name, count_only, include_count); camelCase is accepted too. Unknown arguments are rejected, never ignored.',
     merged
       ? (multiDb
           ? `Database tools are shared across every API. Pass ${svcArg} to choose which database a call targets (one of: ${dbApis.join(', ')}).`
@@ -362,8 +366,8 @@ export function createServer(
     '- Order: `field ASC`, `field DESC`, `field1 ASC, field2 DESC`',
     '- Fields: select specific columns to reduce response size',
     '- Related: include related records via foreign keys (e.g., `related=parent_table_by_fk_field`)',
-    '- Pagination: use `limit` and `offset`, set `includeCount=true` for total count',
-    '- Counting: use `countOnly=true` to get just the count without data',
+    '- Pagination: use `limit` and `offset`, set `include_count=true` for total count',
+    '- Counting: use `count_only=true` to get just the count without data',
     `- Aggregation: use \`${merged ? '' : examplePrefix + '_'}aggregate_data\` for SUM/COUNT/AVG/MIN/MAX — it pushes computation to the database server`,
     '- Max page size: 1000 records. Always paginate for tables with more rows.',
     '',
@@ -420,6 +424,9 @@ export function createServer(
   if (lazy) {
     installLazyFacade(server, lazy);
   }
+
+  // After every tool is registered: snake_case/camelCase aliases and unknown-key errors (issue #66).
+  installArgNormalizer(server);
 
   return server;
 }

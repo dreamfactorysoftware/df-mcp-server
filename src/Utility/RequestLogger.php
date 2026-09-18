@@ -68,8 +68,8 @@ class RequestLogger
     }
 
     /**
-     * Savings ledger the daemon attaches to lazy-mode responses as the
-     * X-Mcp-Ledger header (see daemon lazy.service.ts). Only known keys are
+     * Ledger the daemon attaches to responses as the X-Mcp-Ledger header
+     * (see daemon ledger.ts, lazy.service.ts, args.ts). Only known keys are
      * stored; everything is coerced so a malformed header cannot break the row.
      */
     private static function ledgerColumns(?array $ledger): array
@@ -84,6 +84,9 @@ class RequestLogger
             'preamble_saved_per_turn' => (int) ($ledger['preamble_saved_per_turn'] ?? 0),
             'result_chars_withheld'   => (int) ($ledger['result_chars_withheld'] ?? 0),
             'facade_calls'            => (int) ($ledger['facade_calls'] ?? 0),
+            // Argument normaliser counters (issue #66); sent in every mode, not only lazy.
+            'arg_errors'              => (int) ($ledger['arg_errors'] ?? 0),
+            'arg_aliases'             => (int) ($ledger['arg_aliases'] ?? 0),
         ];
     }
 
