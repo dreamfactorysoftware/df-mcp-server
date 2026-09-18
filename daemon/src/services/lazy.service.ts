@@ -223,6 +223,8 @@ export class LazyState {
   private facadeBytes = 0;
   /** The SDK's own tools/list handler, captured before we override it, so non-lazy lists stay byte-identical to `off`. */
   sdkList?: (req: unknown, extra: unknown) => Promise<{ tools: unknown[] }>;
+  /** Client name forwarded by PHP (X-Mcp-Client-Name); used when this server never saw the client's initialize. */
+  clientHint?: string;
 
   constructor(readonly service: string, readonly mode: Exclude<LazyMode, 'off'>, private readonly server: McpServer) {
     this.hot = hotByService.get(service) ?? [];
@@ -250,7 +252,7 @@ export class LazyState {
   decide(): LazyDecision {
     if (this.decision) return this.decision;
     if (!this.fullList) throw new Error('lazy: tools/list must run before the mode is decided');
-    const client = (this.server.server.getClientVersion()?.name ?? '').toLowerCase();
+    const client = (this.server.server.getClientVersion()?.name ?? this.clientHint ?? '').toLowerCase();
     if (PASSTHROUGH.some(p => client.includes(p))) this.decision = 'passthrough';
     else if (this.mode === 'on' || this.catalogBytes > LAZY_THRESHOLD_BYTES) this.decision = 'lazy';
     else this.decision = 'direct';

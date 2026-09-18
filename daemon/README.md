@@ -112,6 +112,7 @@ The daemon accepts two credential kinds. **At least one is required**; the PHP p
 | Header | Description |
 |--------|-------------|
 | `Mcp-Session-Id` | Session ID for existing MCP sessions (`MCP_STATELESS=false` only; ignored in stateless mode) |
+| `X-Mcp-Client-Name` | Client name the PHP proxy resolved (OAuth client registration or API-key app); decides lazy passthrough when the request carries no `initialize` |
 
 ## Available MCP Tools
 

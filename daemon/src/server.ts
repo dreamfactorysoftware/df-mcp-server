@@ -346,9 +346,14 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       });
 
       const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle);
-      // No session remembers that the client already listed tools, so decide
-      // lazy behaviour per request from the catalog itself.
-      await lazyStateFor(statelessServer)?.prime();
+      // No session remembers that the client already listed tools or who the
+      // client is, so decide lazy behaviour per request from the catalog and
+      // the client name PHP forwards (X-Mcp-Client-Name).
+      const lazy = lazyStateFor(statelessServer);
+      if (lazy) {
+        lazy.clientHint = req.header('x-mcp-client-name');
+        await lazy.prime();
+      }
       const statelessTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true

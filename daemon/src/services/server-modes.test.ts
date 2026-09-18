@@ -49,7 +49,7 @@ const envelope = (payload: unknown, lazyMode = 'off') => JSON.stringify({
   _mcpAvailableServices: [],
 });
 
-async function rpc(url: string, payload: unknown, sessionId?: string, lazyMode?: string) {
+async function rpc(url: string, payload: unknown, sessionId?: string, lazyMode?: string, extraHeaders: Record<string, string> = {}) {
   const res = await fetch(`${url}/mcp/svc`, {
     method: 'POST',
     headers: {
@@ -58,6 +58,7 @@ async function rpc(url: string, payload: unknown, sessionId?: string, lazyMode?:
       'X-Mcp-Base-Url': 'http://127.0.0.1:1/api/v2',
       'X-DreamFactory-Session-Token': 'test-token',
       ...(sessionId ? { 'Mcp-Session-Id': sessionId } : {}),
+      ...extraHeaders,
     },
     body: envelope(payload, lazyMode),
   });
@@ -120,6 +121,24 @@ test('stateless: lazy facade page handles survive across separate requests on on
     const page = JSON.parse(more.body.result.content[0].text);
     assert.equal(page.handle, m![1]);
     assert.ok(page.text.length > 0);
+  } finally { proc.kill(); }
+});
+
+test('stateless: X-Mcp-Client-Name drives lazy passthrough when no initialize was seen', async () => {
+  const { proc, url } = await boot({});
+  try {
+    const names = async (headers: Record<string, string>) => {
+      const list = await rpc(url, toolsList, undefined, 'on', headers);
+      assert.equal(list.status, 200, JSON.stringify(list.body));
+      return list.body.result.tools.map((t: any) => t.name) as string[];
+    };
+    const facade = await names({});
+    assert.ok(facade.includes('search_tools'), 'unknown client gets the facade');
+    assert.ok(!facade.includes('big_text'));
+
+    const full = await names({ 'X-Mcp-Client-Name': 'Codex CLI' });
+    assert.ok(!full.includes('search_tools'), 'passthrough client gets no facade');
+    assert.ok(full.includes('big_text') && full.includes('add_numbers'), 'full catalog');
   } finally { proc.kill(); }
 });
 

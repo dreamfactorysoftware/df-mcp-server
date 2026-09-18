@@ -61,10 +61,10 @@ What differs between the modes:
 | `GET /mcp/{service}` (server-initiated SSE) | `405` | opens the stream for a known session (the PHP proxy never forwards it, see below) |
 | `DELETE /mcp/{service}` | `405` | ends the session |
 | Server build cost | per request | once per session, reaped after 10 idle minutes |
-| Lazy facade passthrough by `clientInfo.name` (`codex`, `grok`, `hermes`) | not detected: `clientInfo` arrives only with `initialize`, which is a separate request | detected |
+| Lazy facade passthrough (`codex`, `grok`, `hermes`) | by `X-Mcp-Client-Name`, which the PHP proxy sets from the OAuth client's registered name or the API-key app name | by `clientInfo.name` from `initialize` |
 | Lazy facade paging, `fetch_more` handles, hot tools | per node: the handle from a paged result must be fetched from the same daemon process | per process |
 
-`fetch_more` handles and the "hot" tool set live in daemon memory, not in the session, so they survive stateless requests on the same node. Behind a load balancer with no stickiness, a `fetch_more` that lands on another node returns `unknown or expired handle`; the client should narrow the query instead. Passthrough clients that want the full catalog on a stateless daemon can set the service's `lazy_mode` to `off`.
+`fetch_more` handles and the "hot" tool set live in daemon memory, not in the session, so they survive stateless requests on the same node. Behind a load balancer with no stickiness, a `fetch_more` that lands on another node returns `unknown or expired handle`; the client should narrow the query instead. Passthrough detection needs the OAuth client registration (or the API-key app) to carry a recognisable name; otherwise set the service's `lazy_mode` to `off`.
 
 #### Upgrading from a stateful daemon
 

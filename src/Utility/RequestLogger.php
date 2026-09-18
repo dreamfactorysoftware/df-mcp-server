@@ -128,7 +128,7 @@ class RequestLogger
      * registration captured `client_name`; surface it so the dashboard can
      * say "Claude Desktop" instead of a UUID.
      */
-    private static function resolveClientName(?McpOAuthAccessToken $token): ?string
+    public static function resolveClientName(?McpOAuthAccessToken $token): ?string
     {
         if (!$token || empty($token->client_id)) {
             return null;

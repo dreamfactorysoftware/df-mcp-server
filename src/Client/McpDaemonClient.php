@@ -77,6 +77,7 @@ class McpDaemonClient
                 \DreamFactory\Core\Utility\TraceId::HEADER => \DreamFactory\Core\Utility\TraceId::get(),
             ];
             $headers += self::internalKeyHeader();
+            $headers += self::clientNameHeader($authResult);
 
             // Session token when present (OAuth, or API key + layered session
             // token). Absent for API-key-only auth — the daemon's DF REST
@@ -272,6 +273,7 @@ class McpDaemonClient
             'Accept'                       => 'application/json, text/event-stream',
         ];
         $headers += self::internalKeyHeader();
+        $headers['X-Mcp-Client-Name'] = 'df-ai-chat';
         if ($appId = ($config['app_id'] ?? null)) {
             if ($apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId)) {
                 $headers['X-DreamFactory-API-Key'] = $apiKey;
@@ -327,6 +329,44 @@ class McpDaemonClient
         $resp = $post($jsonRpc);
 
         return $this->decodeDaemonBody((string) $resp->getBody());
+    }
+
+    /**
+     * Who is calling, on every proxied request. The daemon's lazy facade
+     * gives passthrough clients (codex, grok, hermes) the full catalog, but in
+     * stateless mode it only ever sees clientInfo on the initialize request,
+     * which is a different HTTP request from tools/list. Forward the name we
+     * already know server-side: the OAuth client row's registered
+     * client_name, or the app name for API-key auth.
+     *
+     * @return array<string, string>
+     */
+    public static function clientNameHeader(array $authResult): array
+    {
+        $name = null;
+        $token = $authResult['token'] ?? null;
+        if ($token instanceof \DreamFactory\Core\McpServer\Models\McpOAuthAccessToken) {
+            $name = \DreamFactory\Core\McpServer\Utility\RequestLogger::resolveClientName($token);
+        } elseif ($appId = ($authResult['app_id'] ?? null)) {
+            $name = \DreamFactory\Core\Models\App::find($appId)?->name;
+        }
+        $value = self::clientHeaderValue($name);
+
+        return $value === null ? [] : ['X-Mcp-Client-Name' => $value];
+    }
+
+    /**
+     * Header-safe form of a client-supplied name: printable ASCII only (the
+     * OAuth client registered it, so it is untrusted), capped at 128 chars.
+     */
+    public static function clientHeaderValue(?string $name): ?string
+    {
+        if ($name === null) {
+            return null;
+        }
+        $clean = trim(substr((string) preg_replace('/[^\x20-\x7E]+/', '', $name), 0, 128));
+
+        return $clean === '' ? null : $clean;
     }
 
     /**
