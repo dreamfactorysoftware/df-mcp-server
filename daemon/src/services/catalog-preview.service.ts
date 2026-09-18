@@ -2,7 +2,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer, parseAvailableServicesList, parseMcpConfig } from '../utils/utils.js';
 import { SessionService } from './session.service.js';
-import { isFacadeTool, isReadOnly, lazyStateFor, type LazyDecision, type LazyMode } from './lazy.service.js';
+import { isFacadeTool, lazyStateFor, type LazyDecision, type LazyMode } from './lazy.service.js';
+import { annotationsFor } from './args.js';
 import { sanitizeApiName } from './tool-utils.js';
 import { DB_TOOL_NAMES } from './tools.service.js';
 import type { ApiConfig, CustomToolDefinition } from '../types.js';
@@ -98,8 +99,11 @@ export async function previewCatalog(input: PreviewInput): Promise<PreviewResult
   }
 }
 
+const readOnly = (t: { name: string; annotations?: { readOnlyHint?: boolean } }, verb?: string): boolean =>
+  t.annotations?.readOnlyHint ?? annotationsFor(verb ?? t.name).readOnlyHint === true;
+
 function classify(
-  t: { name: string; title?: string; description?: string },
+  t: { name: string; title?: string; description?: string; annotations?: { readOnlyHint?: boolean } },
   apiConfigs: ApiConfig[],
   custom: Map<string, CustomToolDefinition>
 ): PreviewTool {
@@ -109,7 +113,7 @@ function classify(
   }
   const c = custom.get(t.name);
   if (c) {
-    return { ...base, category: 'custom', write: c.http_method ? c.http_method !== 'GET' : !isReadOnly(t.name) };
+    return { ...base, category: 'custom', write: c.http_method ? c.http_method !== 'GET' : !readOnly(t) };
   }
   // Longest prefix first so `sales_eu_get_tables` binds to sales_eu, not sales.
   const prefixed = apiConfigs
@@ -120,13 +124,13 @@ function classify(
     return {
       ...base,
       category: prefixed.api.category,
-      write: !isReadOnly(t.name.slice(prefixed.prefix.length)),
+      write: !readOnly(t, t.name.slice(prefixed.prefix.length)),
       service: prefixed.api.name
     };
   }
   if (DB_VERBS.has(t.name)) {
     // Merged style: one bare verb, the `service` argument picks the database.
-    return { ...base, category: 'database', write: !isReadOnly(t.name) };
+    return { ...base, category: 'database', write: !readOnly(t) };
   }
   if (t.name.startsWith('all_')) {
     return { ...base, category: t.name === 'all_list_files' ? 'file' : 'database', write: false };
