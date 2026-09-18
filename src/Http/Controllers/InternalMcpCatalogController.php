@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace DreamFactory\Core\McpServer\Http\Controllers;
 
-use DreamFactory\Core\Enums\VerbsMask;
 use DreamFactory\Core\Http\Controllers\Controller;
 use DreamFactory\Core\McpServer\Client\McpDaemonClient;
 use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
@@ -26,8 +25,9 @@ use Illuminate\Http\Request;
  * names and the lazy decision, so it computes the list (POST
  * /mcp/catalog/preview). PHP contributes what the proxy would have sent for
  * that role — the service config and the role-scoped backend catalog from the
- * shared AvailableServices helper — plus the role's verb mask per backend, so
- * the UI can mark tools that are advertised but denied at call time.
+ * shared AvailableServices helper — plus the role's verbs per backend (union
+ * over every row for that service, with component scoping flagged), so the
+ * UI can mark tools that are advertised but denied at call time.
  */
 class InternalMcpCatalogController extends Controller
 {
@@ -89,19 +89,14 @@ class InternalMcpCatalogController extends Controller
 
         // Resolve the catalog and the verb masks AS the previewed role, then
         // hand the admin their own session back.
-        [$availableServices, $backends] = RoleSession::run($roleInfo, $appId, function () use ($service, $config): array {
+        $roleActive = (bool) ($roleInfo['is_active'] ?? true);
+        [$availableServices, $backends] = RoleSession::run($roleInfo, $appId, function () use ($service, $config, $roleActive): array {
             $available = AvailableServices::resolve($service->getName(), $config);
-            $backends = array_map(static function (array $s): array {
-                // false when the role is inactive: no verbs at all.
-                $mask = Session::getServicePermissions($s['name']);
-
-                return [
-                    'name'     => $s['name'],
-                    'type'     => $s['type'] ?? null,
-                    'category' => $s['category'] ?? 'database',
-                    'verbs'    => VerbsMask::maskToArray(is_int($mask) ? $mask : 0),
-                ];
-            }, $available);
+            $backends = array_map(static fn (array $s): array => [
+                'name'     => $s['name'],
+                'type'     => $s['type'] ?? null,
+                'category' => $s['category'] ?? 'database',
+            ] + RoleSession::backendAccess($s['name'], $roleActive), $available);
 
             return [$available, $backends];
         });

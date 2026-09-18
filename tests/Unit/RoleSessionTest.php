@@ -39,12 +39,17 @@ class RoleSessionTest extends TestCase
             'mysql'    => \DreamFactory\Core\Utility\Session::getServicePermissions('mysql'),
             'files'    => \DreamFactory\Core\Utility\Session::getServicePermissions('files'),
             'postgres' => \DreamFactory\Core\Utility\Session::getServicePermissions('postgres'),
+            'access'   => RoleSession::backendAccess('mysql'),
             'app'      => \Session::get('app.id'),
         ]);
 
         // Inside: no admin lift, role ∩ exposure, verb masks per backend.
         $this->assertSame(
-            ['admin' => false, 'names' => ['mysql'], 'mysql' => 1, 'files' => 31, 'postgres' => 0, 'app' => 42],
+            [
+                'admin' => false, 'names' => ['mysql'], 'mysql' => 1, 'files' => 31, 'postgres' => 0,
+                'access' => ['verbs' => ['GET'], 'component_scoped' => false, 'components' => []],
+                'app' => 42,
+            ],
             $seen
         );
 
@@ -53,6 +58,43 @@ class RoleSessionTest extends TestCase
         $this->assertSame(1, \Session::get('app.id'));
         $this->assertNull(\Session::get('role.services'));
         $this->assertSame($before, \Session::all());
+    }
+
+    public function testComponentOnlyRoleReportsTheUnionOfItsComponentVerbs(): void
+    {
+        $this->bootMinimalLaravel();
+        $this->establishAdminSession();
+
+        // orders_analyst: no service-wide row on mysql, only two table-level
+        // rows; files is service-wide; postgres has no rows at all.
+        $role = self::ROLE;
+        $role['role_service_access_by_role_id'] = [
+            ['service_id' => 1, 'service' => 'mysql', 'component' => '_table/orders/*', 'verb_mask' => 1, 'requestor_mask' => 1],
+            ['service_id' => 1, 'service' => 'mysql', 'component' => '_table/customers/*', 'verb_mask' => 3, 'requestor_mask' => 1],
+            ['service_id' => 1, 'service' => 'mysql', 'component' => '_table/customers/*', 'verb_mask' => 16, 'requestor_mask' => 2], // script-only row: ignored
+            ['service_id' => 3, 'service' => 'files', 'component' => '*', 'verb_mask' => 31, 'requestor_mask' => 1],
+        ];
+
+        $seen = RoleSession::run($role, 42, fn () => [
+            'wide'     => \DreamFactory\Core\Utility\Session::getServicePermissions('mysql'),
+            'mysql'    => RoleSession::backendAccess('mysql'),
+            'files'    => RoleSession::backendAccess('files'),
+            'postgres' => RoleSession::backendAccess('postgres'),
+            'inactive' => RoleSession::backendAccess('mysql', false),
+        ]);
+
+        // df-core's service-wide lookup sees nothing — the bug the union fixes.
+        $this->assertSame(0, $seen['wide']);
+        $this->assertSame(
+            ['verbs' => ['GET', 'POST'], 'component_scoped' => true, 'components' => ['_table/orders/*', '_table/customers/*']],
+            $seen['mysql']
+        );
+        $this->assertSame(
+            ['verbs' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], 'component_scoped' => false, 'components' => []],
+            $seen['files']
+        );
+        $this->assertSame(['verbs' => [], 'component_scoped' => false, 'components' => []], $seen['postgres']);
+        $this->assertSame(['verbs' => [], 'component_scoped' => false, 'components' => []], $seen['inactive']);
     }
 
     public function testSessionIsRestoredWhenTheCallbackThrows(): void

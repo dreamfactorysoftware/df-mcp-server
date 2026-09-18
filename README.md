@@ -222,13 +222,13 @@ The response carries the catalog and the role's per-backend verbs, so the UI can
   "service": {"id": 12, "name": "storefront", "type": "mcp"},
   "role": {"id": 5, "name": "analyst", "is_active": true},
   "client": "df-admin-preview", "lazy_mode": "auto", "tool_style": "prefixed",
-  "backends": [{"name": "ordersdb", "type": "mysql", "category": "database", "verbs": ["GET"]}],
+  "backends": [{"name": "ordersdb", "type": "mysql", "category": "database", "verbs": ["GET", "POST"], "component_scoped": true, "components": ["_table/orders/*", "_table/customers/*"]}],
   "tools": [{"name": "ordersdb_get_table_data", "title": "ordersdb: Get Table Data", "description": "...", "category": "database", "write": false, "service": "ordersdb"}],
   "count": 21, "bytes": 10703, "lazy": "direct", "facade": []
 }
 ```
 
-`tools` is the full callable catalog (facade tools excluded); `bytes` is its serialized `tools/list` size, the number `lazy_mode: auto` compares against the threshold; `lazy` is the decision for that client (`lazy`, `direct` or `passthrough`), and when it is `lazy`, `facade` lists what the client actually sees instead of the catalog (the facade plus this service's hot tools). `category` is `database`, `file`, `custom`, or `global`; `write` marks tools that need more than `GET` on their backend, so a `write` tool on a backend whose `verbs` lack `POST`/`PUT`/`PATCH`/`DELETE` will be advertised but rejected when called.
+`tools` is the full callable catalog (facade tools excluded); `bytes` is its serialized `tools/list` size, the number `lazy_mode: auto` compares against the threshold; `lazy` is the decision for that client (`lazy`, `direct` or `passthrough`), and when it is `lazy`, `facade` lists what the client actually sees instead of the catalog (the facade plus this service's hot tools). `category` is `database`, `file`, `custom`, or `global`; `write` marks tools that need more than `GET` on their backend, so a `write` tool on a backend whose `verbs` lack `POST`/`PUT`/`PATCH`/`DELETE` will be advertised but rejected when called. `verbs` is the union over every role row for that backend, at any component; `component_scoped` is true when the role has no service-wide row for it, and `components` then lists the component patterns the grant is limited to (calls outside them are rejected even though the verb is listed).
 
 ### Authentication
 

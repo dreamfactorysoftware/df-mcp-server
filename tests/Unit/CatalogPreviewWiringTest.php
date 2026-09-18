@@ -48,8 +48,7 @@ class CatalogPreviewWiringTest extends TestCase
         $run = strpos($s, 'RoleSession::run(');
         $this->assertNotFalse($run);
         $this->assertGreaterThan($run, strpos($s, 'AvailableServices::resolve('), 'resolve() runs inside the role session');
-        $this->assertGreaterThan($run, strpos($s, 'Session::getServicePermissions('), 'verb masks are read as the role');
-        $this->assertStringContainsString('VerbsMask::maskToArray(', $s);
+        $this->assertGreaterThan($run, strpos($s, 'RoleSession::backendAccess('), 'verbs are read as the role');
         $this->assertStringContainsString('Role::getCachedInfo($roleId)', $s);
         $this->assertStringContainsString("App::getCachedInfo(\$appId, 'role_id')", $s);
         $this->assertStringNotContainsString('getServiceListByGroup', $s);
@@ -87,6 +86,12 @@ class CatalogPreviewWiringTest extends TestCase
     public function testRoleSessionRestoresTheCallerEvenOnFailure(): void
     {
         $s = $this->src('src/Support/RoleSession.php');
+        // backendAccess unions every row for the service (any component) and
+        // only falls back to the service-wide lookup when the role has none.
+        $this->assertStringContainsString("Session::get('role.services')", $s);
+        $this->assertStringContainsString("\$mask |= (int) (\$row['verb_mask'] ?? 0);", $s);
+        $this->assertMatchesRegularExpression('/if \(\$rows === 0\) \{\s*\$fallback = Session::getServicePermissions\(\$service\);/s', $s);
+        $this->assertStringContainsString('VerbsMask::maskToArray($mask)', $s);
         $this->assertStringContainsString("\\Session::forget('user');", $s);
         $this->assertStringContainsString('Session::setRoleInfo($roleInfo);', $s);
         $this->assertMatchesRegularExpression(
