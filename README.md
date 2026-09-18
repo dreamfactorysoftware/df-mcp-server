@@ -40,19 +40,35 @@ The Laravel package proxies every MCP request through a persistent Node.js daemo
 
 Once the daemon is online, the MCP routes in DreamFactory automatically forward traffic to it.
 
-### Running multiple DreamFactory nodes (stateless mode)
+### Session mode: stateless by default
 
-By default the daemon keeps each MCP session in memory, so every request for a session must reach the same node. Behind a load balancer this breaks: MCP clients do not return affinity cookies, so requests round-robin and hit a node that has never seen the session, which fails with `Bad Request: Server not initialized`.
+The daemon is **stateless** by default: it issues no `Mcp-Session-Id`, keeps no session state, and rebuilds the MCP server from the request itself. Every proxied request already carries everything the daemon needs (DreamFactory token or API key, service config, resolved catalog), so any DreamFactory node can answer any request. Multi-node deployments behind a load balancer need no stickiness and no shared cache. `GET /health` reports the active mode.
 
-If you run more than one DreamFactory node behind a load balancer, start the daemon in **stateless mode**:
+Stateless is what the spec expects from HTTP clients anyway, and it is the only mode that works behind a load balancer: desktop MCP clients do not return affinity cookies, so a stateful daemon on another node fails with `Bad Request: Server not initialized`.
+
+To opt back into warm, process-pinned sessions on a single-node install:
 
 ```
-MCP_STATELESS=true
+MCP_STATELESS=false
 ```
 
-No session IDs are issued and no session state is kept — every request carries everything the daemon needs, so any node can answer any request. No load-balancer stickiness or shared cache is required. `GET /health` reports the active mode.
+What differs between the modes:
 
-Trade-off: the MCP server is rebuilt per request. Leave this unset for single-node installs, where the default warm-session behavior is faster.
+| | Stateless (default) | `MCP_STATELESS=false` |
+|---|---|---|
+| `Mcp-Session-Id` | never issued; one sent by a client is ignored | issued on `initialize`, required on every later request |
+| Requests without a prior `initialize` | served | rejected with `Server not initialized` |
+| `GET /mcp/{service}` (server-initiated SSE) | `405` | opens the stream for a known session (the PHP proxy never forwards it, see below) |
+| `DELETE /mcp/{service}` | `405` | ends the session |
+| Server build cost | per request | once per session, reaped after 10 idle minutes |
+| Lazy facade passthrough by `clientInfo.name` (`codex`, `grok`, `hermes`) | not detected: `clientInfo` arrives only with `initialize`, which is a separate request | detected |
+| Lazy facade paging, `fetch_more` handles, hot tools | per node: the handle from a paged result must be fetched from the same daemon process | per process |
+
+`fetch_more` handles and the "hot" tool set live in daemon memory, not in the session, so they survive stateless requests on the same node. Behind a load balancer with no stickiness, a `fetch_more` that lands on another node returns `unknown or expired handle`; the client should narrow the query instead. Passthrough clients that want the full catalog on a stateless daemon can set the service's `lazy_mode` to `off`.
+
+#### Upgrading from a stateful daemon
+
+Before this version the daemon defaulted to stateful sessions and `MCP_STATELESS=true` was an opt-in. Existing installs need no change: clients that thread `Mcp-Session-Id` keep working because the daemon now ignores it, and the PHP `rpc` bridge already tolerates a missing session id. Single-node installs that want the old warm-session behaviour set `MCP_STATELESS=false` before restarting the daemon (`scripts/start-daemon.sh` exports it).
 
 ### PHP-FPM sizing
 
@@ -78,7 +94,7 @@ A DreamFactory MCP service over a few hundred tables produces a tool catalog no 
 
 Clients that already defer tool schemas themselves (`initialize.clientInfo.name` containing `codex`, `grok` or `hermes`) always get the full catalog. Override the list with `MCP_LAZY_PASSTHROUGH=codex,grok,hermes` and the threshold with `MCP_LAZY_THRESHOLD_BYTES` on the daemon.
 
-When the facade is active, tool results are also minified, stripped of PHP stack traces, and paged above 6,000 characters (`MCP_LAZY_PAGE_CHARS`); `fetch_more(handle, offset)` returns the rest. The tool list is fixed for the life of a session — the daemon never sends `notifications/tools/list_changed`, since that invalidates the client's prompt cache.
+When the facade is active, tool results are also minified, stripped of PHP stack traces, and paged above 6,000 characters (`MCP_LAZY_PAGE_CHARS`); `fetch_more(handle, offset)` returns the rest. Handles live in the daemon process, not the MCP session, so they work across stateless requests to the same node but not across nodes (see [Session mode](#session-mode-stateless-by-default)). The tool list is fixed for the life of a session — the daemon never sends `notifications/tools/list_changed`, since that invalidates the client's prompt cache.
 
 Every request row in `mcp_request_log` records what lazy mode saved (`mode`, `catalog_tokens`, `preamble_saved_per_turn`, `result_chars_withheld`, `facade_calls`), and the usage aggregate exposes `tokens_saved`.
 

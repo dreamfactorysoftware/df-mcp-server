@@ -263,6 +263,16 @@ export class LazyState {
     return this.fullList !== undefined && this.decide() === 'lazy';
   }
 
+  /**
+   * Stateless daemon: every request gets a fresh server that never saw the
+   * client's tools/list, so without this the "call before list" rule would
+   * disable shaping, paging, hot tools and the ledger on every call. Measure
+   * the catalog up front so isLazy() answers from mode and size alone.
+   */
+  async prime(): Promise<void> {
+    await this.allTools();
+  }
+
   /** What tools/list returns for this session. */
   async listTools(extra?: unknown): Promise<unknown[]> {
     const all = await this.allTools(extra);
