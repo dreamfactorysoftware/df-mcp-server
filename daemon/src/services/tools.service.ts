@@ -5,7 +5,7 @@ import { SessionService } from './session.service.js';
 import { registerApiConnectorTools } from './api-connector.tools.js';
 import { registerFileApiTools } from './file-api.tools.js';
 import type { ApiConfig, ToolStyle } from '../types.js';
-import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
+import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar, WRITE_VERBS } from './tool-utils.js';
 
 type ToolDefinition = {
   name: string;
@@ -310,7 +310,8 @@ function registerMergedDatabaseTools(
   server: McpServer,
   sessionManager: SessionService,
   dbConfigs: ApiConfig[],
-  disabledTools?: Set<string>
+  disabledTools?: Set<string>,
+  tools: ToolDefinition[] = BASE_TOOLS
 ) {
   if (dbConfigs.length === 0) {
     return;
@@ -319,7 +320,7 @@ function registerMergedDatabaseTools(
   const registerTool = createToolRegistrar(server, disabledTools);
   const notes: string[] = [];
 
-  for (const tool of BASE_TOOLS) {
+  for (const tool of tools) {
     // Services this verb is still permitted on, after per-service disables.
     const allowed = dbConfigs.filter(
       c => !disabledTools?.has(`${sanitizeApiName(c.name)}_${tool.name}`)
@@ -391,7 +392,8 @@ export function registerDreamFactoryTools(
   sessionManager: SessionService,
   apiConfigs: ApiConfig[],
   disabledTools?: Set<string>,
-  toolStyle: ToolStyle = 'prefixed'
+  toolStyle: ToolStyle = 'prefixed',
+  allowWrites = true
 ) {
   const registerTool = createToolRegistrar(server, disabledTools);
 
@@ -399,19 +401,23 @@ export function registerDreamFactoryTools(
   registerApiConnectorTools(server, sessionManager, apiConfigs, disabledTools);
 
   // Register file API tools
-  registerFileApiTools(server, sessionManager, apiConfigs, disabledTools);
+  registerFileApiTools(server, sessionManager, apiConfigs, disabledTools, allowWrites);
 
   // Filter to database services only for database tools
   const dbConfigs = apiConfigs.filter(c => c.category === 'database');
 
+  // allow_writes=false: write verbs are not registered at all, so they are
+  // absent from tools/list and from the lazy catalog (call_tool cannot reach them).
+  const tools = allowWrites ? BASE_TOOLS : BASE_TOOLS.filter(t => !WRITE_VERBS.has(t.name));
+
   if (toolStyle === 'merged') {
-    registerMergedDatabaseTools(server, sessionManager, dbConfigs, disabledTools);
+    registerMergedDatabaseTools(server, sessionManager, dbConfigs, disabledTools, tools);
   } else {
     // Register prefixed tools for each database API
     for (const apiConfig of dbConfigs) {
       const prefix = sanitizeApiName(apiConfig.name);
 
-      for (const tool of BASE_TOOLS) {
+      for (const tool of tools) {
         const prefixedName = `${prefix}_${tool.name}`;
         const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
         const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;

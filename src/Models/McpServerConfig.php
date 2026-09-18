@@ -27,6 +27,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'exposed_services',
         'scope_tools',
         'tool_style',
+        'allow_writes',
     ];
 
     protected $casts = [
@@ -36,6 +37,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'disabled_tools' => 'array',
         'exposed_services' => 'array',
         'scope_tools' => 'boolean',
+        'allow_writes' => 'boolean',
         'redirect_uris' => 'array',
     ];
 
@@ -290,6 +292,12 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['legend'] = 'Database and file services this MCP endpoint exposes as tools';
                 $schema['description'] = 'Pick at least one database or file service or this MCP endpoint will not expose table/file tools (custom tools, search, and fetch still register). Empty always means none — it does not fall back to every service on the instance.';
                 $schema['values'] = self::backendServiceChoices();
+                break;
+            case 'allow_writes':
+                $schema['label'] = 'Allow writes';
+                $schema['description'] = 'On (default): tools can create, update and delete records and files and call stored procedures/functions, subject to the role. Off: this MCP server is read-only — the write tools are not offered to clients at all, regardless of role or per-tool settings. Clients must reconnect to pick up a change.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = true;
                 break;
             case 'allow_api_key_auth':
                 $schema['label'] = 'Allow API Key Authentication';

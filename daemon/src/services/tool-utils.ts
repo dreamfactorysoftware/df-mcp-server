@@ -34,14 +34,18 @@ export const handleError = (error: unknown, operation: string): string => {
   }
 
   const message = error.message ?? '';
+  // Every DF sub-call carries the key/session the PHP proxy already validated,
+  // so a 403 — or the 401 "User is not authenticated" df-core raises when a
+  // key-only role has no access to the resource — is a role denial, not an
+  // authentication failure. Say so, or the model wastes turns re-authenticating.
+  if (message.includes('403') || message.includes('Access forbidden') || message.includes('User is not authenticated')) {
+    return `Permission Error: the session's role may not ${operation}. Re-authenticating will not help; the role needs access granted in DreamFactory. DreamFactory said: ${message}`;
+  }
   if (message.includes('Authentication failed') || message.includes('401')) {
     return `Authentication Error: ${message}`;
   }
   if (message.includes('Network error') || message.includes('Unable to connect')) {
     return `Connection Error: ${message}`;
-  }
-  if (message.includes('Access forbidden') || message.includes('403')) {
-    return `Permission Error: ${message}`;
   }
   if (message.includes('Resource not found') || message.includes('404')) {
     return `Resource Error: ${message}`;
@@ -54,6 +58,16 @@ export const handleError = (error: unknown, operation: string): string => {
   }
   return `Error during ${operation}: ${message}`;
 };
+
+/**
+ * Verbs that change data. With allow_writes=false these are never registered,
+ * in either tool style, so neither tools/list nor the lazy facade can reach them.
+ */
+export const WRITE_VERBS = new Set([
+  'create_records', 'update_records', 'delete_records',
+  'call_stored_procedure', 'call_stored_function',
+  'create_file', 'create_folder', 'delete_file'
+]);
 
 /**
  * Sanitize API name for use as a tool prefix.
