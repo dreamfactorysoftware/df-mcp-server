@@ -1,5 +1,6 @@
 import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { CustomToolParameter, CustomToolDefinition } from '../types.js';
 import type { DFAuthConfig } from './dreamfactory.service.js';
 import type { SessionService } from './session.service.js';
@@ -90,6 +91,7 @@ export async function executeFunctionToolRequest(
     }
   });
 
+  let timer: NodeJS.Timeout | undefined;
   try {
     // Wrap the body in an async IIFE so that `await` is valid inside user-written formulas.
     // The outer (sync) function returns the Promise produced by the IIFE; Promise.race then
@@ -97,9 +99,9 @@ export async function executeFunctionToolRequest(
     const fn = new Function('secrets', ...paramNames, `return (async () => { ${functionBody} })()`);
     const result = await Promise.race([
       fn(toolDef.secrets ?? {}, ...paramValues) as Promise<unknown>,
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Function execution timed out after 30s')), FUNCTION_TIMEOUT_MS)
-      ),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Function execution timed out after 30s')), FUNCTION_TIMEOUT_MS);
+      }),
     ]);
     console.log(`[custom-tool] Function "${toolDef.name}" result:`, safeStringify(result));
     return respond(result);
@@ -107,6 +109,8 @@ export async function executeFunctionToolRequest(
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[custom-tool] Function "${toolDef.name}" error:`, message);
     return respondError(`Function execution error: ${message}`);
+  } finally {
+    clearTimeout(timer); // otherwise the pending timer pins the event loop for 30s after a fast call
   }
 }
 
@@ -217,6 +221,14 @@ export async function executeCustomToolRequest(
   }
 }
 
+/** External HTTP calls are open-world; only the method says whether they read or write. */
+function customAnnotations(t: CustomToolDefinition): ToolAnnotations {
+  const m = t.http_method;
+  if (!m) return { openWorldHint: true }; // function tools: effect unknown
+  if (m === 'GET') return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
+  return { readOnlyHint: false, destructiveHint: m === 'DELETE', idempotentHint: m !== 'POST', openWorldHint: true };
+}
+
 /**
  * Register custom tools on the MCP server.
  */
@@ -250,7 +262,8 @@ export function registerCustomTools(
           // Auth not available — custom tool will run without DF headers
         }
         return executeCustomToolRequest(toolDef, params, auth);
-      }
+      },
+      { annotations: customAnnotations(toolDef) }
     );
   }
 }

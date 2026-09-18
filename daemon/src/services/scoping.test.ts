@@ -22,7 +22,7 @@ const file = (name: string): ApiConfig => ({ name, baseUrl: `http://df/api/v2/${
 
 // Global (non-service-prefixed) tools that register regardless of scoping.
 const GLOBAL = ['discover_services', 'request_access', 'list_apis', 'search', 'fetch'];
-const FACADE = ['call_tool', 'describe_tool', 'fetch_more', 'search_tools'];
+const FACADE = ['call_tool', 'describe_tool', 'fetch_more', 'list_tools', 'search_tools'];
 
 async function connect(apiConfigs: ApiConfig[], service: string, mode: LazyMode, clientName = 'claude-code') {
   const server = createServer(service, apiConfigs, new SessionService(), undefined, undefined, mode);

@@ -5,11 +5,12 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * tool_style: 'prefixed' (default, existing behaviour) or 'merged'.
+ * tool_style: 'prefixed' (existing behaviour) or 'merged'.
  *
- * Nullable with no backfill on purpose — a null column reads as the default
- * 'prefixed', so every existing MCP service keeps emitting the prefixed tool
- * names its clients already reference. Opting in is per service.
+ * Nullable with no backfill on purpose — a null column reads as 'prefixed'
+ * in the daemon, so every existing MCP service keeps emitting the prefixed
+ * tool names its clients already reference. Only NEW rows get 'merged', via
+ * the model's creating hook. Switching an existing service is per service.
  */
 return new class extends Migration
 {

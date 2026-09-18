@@ -22,20 +22,24 @@ class McpServerConfig extends BaseServiceConfigModel
         'custom_login_url',
         'auto_oauth_service',
         'allow_api_key_auth',
+        'require_role_access',
         'disabled_tools',
         'lazy_mode',
         'exposed_services',
         'scope_tools',
         'tool_style',
+        'allow_writes',
     ];
 
     protected $casts = [
         'service_id' => 'integer',
         'app_id' => 'integer',
         'allow_api_key_auth' => 'boolean',
+        'require_role_access' => 'boolean',
         'disabled_tools' => 'array',
         'exposed_services' => 'array',
         'scope_tools' => 'boolean',
+        'allow_writes' => 'boolean',
         'redirect_uris' => 'array',
     ];
 
@@ -260,12 +264,12 @@ class McpServerConfig extends BaseServiceConfigModel
                 break;
             case 'tool_style':
                 $schema['label'] = 'Database Tool Style';
-                $schema['description'] = 'How database tools are exposed. Prefixed (default, unchanged): every verb is emitted once per database, so five databases produce five near-identical copies of all 16 tools. Merged: each verb is registered once and takes a "service" argument naming the database; endpoints exposing a single database omit the argument entirely. Merged cuts catalog size and token cost roughly in proportion to the number of databases, at the cost of breaking client configs that call the prefixed tool names.';
+                $schema['description'] = 'How database tools are exposed. Merged (default for new services): each verb is registered once and takes a "service" argument naming the database; endpoints exposing a single database omit the argument entirely. Prefixed (legacy): every verb is emitted once per database, so five databases produce five near-identical copies of all 16 tools, which bloats client context and confuses tool selection. Merged cuts catalog size and token cost roughly in proportion to the number of databases; switching an existing service to it renames its tools, so client configs that call prefixed names must be updated. Existing services keep Prefixed until you switch them here.';
                 $schema['type'] = 'picklist';
-                $schema['default'] = 'prefixed';
+                $schema['default'] = 'merged';
                 $schema['values'] = [
-                    ['label' => 'Prefixed per service (default)', 'name' => 'prefixed'],
-                    ['label' => 'Merged with a service argument', 'name' => 'merged'],
+                    ['label' => 'Merged with a service argument (default)', 'name' => 'merged'],
+                    ['label' => 'Prefixed per service (legacy)', 'name' => 'prefixed'],
                 ];
                 break;
             case 'lazy_mode':
@@ -290,6 +294,18 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['legend'] = 'Database and file services this MCP endpoint exposes as tools';
                 $schema['description'] = 'Pick at least one database or file service or this MCP endpoint will not expose table/file tools (custom tools, search, and fetch still register). Empty always means none — it does not fall back to every service on the instance.';
                 $schema['values'] = self::backendServiceChoices();
+                break;
+            case 'require_role_access':
+                $schema['label'] = 'Require Role Access';
+                $schema['description'] = 'When on, a user or API key can only connect to this MCP server if its role has been granted access to this service (Roles > Access). Their role still decides which of the exposed APIs they can use once connected. When off, anyone who can log in to DreamFactory can connect and sees whatever their role already allows. Existing servers keep this off after upgrade; new servers start with it on.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = true;
+                break;
+            case 'allow_writes':
+                $schema['label'] = 'Allow writes';
+                $schema['description'] = 'On (default): tools can create, update and delete records and files and call stored procedures/functions, subject to the role. Off: this MCP server is read-only — the write tools are not offered to clients at all, regardless of role or per-tool settings. Clients must reconnect to pick up a change.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = true;
                 break;
             case 'allow_api_key_auth':
                 $schema['label'] = 'Allow API Key Authentication';
@@ -448,6 +464,17 @@ class McpServerConfig extends BaseServiceConfigModel
             // Auto-set admin app if not provided
             if (empty($model->app_id)) {
                 $model->app_id = self::getAdminAppId();
+            }
+            // New services are closed until an admin grants a role access.
+            // Existing rows keep the column default (false) from the migration.
+            if (is_null($model->require_role_access)) {
+                $model->require_role_access = true;
+            }
+            // New services default to merged database tools. Existing rows
+            // are never touched here: a null tool_style on them still reads
+            // as 'prefixed' in the daemon, so their clients keep working.
+            if (empty($model->tool_style)) {
+                $model->tool_style = 'merged';
             }
         });
     }
