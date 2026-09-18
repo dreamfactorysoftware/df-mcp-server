@@ -110,6 +110,31 @@ Exposed Services applies only to the data-plane `mcp` type. The `system_mcp` typ
 
 By default the MCP service uses OAuth-based authentication. Users authenticate with DreamFactory via OAuth to obtain a session token; the Laravel controller validates requests and passes the session token to the daemon via the `X-DreamFactory-Session-Token` header.
 
+#### Require role access (per-service switch)
+
+Authentication says *who you are*; it does not by itself say *whether you may use this MCP
+server*. With **Require Role Access** (`require_role_access`) **off**, any identity that can
+authenticate to DreamFactory (OAuth login, or an API key when key auth is enabled) can connect to
+`/mcp/{service}` and receives the tools for whatever backends its role already grants. With it
+**on**, a non-admin identity must additionally hold a `role_service_access` grant on the MCP
+service itself (any verb, service-wide or `*` component) or the endpoint answers **HTTP 403**
+with JSON-RPC error `-32003` naming the service, before anything is resolved or proxied.
+Administrators always pass. The role's grants on the exposed backends still decide what it can
+do once connected; the switch only decides who may connect.
+
+- **Upgrade:** the migration adds the column with default `false`, so every existing service
+  keeps its current behaviour, and it never writes role rows.
+- **New services** are created with the switch on, so nobody can connect until an admin grants a
+  role access to the service (Roles > Access, or the MCP service page).
+- Refused connections are audit-logged with status `denied`. The admin endpoint
+  `GET /_internal/ai/mcp-access?service=<name|id>&period=30d` returns the roles holding a grant
+  plus every role seen in the log for that service, each flagged `granted`, so an admin can see
+  who would lose access before turning the switch on, and who is being refused after.
+- The in-platform bridge (`POST /api/v2/{service}/rpc`) and AI chat already required the grant
+  through the normal `AccessCheck`; the switch brings the external endpoint in line with them.
+
+Regression test: `tests/integration/role-access-itest.sh`.
+
 #### API key authentication (per-service opt-in)
 
 Each MCP service can additionally accept a static DreamFactory API key by enabling **Allow API Key Authentication** (`allow_api_key_auth`, default off) in its config. When enabled, clients may send:

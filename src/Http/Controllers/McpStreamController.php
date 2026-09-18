@@ -12,6 +12,7 @@ use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\McpServer\Utility\ApiKeyAuth;
 use DreamFactory\Core\McpServer\Utility\AvailableServices;
 use DreamFactory\Core\McpServer\Utility\RequestLogger;
+use DreamFactory\Core\McpServer\Utility\RoleAccessGate;
 use DreamFactory\Core\Models\App;
 use DreamFactory\Core\Utility\JWTUtilities;
 use DreamFactory\Core\Utility\Session as SessionUtilities;
@@ -129,6 +130,24 @@ class McpStreamController extends Controller
         } else {
             $appId = $config['app_id'] ?? null;
             SessionUtilities::setSessionData($appId, $token->user_id);
+        }
+
+        // "Require role access": with the switch on, a non-admin identity needs a
+        // grant on this MCP service itself before it may connect. Runs after the
+        // session is seeded (role.services populated) and before anything is
+        // resolved or proxied, so a refused identity learns nothing about the
+        // catalog. Admins always pass.
+        if (RoleAccessGate::requires($config) && !RoleAccessGate::sessionMayConnect($mcpService)) {
+            $message = RoleAccessGate::denialMessage($mcpService);
+            try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'denied', $message); } catch (\Throwable $e) { /* never break the response on audit failure */ }
+            return response()->json([
+                'jsonrpc' => '2.0',
+                'id' => null,
+                'error' => [
+                    'code' => RoleAccessGate::ERROR_CODE,
+                    'message' => $message,
+                ],
+            ], 403);
         }
 
         // Resolve lookup placeholders in custom tool configs (headers, URLs, parameters).
