@@ -5,7 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../utils/utils.js';
 import { SessionService } from './session.service.js';
 import { handleError, WRITE_VERBS } from './tool-utils.js';
-import type { ApiConfig, ToolStyle } from '../types.js';
+import type { ApiConfig, ToolStyle, CustomToolDefinition } from '../types.js';
 import type { LazyMode } from './lazy.service.js';
 
 // Run: npm test (node --import tsx --test)
@@ -79,6 +79,37 @@ test('lazy facade: call_tool / describe_tool / search_tools cannot reach a write
   // Reads still work through the facade.
   const ok = await client.callTool({ name: 'describe_tool', arguments: { name: 'sales_get_tables' } });
   assert.notEqual(ok.isError, true);
+});
+
+test('custom tools: allow_writes=false keeps GET api tools, hides non-GET api tools and function tools', async () => {
+  const custom: CustomToolDefinition[] = [
+    { name: 'ping_status', description: 'GET status', tool_type: 'api', http_method: 'GET', url: 'http://x/status', parameters: [] },
+    { name: 'post_order', description: 'POST order', tool_type: 'api', http_method: 'POST', url: 'http://x/order', parameters: [] },
+    { name: 'add_numbers', description: 'fn', tool_type: 'function', parameters: [], function: 'return 1;' },
+  ];
+  const build = (writes: boolean) => createServer('svc', [db('sales')], new SessionService(), undefined, custom, 'off', 'prefixed', writes);
+  const open = async (server: any) => {
+    const client = new Client({ name: 'claude-code', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    await client.connect(b);
+    return client;
+  };
+
+  const on = await open(build(true));
+  const onNames = await names(on);
+  assert.ok(['ping_status', 'post_order', 'add_numbers'].every(n => onNames.includes(n)), 'default registers all custom tools');
+  assert.doesNotMatch(on.getInstructions() ?? '', /hidden because writes are off/);
+
+  const off = await open(build(false));
+  const offNames = await names(off);
+  assert.ok(offNames.includes('ping_status'), 'GET api tool kept');
+  assert.ok(!offNames.includes('post_order'), 'POST api tool hidden');
+  assert.ok(!offNames.includes('add_numbers'), 'function tool hidden');
+  const instr = off.getInstructions() ?? '';
+  assert.match(instr, /2 custom tools hidden because writes are off/);
+  assert.match(instr, /custom tools are available: ping_status\./);
+  assert.doesNotMatch(instr, /post_order|add_numbers/);
 });
 
 test('server instructions say the server is read-only only when writes are off', async () => {

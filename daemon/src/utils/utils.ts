@@ -240,9 +240,20 @@ export function createServer(
   const svcArg = merged && multiDb ? "service='<name>'" : '';
   const p = merged ? '' : examplePrefix + '_';
 
+  // Read-only server: a custom tool can write too, unless it is a plain GET
+  // request. Function tools run arbitrary server-side code, so they are hidden.
+  const hiddenCustom = allowWrites
+    ? []
+    : (customTools ?? []).filter(t => t.tool_type === 'function' || (t.http_method ?? 'GET').toUpperCase() !== 'GET');
+  if (hiddenCustom.length > 0) {
+    console.log(`[allow_writes=false] hiding ${hiddenCustom.length} custom tool(s):`, hiddenCustom.map(t => t.name));
+    customTools = customTools!.filter(t => !hiddenCustom.includes(t));
+  }
+
   const instructions = [
     `You are connected to the DreamFactory service "${serviceName}".`,
     allowWrites ? '' : 'THIS SERVER IS READ-ONLY: writes are disabled by the administrator. No tool can create, update or delete records or files, or execute stored procedures/functions. Do not look for such tools or ask to have them enabled — answer from reads and aggregates only.',
+    hiddenCustom.length > 0 ? `${hiddenCustom.length} custom tool${hiddenCustom.length === 1 ? '' : 's'} hidden because writes are off.` : '',
     dbApis.length > 0 ? `Available database APIs: ${dbApis.join(', ')}` : '',
     fileApis.length > 0 ? `Available file storage APIs: ${fileApis.join(', ')}` : '',
     '',

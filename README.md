@@ -111,7 +111,7 @@ Exposed Services applies only to the data-plane `mcp` type. The `system_mcp` typ
 Each MCP service has an **Allow writes** switch (`allow_writes`, default on). Turn it off to guarantee the server can never change data, whatever the connected role or per-tool settings allow:
 
 - The write tools are not registered at all — `create_records`, `update_records`, `delete_records`, `call_stored_procedure`, `call_stored_function`, `create_file`, `create_folder` and `delete_file` disappear from `tools/list` in both the prefixed and the merged tool style, and the lazy facade's `call_tool` / `describe_tool` / `search_tools` cannot reach them either.
-- Reads, `aggregate_data`, `list_apis`, the `all_*` aggregators and custom tools are unaffected.
+- Reads, `aggregate_data`, `list_apis` and the `all_*` aggregators are unaffected. Custom tools are kept only if they are API tools using `GET`; non-GET API tools and function tools are hidden too (the daemon logs which, and the instructions say how many).
 - The server instructions tell the model the server is read-only, so it does not hunt for write tools.
 
 Clients must reconnect to pick up a change. The switch is hidden for `system_mcp` services, whose daemon has no DB/file write verbs.
