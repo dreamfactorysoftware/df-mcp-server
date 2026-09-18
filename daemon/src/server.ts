@@ -5,7 +5,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
 import { runWithTrace } from './services/trace.service.js';
-import { runWithResponse, type LazyMode } from './services/lazy.service.js';
+import { type LazyMode } from './services/lazy.service.js';
+import { runWithResponse } from './services/ledger.js';
 import type { ToolStyle } from './types.js';
 import {
   createServer,

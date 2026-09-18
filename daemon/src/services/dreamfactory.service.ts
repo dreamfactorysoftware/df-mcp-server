@@ -104,9 +104,9 @@ export class DreamFactoryService {
     options: Record<string, unknown> = {}
   ): Promise<unknown> {
     const params = new URLSearchParams();
-    if (options.includeFiles !== undefined) params.set('include_files', String(options.includeFiles));
-    if (options.includeFolders !== undefined) params.set('include_folders', String(options.includeFolders));
-    if (options.fullTree !== undefined) params.set('full_tree', String(options.fullTree));
+    if (options.include_files !== undefined) params.set('include_files', String(options.include_files));
+    if (options.include_folders !== undefined) params.set('include_folders', String(options.include_folders));
+    if (options.full_tree !== undefined) params.set('full_tree', String(options.full_tree));
     if (options.zip !== undefined) params.set('zip', String(options.zip));
 
     const encodedPath = path ? encodeURIComponent(path).replace(/%2F/g, '/') : '';
@@ -225,7 +225,6 @@ export class DreamFactoryService {
       }
     };
 
-    append('tableName', options.tableName);
     append('fields', options.fields);
     append('filter', options.filter);
     append('offset', options.offset);
@@ -234,12 +233,12 @@ export class DreamFactoryService {
     append('group', options.group);
     append('continue', options.continue);
     append('related', options.related);
-    append('count_only', options.countOnly);
-    append('include_count', options.includeCount);
-    append('include_schema', options.includeSchema);
+    append('count_only', options.count_only);
+    append('include_count', options.include_count);
+    append('include_schema', options.include_schema);
     append('ids', options.ids);
 
-    const url = `${baseUrl}/_table/${encodeURIComponent(String(options.tableName ?? ''))}`;
+    const url = `${baseUrl}/_table/${encodeURIComponent(String(options.table_name ?? ''))}`;
     return this.request('GET', url, auth, params);
   }
 
@@ -348,13 +347,13 @@ export class DreamFactoryService {
     baseUrl: string,
     auth: DFAuthConfig,
     options: {
-      tableName: string;
+      table_name: string;
       aggregates: Array<{ function: string; field: string; alias?: string }>;
       filter?: string;
-      groupBy?: string[];
+      group_by?: string[];
     }
   ): Promise<unknown> {
-    const { tableName, aggregates, filter, groupBy } = options;
+    const { table_name: tableName, aggregates, filter, group_by: groupBy } = options;
 
     // Build fields list: group-by columns + aggregate expressions
     const fields: string[] = [];
@@ -371,7 +370,7 @@ export class DreamFactoryService {
     if (groupBy && groupBy.length > 0) {
       try {
         const params: Record<string, unknown> = {
-          tableName,
+          table_name: tableName,
           fields,
           limit: 0, // no limit on grouped results
         };
@@ -405,10 +404,10 @@ export class DreamFactoryService {
     let totalCount: number | null = null;
 
     while (true) {
-      const params: Record<string, unknown> = { tableName, limit: PAGE_SIZE, offset };
+      const params: Record<string, unknown> = { table_name: tableName, limit: PAGE_SIZE, offset };
       if (fieldsParam) params.fields = fieldsParam;
       if (filter) params.filter = filter;
-      if (offset === 0) params.includeCount = true;
+      if (offset === 0) params.include_count = true;
 
       const data = await this.getTableData(baseUrl, auth, params) as Record<string, unknown>;
       const rows = (data?.resource ?? []) as Record<string, unknown>[];
@@ -468,7 +467,7 @@ export class DreamFactoryService {
     auth: DFAuthConfig,
     options: {
       compact?: boolean;
-      resourceName?: string;
+      resource_name?: string;
       tables?: boolean;
       model?: boolean;
       refresh?: boolean;
@@ -477,7 +476,7 @@ export class DreamFactoryService {
   ): Promise<unknown> {
     const params = new URLSearchParams();
     if (options.compact) params.set('compact', 'true');
-    if (options.resourceName) params.set('resource_name', options.resourceName);
+    if (options.resource_name) params.set('resource_name', options.resource_name);
     if (options.tables) params.set('tables', 'true');
     if (options.model) params.set('model', 'true');
     if (options.refresh) params.set('refresh', 'true');

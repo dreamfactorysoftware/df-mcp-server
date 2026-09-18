@@ -39,9 +39,9 @@ const FILE_TOOLS: FileToolDefinition[] = [
     description: 'List files and folders in a path',
     schema: z.object({
       path: z.string().optional().describe('Path to list (empty for root)'),
-      includeFiles: z.boolean().optional().describe('Include files in listing'),
-      includeFolders: z.boolean().optional().describe('Include folders in listing'),
-      fullTree: z.boolean().optional().describe('Return full directory tree')
+      include_files: z.boolean().optional().describe('Include files in listing'),
+      include_folders: z.boolean().optional().describe('Include folders in listing'),
+      full_tree: z.boolean().optional().describe('Return full directory tree')
     }),
     handler: async ({ path, ...options }, _context, apiConfig, auth) => {
       const data = await DreamFactoryService.listFiles(apiConfig.baseUrl, auth, path ?? '', options);

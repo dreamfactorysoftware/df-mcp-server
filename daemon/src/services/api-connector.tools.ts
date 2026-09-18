@@ -81,16 +81,16 @@ export function registerApiConnectorTools(
     'Find Table Across All Databases',
     'Search for a table by name across all connected databases and return its schema if found',
     z.object({
-      tableName: z.string().describe('The table name to search for')
+      table_name: z.string().describe('The table name to search for')
     }),
-    async ({ tableName }, { sessionId }) => {
+    async ({ table_name }, { sessionId }) => {
       const auth = getAuth(sessionManager, sessionId);
       const results: Record<string, unknown> = {};
 
       await Promise.all(
         dbConfigs.map(async (api) => {
           try {
-            const schema = await DreamFactoryService.getTableSchema(tableName, api.baseUrl, auth);
+            const schema = await DreamFactoryService.getTableSchema(table_name, api.baseUrl, auth);
             results[api.name] = { found: true, schema };
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -107,7 +107,7 @@ export function registerApiConnectorTools(
         .filter(([, v]) => (v as { found: boolean }).found)
         .map(([k]) => k);
 
-      return respond({ tableName, foundIn, details: results });
+      return respond({ table_name, foundIn, details: results });
     }
   );
 

@@ -82,6 +82,22 @@ When the facade is active, tool results are also minified, stripped of PHP stack
 
 Every request row in `mcp_request_log` records what lazy mode saved (`mode`, `catalog_tokens`, `preamble_saved_per_turn`, `result_chars_withheld`, `facade_calls`), and the usage aggregate exposes `tokens_saved`.
 
+### Tool arguments and annotations
+
+Argument names on every generated database and file tool are **snake_case**, matching the tool names and DreamFactory's own REST parameters: `table_name`, `count_only`, `include_count`, `include_schema`, `procedure_name`, `function_name`, `group_by`, `resource_name`, `as_list`, `include_files`, `full_tree`, and so on. The former camelCase names (`tableName`, `countOnly`, ...) remain accepted forever as aliases; in fact any casing of a known argument is mapped to the canonical name before validation (`TableName`, `TABLE_NAME`, `table-name`). Custom tools get the same treatment for whatever parameter names the admin defined.
+
+An argument key that maps to nothing is a validation **error**, never silently dropped:
+
+```
+Invalid arguments for sales_get_table_data: unknown argument table_nam, did you mean table_name
+```
+
+In merged tool style the `service` argument also accepts a service's admin label or any casing of its name.
+
+Every tool carries [MCP tool annotations](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#tool-annotations), derived from the verb: `get_*`, `list_*`, `search*`, `describe_*`, `aggregate_*`, `find_*` and `discover_*` are `readOnlyHint: true`; `delete_*` and `update_*` are `destructiveHint: true`; `create_*` is non-destructive and non-idempotent; stored procedure/function calls, `request_access` and the lazy facade's `call_tool` leave the effect unknown. Generated tools are `openWorldHint: false`; custom tools are open-world and take `readOnlyHint` from their HTTP method. Clients such as VS Code use these to auto-approve reads.
+
+Each `tools/call` row in `mcp_request_log` also records `arg_aliases` (keys accepted through an alias) and `arg_errors` (unknown keys rejected), in every lazy mode, so argument problems can be tracked per tool.
+
 ### Configuration
 
 Set `APP_URL` in your DreamFactory `.env` to the **external URL clients use to reach DreamFactory** — the public address (e.g. `https://df.example.com`), **not** `http://localhost`. The MCP server uses `APP_URL` to build its OAuth discovery and callback URLs. If it is left as `localhost` (or any address clients can't reach), MCP OAuth fails. Login and session validation run in-process and do not depend on it. After changing it, run `php artisan config:clear`.
