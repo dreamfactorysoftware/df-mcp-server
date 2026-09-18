@@ -330,6 +330,66 @@ class McpDaemonClient
     }
 
     /**
+     * Ask the data daemon what tools/list would advertise for this service
+     * config + PHP-scoped backend catalog + client name, without opening an
+     * MCP session (POST /mcp/catalog/preview). Carries the same _mcpConfig and
+     * _mcpAvailableServices a proxied envelope would, but never an
+     * _mcpPayload — nothing is executed and no audit row is written.
+     *
+     * @param array<string, mixed> $config
+     * @param array<int, array<string, mixed>> $availableServices
+     * @return array<string, mixed> the daemon's preview, or ['error' => string, 'status' => int]
+     */
+    public function catalogPreview(
+        string $mcpService,
+        array $config,
+        array $availableServices,
+        string $clientName,
+        ?string $lazyMode = null
+    ): array {
+        $body = [
+            'serviceName'           => $mcpService,
+            '_mcpConfig'            => $config ?: (object) [],
+            '_mcpAvailableServices' => array_values($availableServices),
+            'clientName'            => $clientName,
+        ];
+        if ($lazyMode !== null) {
+            $body['lazyMode'] = $lazyMode;
+        }
+
+        try {
+            $client = new \GuzzleHttp\Client(['timeout' => $this->timeout]);
+            $response = $client->post($this->daemonUrl . '/mcp/catalog/preview', [
+                'headers'     => ['Content-Type' => 'application/json'] + self::internalKeyHeader(),
+                'body'        => json_encode($body),
+                'expect'      => false,
+                'http_errors' => false,
+            ]);
+        } catch (\GuzzleHttp\Exception\ConnectException $e) {
+            Log::error('Failed to connect to MCP daemon for catalog preview', [
+                'daemonUrl' => $this->daemonUrl,
+                'error'     => $e->getMessage(),
+            ]);
+
+            return ['error' => 'MCP daemon is not reachable at ' . $this->daemonUrl, 'status' => 503];
+        }
+
+        $status = $response->getStatusCode();
+        $decoded = json_decode((string) $response->getBody(), true);
+        if ($status >= 400 || !is_array($decoded) || !isset($decoded['tools'])) {
+            Log::error('MCP daemon catalog preview failed', ['mcpService' => $mcpService, 'status' => $status]);
+
+            return [
+                'error'  => 'MCP daemon catalog preview failed (HTTP ' . $status . ')'
+                    . (is_array($decoded) && isset($decoded['error']) ? ': ' . json_encode($decoded['error']) : ''),
+                'status' => 502,
+            ];
+        }
+
+        return $decoded;
+    }
+
+    /**
      * Shared-secret header for the daemons. Both the data daemon and
      * df-system-mcp-server reject /mcp/* calls without a matching
      * x-mcp-internal-key when MCP_INTERNAL_KEY is set on their side.

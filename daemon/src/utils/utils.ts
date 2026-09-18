@@ -94,7 +94,7 @@ export function parseConfigFromHeaders(req: Request) {
 /**
  * Parse a pre-resolved services array (from the request body envelope).
  */
-function parseAvailableServicesList(services: unknown[], rootUrl: string): ApiConfig[] | null {
+export function parseAvailableServicesList(services: unknown[], rootUrl: string): ApiConfig[] | null {
   try {
     const typed = services as Array<{
       name: string;
@@ -216,6 +216,57 @@ export async function discoverServices(
     console.error('[discoverServices] Error during discovery:', error);
     throw error;
   }
+}
+
+export type ParsedMcpConfig = {
+  disabledTools?: Set<string>;
+  customTools?: CustomToolDefinition[];
+  lazyMode: LazyMode;
+  toolStyle: ToolStyle;
+};
+
+/**
+ * Read the per-service settings the daemon honours out of the `_mcpConfig`
+ * envelope (or the X-Mcp-Config header). One parser for the proxied MCP
+ * request and the catalog preview, so the preview can never drift from what a
+ * real session gets.
+ */
+export function parseMcpConfig(mcpConfigData: unknown): ParsedMcpConfig {
+  const parsed: ParsedMcpConfig = { lazyMode: 'auto', toolStyle: 'prefixed' };
+  if (!mcpConfigData || typeof mcpConfigData !== 'object' || Array.isArray(mcpConfigData)) {
+    return parsed;
+  }
+  const data = mcpConfigData as Record<string, any>;
+  if (['auto', 'on', 'off'].includes(data.lazy_mode)) {
+    parsed.lazyMode = data.lazy_mode;
+  }
+  if (['prefixed', 'merged'].includes(data.tool_style)) {
+    parsed.toolStyle = data.tool_style;
+  }
+  if (Array.isArray(data.disabled_tools) && data.disabled_tools.length > 0) {
+    parsed.disabledTools = new Set(data.disabled_tools as string[]);
+    console.log(`Disabled tools (${parsed.disabledTools.size}):`, [...parsed.disabledTools]);
+  }
+  if (Array.isArray(data.custom_tools) && data.custom_tools.length > 0) {
+    const customTools = (data.custom_tools as any[])
+      .filter((t: any) => t.enabled !== false && t.enabled !== 0)
+      .map((t: any): CustomToolDefinition => ({
+        name: t.name,
+        description: t.description ?? '',
+        tool_type: t.tool_type ?? 'api',
+        http_method: t.http_method ?? undefined,
+        url: t.url ?? undefined,
+        parameters: Array.isArray(t.parameters) ? t.parameters : [],
+        headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
+        function: t.function ?? undefined,
+        secrets: t.secrets && typeof t.secrets === 'object' && !Array.isArray(t.secrets) ? t.secrets : undefined,
+      }));
+    if (customTools.length > 0) {
+      parsed.customTools = customTools;
+      console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
+    }
+  }
+  return parsed;
 }
 
 export function createServer(

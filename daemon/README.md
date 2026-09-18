@@ -89,6 +89,7 @@ The daemon accepts two credential kinds. **At least one is required**; the PHP p
 | `GET` | `/health` | Health check with active sessions list |
 | `GET` | `/ping` | Alias for `/health` |
 | `POST` | `/mcp/cache/clear` | Clear session cache (body: `{"service": "serviceName"}` or `{}` for all) |
+| `POST` | `/mcp/catalog/preview` | What `tools/list` would advertise for a service config, without a session. Body: `{serviceName, _mcpConfig, _mcpAvailableServices, clientName?, lazyMode?}`; returns `{tools, count, bytes, lazy, facade}`. Requires `X-Mcp-Internal-Key` when `MCP_INTERNAL_KEY` is set. |
 | `ALL` | `/mcp/{serviceName}` | MCP protocol endpoint (JSON-RPC) |
 
 ### Required Headers

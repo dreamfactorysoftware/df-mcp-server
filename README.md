@@ -106,6 +106,33 @@ Verb schemas are still sent per prefixed tool. MCP clients require a full `input
 
 Exposed Services applies only to the data-plane `mcp` type. The `system_mcp` type (see [System API MCP Server](#system-api-mcp-server)) exposes the System API itself and has no DB/file tool catalog, so the picker is hidden there and `exposed_services` / `scope_tools` / `MCP_SCOPE_TOOLS` are ignored.
 
+### Previewing a role's tool catalog (admin)
+
+To see exactly what a role or API key will get from `tools/list` **before** anyone connects, the admin UI calls:
+
+```
+GET /_internal/ai/mcp-catalog?service=<name|id>&role_id=<id>        # preview as a role
+GET /_internal/ai/mcp-catalog?service=<name|id>&app_id=<id>         # preview as an API key's app (its default role)
+    [&client=<initialize.clientInfo.name>] [&lazy_mode=auto|on|off]  # optional what-if overrides
+```
+
+It requires an admin session token (`X-DreamFactory-Session-Token`) and works only for data-plane `mcp` services. No MCP session is opened, no tool runs, and no `mcp_request_log` row is written. The daemon computes the list through its real registration path (`POST /mcp/catalog/preview`, internal-key gated) from the same service config and role-scoped Exposed Services catalog the proxy would send for that role.
+
+The response carries the catalog and the role's per-backend verbs, so the UI can flag tools that are advertised but denied at call time:
+
+```json
+{
+  "service": {"id": 12, "name": "storefront", "type": "mcp"},
+  "role": {"id": 5, "name": "analyst", "is_active": true},
+  "client": "df-admin-preview", "lazy_mode": "auto", "tool_style": "prefixed",
+  "backends": [{"name": "ordersdb", "type": "mysql", "category": "database", "verbs": ["GET"]}],
+  "tools": [{"name": "ordersdb_get_table_data", "title": "ordersdb: Get Table Data", "description": "...", "category": "database", "write": false, "service": "ordersdb"}],
+  "count": 21, "bytes": 10703, "lazy": "direct", "facade": []
+}
+```
+
+`tools` is the full callable catalog (facade tools excluded); `bytes` is its serialized `tools/list` size, the number `lazy_mode: auto` compares against the threshold; `lazy` is the decision for that client (`lazy`, `direct` or `passthrough`), and when it is `lazy`, `facade` lists what the client actually sees instead of the catalog (the facade plus this service's hot tools). `category` is `database`, `file`, `custom`, or `global`; `write` marks tools that need more than `GET` on their backend, so a `write` tool on a backend whose `verbs` lack `POST`/`PUT`/`PATCH`/`DELETE` will be advertised but rejected when called.
+
 ### Authentication
 
 By default the MCP service uses OAuth-based authentication. Users authenticate with DreamFactory via OAuth to obtain a session token; the Laravel controller validates requests and passes the session token to the daemon via the `X-DreamFactory-Session-Token` header.
