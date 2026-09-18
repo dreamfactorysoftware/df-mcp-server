@@ -3,6 +3,7 @@
 namespace DreamFactory\Core\McpServer;
 
 use DreamFactory\Core\Enums\ServiceTypeGroups;
+use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpAccessController;
 use DreamFactory\Core\McpServer\Http\Controllers\InternalMcpUsageController;
 use DreamFactory\Core\McpServer\Http\Middleware\McpStreamMiddleware;
 use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
@@ -166,6 +167,11 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         Route::middleware('df.auth_check')->get(
             '_internal/ai/mcp-usage',
             [InternalMcpUsageController::class, 'usage']
+        );
+        // "Who can connect" for one MCP service: granted roles + roles seen in the log.
+        Route::middleware('df.auth_check')->get(
+            '_internal/ai/mcp-access',
+            [InternalMcpAccessController::class, 'access']
         );
     }
 

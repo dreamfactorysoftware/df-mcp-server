@@ -22,6 +22,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'custom_login_url',
         'auto_oauth_service',
         'allow_api_key_auth',
+        'require_role_access',
         'disabled_tools',
         'lazy_mode',
         'exposed_services',
@@ -33,6 +34,7 @@ class McpServerConfig extends BaseServiceConfigModel
         'service_id' => 'integer',
         'app_id' => 'integer',
         'allow_api_key_auth' => 'boolean',
+        'require_role_access' => 'boolean',
         'disabled_tools' => 'array',
         'exposed_services' => 'array',
         'scope_tools' => 'boolean',
@@ -291,6 +293,12 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['description'] = 'Pick at least one database or file service or this MCP endpoint will not expose table/file tools (custom tools, search, and fetch still register). Empty always means none — it does not fall back to every service on the instance.';
                 $schema['values'] = self::backendServiceChoices();
                 break;
+            case 'require_role_access':
+                $schema['label'] = 'Require Role Access';
+                $schema['description'] = 'When on, a user or API key can only connect to this MCP server if its role has been granted access to this service (Roles > Access). Their role still decides which of the exposed APIs they can use once connected. When off, anyone who can log in to DreamFactory can connect and sees whatever their role already allows. Existing servers keep this off after upgrade; new servers start with it on.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = true;
+                break;
             case 'allow_api_key_auth':
                 $schema['label'] = 'Allow API Key Authentication';
                 $schema['description'] = 'Enable API key authentication as an alternative to OAuth. When enabled, clients can authenticate using the X-DreamFactory-API-Key header; the key\'s app must be active and have a role assigned, and that role scopes access. Optionally include X-DreamFactory-Session-Token for user-specific RBAC. OAuth Bearer tokens always take precedence when both are sent.';
@@ -448,6 +456,11 @@ class McpServerConfig extends BaseServiceConfigModel
             // Auto-set admin app if not provided
             if (empty($model->app_id)) {
                 $model->app_id = self::getAdminAppId();
+            }
+            // New services are closed until an admin grants a role access.
+            // Existing rows keep the column default (false) from the migration.
+            if (is_null($model->require_role_access)) {
+                $model->require_role_access = true;
             }
         });
     }
