@@ -366,23 +366,39 @@ export class DreamFactoryService {
       fields.push(`${fn}(${field})`);
     }
 
-    // Try server-side aggregation first (single API call)
-    if (groupBy && groupBy.length > 0) {
+    // Try server-side aggregation first (single API call). DreamFactory accepts
+    // aggregate fields with or without GROUP BY, so whole-table MIN/MAX/COUNT
+    // also push down instead of paging the table through the 100k-row fallback.
+    {
       try {
-        const params: Record<string, unknown> = {
-          table_name: tableName,
-          fields,
-          limit: 0, // no limit on grouped results
-        };
-        params.group = groupBy.join(',');
+        const params: Record<string, unknown> = { table_name: tableName, fields };
         if (filter) {
           params.filter = filter;
         }
-
-        const data = await this.getTableData(baseUrl, auth, params) as Record<string, unknown>;
-        const rows = (data?.resource ?? []) as Record<string, unknown>[];
-
-        return { results: rows, mode: 'server-side' };
+        if (!groupBy || groupBy.length === 0) {
+          // Whole-table aggregate: exactly one row.
+          const data = await this.getTableData(baseUrl, auth, { ...params, limit: 1 }) as Record<string, unknown>;
+          return { results: (data?.resource ?? []) as Record<string, unknown>[], mode: 'server-side' };
+        }
+        // Grouped: DreamFactory caps every response at the service's max_records
+        // (commonly 1000), so page through the groups. Ordering by the group
+        // columns makes offset paging deterministic (no missing or duplicate groups).
+        params.group = groupBy.join(',');
+        params.order = groupBy.join(',');
+        const PAGE = 1000;
+        const MAX_GROUPS = 50000;
+        const rows: Record<string, unknown>[] = [];
+        let truncated = false;
+        for (let offset = 0; ; offset += PAGE) {
+          const data = await this.getTableData(baseUrl, auth, { ...params, limit: PAGE, offset }) as Record<string, unknown>;
+          const page = (data?.resource ?? []) as Record<string, unknown>[];
+          rows.push(...page);
+          if (page.length < PAGE) break;
+          if (rows.length >= MAX_GROUPS) { truncated = true; break; }
+        }
+        return truncated
+          ? { results: rows, mode: 'server-side', groups: rows.length, truncated: true, note: `Stopped at ${MAX_GROUPS} groups; add a filter to narrow the grouping.` }
+          : { results: rows, mode: 'server-side', groups: rows.length };
       } catch (serverErr) {
         console.warn('[aggregateData] Server-side aggregation failed, falling back to client-side:', serverErr instanceof Error ? serverErr.message : serverErr);
       }

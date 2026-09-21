@@ -318,7 +318,7 @@ export function createServer(
     fileApis.length > 0 ? `Available file storage APIs: ${fileApis.join(', ')}` : '',
     '',
     '## Getting Started',
-    `IMPORTANT: Call \`${examplePrefix}_get_data_model\` FIRST before making any data queries.`,
+    `IMPORTANT: Call \`${p}get_data_model\` FIRST before making any data queries.`,
     'The data model provides in a single ~10-20KB response:',
     '- Every table with all columns (name, type, primary key, foreign keys)',
     '- Foreign key references showing how tables connect',
