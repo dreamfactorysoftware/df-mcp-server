@@ -105,11 +105,11 @@ class CatalogPreviewWiringTest extends TestCase
         $server = $this->src('daemon/src/server.ts');
         $route = strpos($server, "app.post('/mcp/catalog/preview'");
         $this->assertNotFalse($route);
-        $gate = strpos($server, "req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY", $route);
+        $gate = strpos($server, "app.use('/mcp', internalKeyGate);");
         $call = strpos($server, 'previewCatalog(', $route);
         $this->assertNotFalse($gate);
         $this->assertNotFalse($call);
-        $this->assertLessThan($call, $gate, 'internal key is checked before the preview runs');
+        $this->assertLessThan($route, $gate, 'internal key gate is mounted before the preview route');
 
         // The proxied request and the preview parse the config through one function.
         $this->assertStringContainsString('parseMcpConfig(mcpConfigData)', $server);

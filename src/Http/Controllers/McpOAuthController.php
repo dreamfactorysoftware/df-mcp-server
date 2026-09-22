@@ -102,54 +102,39 @@ class McpOAuthController extends Controller
             ], 400);
         }
 
-        // Get client-provided redirect_uris from the registration request
-        $requestedRedirectUris = $request->input('redirect_uris', []);
+        $requestedRedirectUris = array_values(array_filter((array) $request->input('redirect_uris', []), 'is_string'));
         $clientName = $request->input('client_name', $mcpService);
-
-        // Validate redirect_uris - must be valid URLs
-        $validatedRedirectUris = [];
-        foreach ($requestedRedirectUris as $uri) {
-            if (!is_string($uri)) {
-                continue;
-            }
-            $parsed = parse_url($uri);
-            // Accept https:// URIs and localhost for development
-            if (!empty($parsed['scheme']) && !empty($parsed['host'])) {
-                if ($parsed['scheme'] === 'https' ||
-                    ($parsed['scheme'] === 'http' && in_array($parsed['host'], ['localhost', '127.0.0.1']))) {
-                    $validatedRedirectUris[] = $uri;
-                }
-            }
-        }
-
-        // Always allow Claude's known redirect URIs for compatibility
-        $claudeRedirectUris = [
-            'https://claude.ai/api/mcp/auth_callback',
-            'https://claude.com/api/mcp/auth_callback',
-        ];
 
         // Redirect URIs configured on the service are always allowed.
         $configuredUris = McpServerConfig::normalizeRedirectUris($serviceConfig['redirect_uris'] ?? null);
 
-        // Merge with any existing redirect_uris, avoiding duplicates
+        // This endpoint is unauthenticated, so caller-supplied redirect_uris are
+        // not persisted into the shared client unless they are loopback (native
+        // apps, RFC 8252). The registered set is Claude's callbacks, the admin
+        // allowlist, and loopback URIs. Anything else is dropped: add it to the
+        // service's redirect_uris to allow it.
         $client = McpOAuthClient::findByClientId($serviceConfig['oauth_client_id']);
+        $allowedUris = McpOAuthClient::registrableRedirectUris($requestedRedirectUris, $client->redirect_uris ?? [], $configuredUris);
+        $dropped = array_values(array_filter($requestedRedirectUris, fn ($uri) => !in_array($uri, $allowedUris, true)));
+        if ($dropped) {
+            Log::warning('MCP OAuth: registration redirect_uris not in the allowlist were dropped; add them to the service redirect_uris to allow them', [
+                'dropped' => $dropped,
+                'service' => $mcpService,
+            ]);
+        }
+
         if ($client) {
-            $existingUris = $client->redirect_uris ?? [];
-            $allUris = array_unique(array_merge($existingUris, $validatedRedirectUris, $claudeRedirectUris, $configuredUris));
-            $client->update(['redirect_uris' => array_values($allUris)]);
-            $validatedRedirectUris = $allUris;
+            $client->update(['redirect_uris' => $allowedUris]);
         } else {
-            // Create client entry if it doesn't exist
-            $allUris = array_unique(array_merge($validatedRedirectUris, $claudeRedirectUris, $configuredUris));
             McpOAuthClient::create([
                 'client_id' => $serviceConfig['oauth_client_id'],
                 'client_secret' => $serviceConfig['oauth_client_secret'],
                 'name' => $clientName,
-                'redirect_uris' => array_values($allUris),
+                'redirect_uris' => $allowedUris,
                 'is_active' => true,
             ]);
-            $validatedRedirectUris = $allUris;
         }
+        $validatedRedirectUris = $allowedUris;
 
         Log::info('MCP OAuth: Client registration', [
             'client_name' => $clientName,
@@ -421,6 +406,29 @@ class McpOAuthController extends Controller
 
         if (empty($email) || empty($password)) {
             return $this->errorResponse('invalid_request', 'Email and password are required');
+        }
+
+        // Validate client_id and redirect_uri BEFORE issuing an authorization
+        // code, exactly as authorizeGet does. The form posts them back from the
+        // browser, so without this a code could be delivered to any origin.
+        $serviceConfig = $request->attributes->get('mcp_service_config');
+        if (!$serviceConfig || empty($serviceConfig['oauth_client_id']) || !is_string($clientId) || $clientId !== $serviceConfig['oauth_client_id']) {
+            return $this->errorResponse('invalid_client', 'Invalid client_id');
+        }
+        if (empty($redirectUri) || !is_string($redirectUri)) {
+            return $this->errorResponse('invalid_request', 'Missing redirect_uri');
+        }
+        if (!in_array(parse_url($redirectUri, PHP_URL_SCHEME), ['http', 'https'], true)) {
+            return $this->errorResponse('invalid_request', 'redirect_uri scheme must be http or https');
+        }
+        $configuredUris = McpServerConfig::normalizeRedirectUris($serviceConfig['redirect_uris'] ?? null);
+        $client = McpOAuthClient::findByClientId($clientId);
+        if (!$client || !$client->isValidRedirectUri($redirectUri, $configuredUris)) {
+            Log::warning('MCP OAuth login: redirect_uri not registered', [
+                'provided' => $redirectUri,
+                'service'  => $mcpService,
+            ]);
+            return $this->errorResponse('invalid_request', 'redirect_uri is not registered for this client');
         }
 
         // Authenticate against DreamFactory

@@ -10,6 +10,9 @@ import { registerCustomTools } from './custom-tools.service.js';
 import { SessionService } from './session.service.js';
 import { createLazyState, installLazyFacade, SearchIndex, shapeText, PAGE_CHARS, type LazyMode } from './lazy.service.js';
 
+// These tests exercise function custom tools, which are opt-in (see function-tools.test.ts).
+process.env.MCP_ALLOW_FUNCTION_TOOLS = 'true';
+
 // Run: npm test (node --import tsx --test)
 
 async function connect(server: McpServer, clientName: string) {

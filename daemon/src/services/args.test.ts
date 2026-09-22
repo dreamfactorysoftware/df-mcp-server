@@ -8,6 +8,9 @@ import { annotationsFor, normalizeArgs, serviceNameMap, snake } from './args.js'
 import { runWithResponse } from './ledger.js';
 import type { ApiConfig, CustomToolDefinition } from '../types.js';
 
+// These tests exercise function custom tools, which are opt-in (see function-tools.test.ts).
+process.env.MCP_ALLOW_FUNCTION_TOOLS = 'true';
+
 // Run: npm test (node --import tsx --test)
 //
 // Issue #66: snake_case argument names, camelCase aliases, a normaliser that

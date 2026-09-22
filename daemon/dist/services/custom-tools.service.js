@@ -3,6 +3,18 @@ import { respond, respondError, createToolRegistrar, getAuth } from './tool-util
 const MAX_RESPONSE_SIZE = 1_048_576; // 1 MB
 const REQUEST_TIMEOUT_MS = 30_000; // 30 seconds
 const FUNCTION_TIMEOUT_MS = 30_000; // 30 seconds
+/**
+ * Function-type custom tools run an admin-authored JS body through new Function()
+ * inside the daemon: arbitrary code execution on a request-driven path. Off by
+ * default; an operator who accepts that sets MCP_ALLOW_FUNCTION_TOOLS=true.
+ * Read per call so the health endpoint and tests see the live value.
+ */
+export function functionToolsEnabled() {
+    return (process.env.MCP_ALLOW_FUNCTION_TOOLS ?? '').trim().toLowerCase() === 'true';
+}
+export function isFunctionTool(t) {
+    return t.tool_type === 'function' || (!t.url && !!t.function);
+}
 function safeStringify(value) {
     try {
         return JSON.stringify(value);
@@ -52,6 +64,10 @@ export function buildZodSchema(parameters) {
 export async function executeFunctionToolRequest(toolDef, params) {
     const functionBody = toolDef.function;
     console.log(`[custom-tool] Executing function "${toolDef.name}", params:`, safeStringify(params));
+    // createServer does not register function tools when disabled; this is the backstop.
+    if (!functionToolsEnabled()) {
+        return respondError('Function tools are disabled on this server (MCP_ALLOW_FUNCTION_TOOLS is not true).');
+    }
     if (!functionBody) {
         console.error(`[custom-tool] Function "${toolDef.name}" has no function body`);
         return respondError('Function tool has no function defined.');
@@ -199,7 +215,7 @@ export function registerCustomTools(server, customTools, sessionManager, disable
     const registerTool = createToolRegistrar(server, disabledTools);
     for (const toolDef of customTools) {
         const schema = buildZodSchema(toolDef.parameters);
-        const isFunction = toolDef.tool_type === 'function' || (!toolDef.url && !!toolDef.function);
+        const isFunction = isFunctionTool(toolDef);
         console.log(`[custom-tool] Registering "${toolDef.name}" — tool_type=${toolDef.tool_type}, isFunction=${isFunction}, url=${toolDef.url ?? '(none)'}`);
         registerTool(toolDef.name, toolDef.name, toolDef.description, schema, async (params, context) => {
             if (isFunction) {

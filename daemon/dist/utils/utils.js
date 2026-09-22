@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerDreamFactoryTools } from '../services/tools.service.js';
-import { registerCustomTools } from '../services/custom-tools.service.js';
+import { registerCustomTools, functionToolsEnabled, isFunctionTool } from '../services/custom-tools.service.js';
 import { registerGlobalTools } from '../services/global-tools.service.js';
 import { createLazyState, installLazyFacade, LAZY_INSTRUCTIONS } from '../services/lazy.service.js';
 import { installArgNormalizer } from '../services/args.js';
@@ -245,10 +245,18 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
         console.log(`[allow_writes=false] hiding ${hiddenCustom.length} custom tool(s):`, hiddenCustom.map(t => t.name));
         customTools = customTools.filter(t => !hiddenCustom.includes(t));
     }
+    // Function tools are opt-in (MCP_ALLOW_FUNCTION_TOOLS=true): when off they are
+    // not registered at all, and the instructions say why.
+    const blockedFunctions = functionToolsEnabled() ? [] : (customTools ?? []).filter(isFunctionTool);
+    if (blockedFunctions.length > 0) {
+        console.log(`[function-tools-disabled] not registering ${blockedFunctions.length} function tool(s):`, blockedFunctions.map(t => t.name));
+        customTools = customTools.filter(t => !blockedFunctions.includes(t));
+    }
     const instructions = [
         `You are connected to the DreamFactory service "${serviceName}".`,
         allowWrites ? '' : 'THIS SERVER IS READ-ONLY: writes are disabled by the administrator. No tool can create, update or delete records or files, or execute stored procedures/functions. Do not look for such tools or ask to have them enabled — answer from reads and aggregates only.',
         hiddenCustom.length > 0 ? `${hiddenCustom.length} custom tool${hiddenCustom.length === 1 ? '' : 's'} hidden because writes are off.` : '',
+        blockedFunctions.length > 0 ? `${blockedFunctions.length} function tool${blockedFunctions.length === 1 ? ' is' : 's are'} configured but not available: this server does not run function tools (the administrator has not set MCP_ALLOW_FUNCTION_TOOLS=true). Do not try to call ${blockedFunctions.map(t => t.name).join(', ')}.` : '',
         dbApis.length > 0 ? `Available database APIs: ${dbApis.join(', ')}` : '',
         fileApis.length > 0 ? `Available file storage APIs: ${fileApis.join(', ')}` : '',
         '',

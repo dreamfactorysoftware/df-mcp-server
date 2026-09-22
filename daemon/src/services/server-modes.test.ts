@@ -14,10 +14,12 @@ import path from 'node:path';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const daemonRoot = path.join(here, '..', '..');
 const tsx = path.join(daemonRoot, 'node_modules', 'tsx', 'dist', 'cli.cjs');
+const KEY = 'server-modes-test-key';
 
 async function boot(env: Record<string, string>): Promise<{ proc: ChildProcess; url: string }> {
   const proc = spawn(process.execPath, [tsx, path.join(daemonRoot, 'src', 'server.ts')], {
-    env: { PATH: process.env.PATH ?? '', MCP_DAEMON_PORT: '0', MCP_DAEMON_HOST: '127.0.0.1', ...env },
+    env: { PATH: process.env.PATH ?? '', MCP_DAEMON_PORT: '0', MCP_DAEMON_HOST: '127.0.0.1',
+      MCP_INTERNAL_KEY: KEY, MCP_ALLOW_FUNCTION_TOOLS: 'true', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const url = await new Promise<string>((resolve, reject) => {
@@ -57,6 +59,7 @@ async function rpc(url: string, payload: unknown, sessionId?: string, lazyMode?:
       'Accept': 'application/json, text/event-stream',
       'X-Mcp-Base-Url': 'http://127.0.0.1:1/api/v2',
       'X-DreamFactory-Session-Token': 'test-token',
+      'X-Mcp-Internal-Key': KEY,
       ...(sessionId ? { 'Mcp-Session-Id': sessionId } : {}),
       ...extraHeaders,
     },
@@ -100,7 +103,7 @@ test('default (unset) is stateless: no session id, every request stands alone', 
     // tools/call with no prior handshake at all (rpc bridge style) also works.
     assert.equal((await rpc(url, toolsCall)).status, 200);
 
-    const get = await fetch(`${url}/mcp/svc`, { headers: { 'X-DreamFactory-Session-Token': 't' } });
+    const get = await fetch(`${url}/mcp/svc`, { headers: { 'X-DreamFactory-Session-Token': 't', 'X-Mcp-Internal-Key': KEY } });
     assert.equal(get.status, 405);
   } finally { proc.kill(); }
 });

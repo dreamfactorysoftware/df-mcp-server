@@ -29,8 +29,12 @@ final class McpHealth
      *                                       throws when shelling out is not permitted
      * @param string|null     $forwardedOrigin origin from X-Forwarded-Proto/-Host (see forwardedOrigin()),
      *                                       null when the request carried neither header
+     * @param int|null        $functionTools enabled function custom tools configured; null when unknown
+     *
+     * $mcpConfig['daemon'] may also carry internal_key_resolved (bool: a key, from
+     * MCP_INTERNAL_KEY or the generated file, is being sent) and internal_key_file.
      */
-    public static function report(array $mcpConfig, ?string $appUrl, string $requestOrigin, callable $probe, callable $nodeVersion, ?string $forwardedOrigin = null): array
+    public static function report(array $mcpConfig, ?string $appUrl, string $requestOrigin, callable $probe, callable $nodeVersion, ?string $forwardedOrigin = null, ?int $functionTools = null): array
     {
         $daemons = [
             self::probeDaemon(DaemonTarget::forServiceType(McpServiceTypes::DATA, $mcpConfig), $probe),
@@ -46,6 +50,7 @@ final class McpHealth
         $checks[] = self::internalKeyCheck($mcpConfig, $daemons);
         $checks[] = self::nodeCheck($nodeVersion, $daemons[0]);
         $checks[] = self::statelessCheck($daemons[0]);
+        $checks[] = self::functionToolsCheck($daemons[0], $functionTools);
 
         return [
             'status'  => self::worst(array_column($checks, 'status')),
@@ -66,6 +71,8 @@ final class McpHealth
             'version'    => null,
             'mode'       => null,
             'tools'      => null,
+            'function_tools' => null,
+            'internal_key' => null,
             'error'      => null,
         ];
         if (!$target['enabled']) {
@@ -92,6 +99,8 @@ final class McpHealth
             $record['version'] = isset($body['version']) ? (string) $body['version'] : null;
             $record['mode'] = in_array($body['mode'] ?? null, ['stateful', 'stateless'], true) ? $body['mode'] : null;
             $record['tools'] = isset($body['tools']) && is_numeric($body['tools']) ? (int) $body['tools'] : null;
+            $record['function_tools'] = is_bool($body['function_tools'] ?? null) ? $body['function_tools'] : null;
+            $record['internal_key'] = is_string($body['internal_key'] ?? null) ? $body['internal_key'] : null;
         } catch (\Throwable $e) {
             $record['latency_ms'] = (int) round((microtime(true) - $start) * 1000);
             $record['error'] = $e->getMessage();
@@ -199,15 +208,51 @@ final class McpHealth
 
     private static function internalKeyCheck(array $mcpConfig, array $daemons): array
     {
-        $key = $mcpConfig['daemon']['internal_key'] ?? null;
-        $set = is_string($key) && $key !== '';
-        $details = ['internal_key_set' => $set];
+        $env = $mcpConfig['daemon']['internal_key'] ?? null;
+        $env = is_string($env) && $env !== '';
+        $file = $mcpConfig['daemon']['internal_key_file'] ?? null;
+        // A generated key file counts as configured.
+        $set = $env || !empty($mcpConfig['daemon']['internal_key_resolved']);
+        $details = ['internal_key_set' => $set, 'source' => $env ? 'env' : ($set ? 'file' : null), 'internal_key_file' => $env ? null : $file];
+        if (!$set) {
+            return self::check('internal_key', 'error', 'No shared key: MCP_INTERNAL_KEY is unset and DreamFactory could not write ' . ($file ?: 'storage/framework/mcp_internal_key') . '. The data daemon rejects every MCP call without it. Make storage/framework writable by the web server, or set the same MCP_INTERNAL_KEY in DreamFactory and on the daemons.', $details);
+        }
+        // What the data daemon itself found (daemons that predate this report null).
+        $daemonKey = $daemons[0]['internal_key'] ?? null;
+        $details['daemon_internal_key'] = $daemonKey;
+        $fix = 'Set the same MCP_INTERNAL_KEY in DreamFactory\'s .env and in the data daemon\'s environment (for the installer\'s df-mcp systemd unit: an Environment= line or EnvironmentFile), then run php artisan config:clear and restart the daemon.';
+        if ($daemonKey === 'unreadable') {
+            return self::check('internal_key', 'error', 'The data daemon cannot read the shared key file ' . ($file ?: 'storage/framework/mcp_internal_key') . ', so it rejects every MCP call. It runs as a different user than PHP (common with Apache installs). ' . $fix, $details);
+        }
+        if (!$env && in_array($daemonKey, ['missing', 'no_app_root'], true)) {
+            return self::check('internal_key', 'error', 'The data daemon has no shared key (' . ($daemonKey === 'missing' ? 'it looks for the key file somewhere other than ' . $file : 'it could not locate the DreamFactory app root') . '), so it rejects every MCP call. Set MCP_INTERNAL_KEY_FILE=' . $file . ' in the daemon\'s environment, or: ' . $fix, $details);
+        }
         $remote = self::remoteDaemons($daemons);
-        if (!$set && $remote) {
-            return self::check('internal_key', 'warn', 'MCP_INTERNAL_KEY is not set but ' . implode(' and ', $remote) . ' listens on a non-loopback address. Anyone who can reach it can call it directly; set the same MCP_INTERNAL_KEY in DreamFactory and on the daemon.', $details);
+        if (!$env && $remote) {
+            return self::check('internal_key', 'warn', 'Using the key DreamFactory generated at ' . $file . ', but ' . implode(' and ', $remote) . ' runs on another host and cannot read that file unless it is shared. The data daemon rejects every call without the key, and the system daemon only checks it when MCP_INTERNAL_KEY is set on its side. Set the same MCP_INTERNAL_KEY in DreamFactory and on the daemons.', $details);
         }
 
-        return self::check('internal_key', 'ok', $set ? 'Daemon calls carry X-Mcp-Internal-Key.' : 'Not set; daemons are loopback-only so a shared secret is optional.', $details);
+        return self::check('internal_key', 'ok', $env
+            ? 'Daemon calls carry X-Mcp-Internal-Key (MCP_INTERNAL_KEY).'
+            : "Daemon calls carry X-Mcp-Internal-Key, generated at {$file}. The daemon reads the same file; its user must be able to read storage/framework.", $details);
+    }
+
+    /** Function custom tools run only when the data daemon has MCP_ALLOW_FUNCTION_TOOLS=true. */
+    private static function functionToolsCheck(array $dataDaemon, ?int $functionTools): array
+    {
+        $enabled = $dataDaemon['function_tools'];
+        $details = ['enabled' => $enabled, 'configured' => $functionTools];
+        if ($enabled === null) {
+            return self::check('function_tools', 'ok', 'Unknown whether the data daemon runs function tools (not reachable, or a version that does not report it).', $details);
+        }
+        if ($enabled) {
+            return self::check('function_tools', 'ok', 'Function tools are enabled (MCP_ALLOW_FUNCTION_TOOLS=true): admin-authored JavaScript runs inside the data daemon.', $details);
+        }
+        if ($functionTools) {
+            return self::check('function_tools', 'warn', "{$functionTools} function tool" . ($functionTools === 1 ? ' is' : 's are') . ' configured but not offered to clients: the data daemon runs function tools only when MCP_ALLOW_FUNCTION_TOOLS=true is set in its environment. Set it and restart the daemon if you trust every admin who can edit them.', $details);
+        }
+
+        return self::check('function_tools', 'ok', 'Function tools are disabled (default). Set MCP_ALLOW_FUNCTION_TOOLS=true on the data daemon to run them.', $details);
     }
 
     private static function nodeCheck(callable $nodeVersion, array $dataDaemon): array

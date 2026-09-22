@@ -9,6 +9,8 @@ import { runWithTrace } from './services/trace.service.js';
 import { lazyStateFor } from './services/lazy.service.js';
 import { runWithResponse } from './services/ledger.js';
 import { previewCatalog } from './services/catalog-preview.service.js';
+import { internalKeyGate, internalKeyStatus } from './services/internal-key.js';
+import { functionToolsEnabled } from './services/custom-tools.service.js';
 import {
   createServer,
   getSessionId,
@@ -62,8 +64,11 @@ app.use((req, res, next) => {
   runWithResponse(res, () => runWithTrace(req.header('x-dreamfactory-trace-id'), next));
 });
 
-// Internal API key for PHP proxy -> daemon communication
-const INTERNAL_API_KEY = process.env.MCP_INTERNAL_KEY ?? '';
+// Every /mcp route (the MCP endpoint, catalog preview, cache clear) requires the
+// shared secret the PHP proxy sends after RBAC, so no other local process can
+// call the daemon directly with a stolen or self-issued session token. Fails
+// closed. /health and /ping stay open for the admin health check.
+app.use('/mcp', internalKeyGate);
 
 /**
  * Send 401 Unauthorized response with optional custom message
@@ -99,6 +104,8 @@ app.get('/health', (_req, res) => {
     timestamp: Math.floor(Date.now() / 1000),
     mode: STATELESS ? 'stateless' : 'stateful',
     active_sessions: sessions.size,
+    function_tools: functionToolsEnabled(),
+    internal_key: internalKeyStatus(),
   });
 });
 
@@ -111,11 +118,8 @@ app.get('/ping', (_req, res) => {
   });
 });
 
-// Cache management endpoint — requires internal API key from PHP proxy
+// Cache management endpoint (internal-key gated above)
 app.post('/mcp/cache/clear', (req, res) => {
-  if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
-    return res.status(403).json({ error: 'Forbidden: invalid internal key' });
-  }
   const service = typeof req.body === 'object' ? req.body?.service : undefined;
   if (service) {
     for (const [sessionId, entry] of sessions.entries()) {
@@ -139,11 +143,8 @@ app.post('/mcp/cache/clear', (req, res) => {
 // Catalog preview (issue #64): what tools/list would advertise for a given
 // service config + PHP-scoped backend catalog + client name, computed in a
 // throwaway server. Nothing is executed: no DreamFactory calls, no MCP
-// session, no audit row. Internal-key gated like /mcp/cache/clear.
+// session, no audit row. Internal-key gated like every /mcp route.
 app.post('/mcp/catalog/preview', async (req, res) => {
-  if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
-    return res.status(403).json({ error: 'Forbidden: invalid internal key' });
-  }
   try {
     const result = await previewCatalog(req.body && typeof req.body === 'object' ? req.body : {});
     // tools/list attaches the savings ledger to the current response; this is not a proxied MCP call.
@@ -160,21 +161,6 @@ app.post('/mcp/catalog/preview', async (req, res) => {
 // ============================================================================
 
 app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
-  // Shared-secret check: when MCP_INTERNAL_KEY is configured, only the PHP
-  // proxy (which injects this header after RBAC) is allowed through.
-  // Without this gate any local process on 127.0.0.1 can speak to the
-  // daemon directly with a valid session token, bypassing PHP-side RBAC.
-  if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
-    return res.status(403).json({
-      jsonrpc: '2.0',
-      id: null,
-      error: {
-        code: -32001,
-        message: 'Forbidden: invalid internal key',
-      },
-    });
-  }
-
   const serviceName = req.params.serviceName as string;
   const sessionIdHeader = getSessionId(req);
   const existingSession = !STATELESS && sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;

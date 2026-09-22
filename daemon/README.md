@@ -34,6 +34,13 @@ export MCP_STATELESS=true
 export MCP_LAZY_PASSTHROUGH=codex,grok,hermes   # clients that always get the full catalog
 export MCP_LAZY_THRESHOLD_BYTES=32768           # auto: facade above this serialized tools/list size
 export MCP_LAZY_PAGE_CHARS=6000                 # page tool results longer than this
+# Shared secret: every /mcp route requires X-Mcp-Internal-Key (403 otherwise).
+# The key is MCP_INTERNAL_KEY, else the file DreamFactory generates at
+# <app>/storage/framework/mcp_internal_key (found via MCP_INTERNAL_KEY_FILE,
+# DF_APP_ROOT, or by walking up to artisan). The daemon user must be able to read it.
+export MCP_INTERNAL_KEY_FILE=/opt/dreamfactory/storage/framework/mcp_internal_key
+# Function custom tools (admin-authored JS run via new Function) are off unless:
+export MCP_ALLOW_FUNCTION_TOOLS=false
 ```
 
 Tests: `npm test` (node --test via tsx).
@@ -89,10 +96,10 @@ The daemon accepts two credential kinds. **At least one is required**; the PHP p
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check with active sessions list |
+| `GET` | `/health` | Health check: version, mode, active session count, `function_tools` (whether `MCP_ALLOW_FUNCTION_TOOLS` is on) |
 | `GET` | `/ping` | Alias for `/health` |
 | `POST` | `/mcp/cache/clear` | Clear session cache (body: `{"service": "serviceName"}` or `{}` for all) |
-| `POST` | `/mcp/catalog/preview` | What `tools/list` would advertise for a service config, without a session. Body: `{serviceName, _mcpConfig, _mcpAvailableServices, clientName?, lazyMode?}`; returns `{tools, count, bytes, lazy, facade}`. Requires `X-Mcp-Internal-Key` when `MCP_INTERNAL_KEY` is set. |
+| `POST` | `/mcp/catalog/preview` | What `tools/list` would advertise for a service config, without a session. Body: `{serviceName, _mcpConfig, _mcpAvailableServices, clientName?, lazyMode?}`; returns `{tools, count, bytes, lazy, facade}`. Requires `X-Mcp-Internal-Key`, like every `/mcp` route. |
 | `ALL` | `/mcp/{serviceName}` | MCP protocol endpoint (JSON-RPC) |
 
 ### Required Headers
@@ -100,6 +107,7 @@ The daemon accepts two credential kinds. **At least one is required**; the PHP p
 | Header | Description |
 |--------|-------------|
 | `X-Mcp-Base-Url` | Base URL for DreamFactory API (e.g., `https://host/api/v2`) |
+| `X-Mcp-Internal-Key` | Shared secret (see Configuration). Required on every `/mcp` route; `/health` and `/ping` are open. |
 
 ### Authentication Headers (at least one required)
 
