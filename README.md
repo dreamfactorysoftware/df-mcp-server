@@ -101,12 +101,13 @@ It never throws and never takes longer than a few seconds (each daemon probe tim
 
 | `id` | What it looks at | `warn` | `error` |
 | --- | --- | --- | --- |
-| `daemon.mcp` | `GET {MCP_DAEMON_URL}/health` (data daemon). `details` is the daemon record: `reachable`, `latency_ms`, `version`, `mode`, `tools`, `error`. | `MCP_DAEMON_ENABLED=false` | enabled but not reachable, non-2xx, or not JSON (something else on the port) |
+| `daemon.mcp` | `GET {MCP_DAEMON_URL}/health` (data daemon). `details` is the daemon record: `reachable`, `latency_ms`, `version`, `mode`, `tools`, `function_tools`, `error`. | `MCP_DAEMON_ENABLED=false` | enabled but not reachable, non-2xx, or not JSON (something else on the port) |
 | `daemon.system_mcp` | Same for `MCP_SYSTEM_DAEMON_URL` (`df-system-mcp-server`; it also reports `tools`). | `MCP_SYSTEM_DAEMON_ENABLED=false` | as above |
 | `app_url` | `APP_URL` host and port vs where the request came from (trailing slash, case and default ports ignored). When the request carries `X-Forwarded-Proto` / `X-Forwarded-Host` those are used, so a TLS-terminating proxy (nginx, ALB) does not trip it; `details` holds both `request_origin` (as PHP saw it) and `forwarded_origin`. | unset, or a different host/port: OAuth redirects will loop | – |
 | `app_url_scheme` | Only present when host and port match but the scheme differs (`APP_URL` is `https`, PHP saw `http`). Always `ok`: this is the normal shape of TLS terminated at a proxy without trusted-proxy config, and OAuth uses `APP_URL` regardless. The message says what to check if clients still loop. | – | – |
 | `internal_base_url` | `MCP_INTERNAL_BASE_URL`. | unset while an enabled daemon runs on a non-loopback host (it calls DreamFactory back at the request origin, which must be reachable from there) | – |
-| `internal_key` | `MCP_INTERNAL_KEY`. | unset while an enabled daemon listens on a non-loopback address (anyone who can reach it can call it) | – |
+| `internal_key` | The shared secret sent as `X-Mcp-Internal-Key`: `MCP_INTERNAL_KEY`, or the key DreamFactory generated in `storage/framework/mcp_internal_key` (counts as configured). `details.source` is `env`, `file` or `null`. | generated key while an enabled daemon runs on another host (it cannot read the file unless it is shared) | no key at all: `MCP_INTERNAL_KEY` unset and the file cannot be written. The data daemon rejects every call. |
+| `function_tools` | Whether the data daemon runs function custom tools (`MCP_ALLOW_FUNCTION_TOOLS`, from its `/health`) and how many enabled function tools are configured. `details`: `enabled`, `configured`. | function tools are configured but the daemon has them off, so clients never see them | – |
 | `node` | `node --version` on the web host (2s timeout; `ok` with `details.skipped` when the web server may not shell out). | not found and the daemons are configured on another host | not found while the data daemon is expected on this host and is down (it cannot start) |
 | `stateless` | The data daemon's reported session mode; `details.stateless` is `true`/`false`, `null` when unreachable. Informational, always `ok`. | – | – |
 
@@ -310,7 +311,10 @@ host; it can also run as a separate container. Custom tools are not supported on
 | `MCP_SYSTEM_DAEMON_ENABLED` | `true` | Gate the `system_mcp` type. When false, requests get a 503 naming this variable. |
 | `MCP_SYSTEM_DAEMON_URL` | `http://127.0.0.1:3700` | Base URL of `df-system-mcp-server`. Keep the default for the daemon on this host; for a sidecar container use its service URL, e.g. `http://df-system-mcp:3700`. |
 | `MCP_SYSTEM_DAEMON_BASE_URL` | *(unset)* | DreamFactory URL the system daemon calls back (sent as `X-Mcp-Base-Url`). Leave unset when the daemon runs on this host. For a sidecar set an address it can reach, e.g. `http://web`. Falls back to `MCP_INTERNAL_BASE_URL`, then to the incoming request's origin. |
-| `MCP_INTERNAL_KEY` | *(unset)* | Optional shared secret. When set, DreamFactory sends `X-Mcp-Internal-Key` to **both** daemons; set the same value on the daemons so they reject direct callers. |
+| `MCP_INTERNAL_KEY` | *(unset)* | Shared secret DreamFactory sends as `X-Mcp-Internal-Key` to **both** daemons. When unset, DreamFactory generates one into `storage/framework/mcp_internal_key` (0600) and the data daemon reads that file. Set it explicitly, with the same value on the daemons, when a daemon cannot read that file (sidecar, another host). The data daemon always requires the key; the system daemon requires it when this is set on its side. |
+| `MCP_INTERNAL_KEY_FILE` | `storage/framework/mcp_internal_key` | Where the generated key lives. Set it on both sides if you move it. Never under `storage/app`: that is the stock `files` service root and is downloadable over the REST API. |
+| `MCP_ALLOW_FUNCTION_TOOLS` | `false` | **Data daemon environment.** Function custom tools run admin-authored JavaScript inside the daemon (`new Function`). They are registered and run only when this is `true`; otherwise they are left out and the server instructions tell the client why. |
+| `DF_APP_ROOT` | *(auto)* | Data daemon: DreamFactory's root, used to find `storage/framework/mcp_internal_key`. `start-daemon.sh` and the daemon walk up to the directory holding `artisan`; set this when that fails. |
 | `MCP_INTERNAL_BASE_URL` | *(unset)* | Already used by the data daemon; also used here as the URL the system daemon calls back into DreamFactory with (e.g. `http://web`). |
 
 Run `php artisan config:clear` after changing any of these.
@@ -329,7 +333,7 @@ vendor\dreamfactory\df-mcp-server\scripts\start-system-daemon-win.ps1     # Wind
 The launcher installs the daemon's production dependencies on first run, listens on
 `127.0.0.1:3700`, and calls DreamFactory back on `MCP_INTERNAL_BASE_URL` or
 `http://127.0.0.1`. Because the daemon listens on loopback, it accepts DreamFactory's callback
-URL without `MCP_INTERNAL_KEY`, like the data daemon. The launcher reads
+URL without `MCP_INTERNAL_KEY` (the data daemon, by contrast, always requires a key). The launcher reads
 `MCP_SYSTEM_DAEMON_HOST`, `MCP_SYSTEM_DAEMON_PORT` (keep `MCP_SYSTEM_DAEMON_URL` in step),
 `DREAMFACTORY_URL` and `DF_SYSTEM_MCP_DIR`, and passes the daemon only its own settings, not
 the rest of DreamFactory's environment. On a VM, run it from a systemd unit with
