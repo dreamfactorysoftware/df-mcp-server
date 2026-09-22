@@ -23,6 +23,12 @@ class McpOAuthClient extends Model
 
     protected $hidden = ['client_secret'];
 
+    /** Claude's hosted callbacks, always allowed. */
+    public const CLAUDE_REDIRECT_URIS = [
+        'https://claude.ai/api/mcp/auth_callback',
+        'https://claude.com/api/mcp/auth_callback',
+    ];
+
     /**
      * Generate a unique client ID
      */
@@ -93,6 +99,37 @@ class McpOAuthClient extends Model
         }
 
         return false;
+    }
+
+    /**
+     * The redirect_uris a dynamic registration (/register, unauthenticated) may
+     * leave on the shared client: Claude's callbacks, the admin-configured
+     * allowlist, and loopback http URIs (RFC 8252 native apps: Claude Desktop,
+     * Claude Code, Cursor, VS Code), whether just requested or already stored.
+     * Any other caller-supplied URI is dropped, so an anonymous caller cannot
+     * add an origin of their own and have authorization codes delivered there.
+     * Previously stored non-loopback URIs are pruned for the same reason.
+     *
+     * @return string[]
+     */
+    public static function registrableRedirectUris(array $requested, array $existing, array $configured): array
+    {
+        $loopback = array_filter(
+            array_merge($existing, $requested),
+            fn ($uri) => is_string($uri) && static::isLoopbackRedirectUri($uri)
+        );
+
+        return array_values(array_unique(array_merge(self::CLAUDE_REDIRECT_URIS, $configured, $loopback)));
+    }
+
+    /** http:// on a loopback host: the RFC 8252 native-app redirect. */
+    public static function isLoopbackRedirectUri(string $uri): bool
+    {
+        $p = parse_url($uri);
+
+        return is_array($p)
+            && strtolower($p['scheme'] ?? '') === 'http'
+            && static::isLoopbackHost($p['host'] ?? '');
     }
 
     /**
