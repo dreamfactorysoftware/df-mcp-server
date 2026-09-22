@@ -1,5 +1,6 @@
+import * as z from 'zod/v4';
 import { lazyStateFor } from './lazy.service.js';
-import { annotationsFor, registerArgSpec, specFor } from './args.js';
+import { annotationsFor, registerArgSpec, serviceNameMap, specFor } from './args.js';
 export const respond = (data) => {
     let text;
     try {
@@ -102,4 +103,84 @@ export function createToolRegistrar(server, disabledTools) {
             }
         });
     };
+}
+/**
+ * Merged registration shared by database and file services (tool_style = 'merged').
+ *
+ * The prefixed scheme emits every verb once per service, so five services cost
+ * 5 x N tools even though the schemas are identical apart from the prefix.
+ * Merged mode registers each verb once and selects the backend with a `service`
+ * argument.
+ *
+ * Per-service disables are preserved, not discarded. disabled_tools entries are
+ * prefixed (dvdstore_delete_records, logs_delete_file), and a merged tool spans
+ * every service, so:
+ *
+ *   - a verb disabled for EVERY exposed service (or disabled by its bare name)
+ *     is not registered at all;
+ *   - a verb disabled for SOME services is registered, but only the services it
+ *     is still allowed on appear in the `service` enum, and the handler rejects
+ *     any other service as a second line of defence. Without this, flipping
+ *     tool_style to merged would silently re-enable a destructive tool an admin
+ *     had turned off for one service.
+ *
+ * When exactly one service is allowed for a verb there is nothing to
+ * disambiguate, so the `service` argument is omitted entirely and the call stays
+ * a one-argument call.
+ */
+export function registerMergedTools(server, sessionManager, configs, tools, opts) {
+    if (configs.length === 0) {
+        return;
+    }
+    const { targetNoun, logLabel, disabledTools } = opts;
+    const registerTool = createToolRegistrar(server, disabledTools);
+    const notes = [];
+    for (const tool of tools) {
+        // Services this verb is still permitted on, after per-service disables.
+        const allowed = configs.filter(c => !disabledTools?.has(`${sanitizeApiName(c.name)}_${tool.name}`));
+        // Bare-name disable, or disabled everywhere: drop the tool entirely.
+        if (disabledTools?.has(tool.name) || allowed.length === 0) {
+            continue;
+        }
+        const blocked = configs.filter(c => !allowed.includes(c));
+        if (blocked.length > 0) {
+            notes.push(`${tool.name}: ${allowed.map(c => c.name).join(', ')} (blocked: ${blocked.map(c => c.name).join(', ')})`);
+        }
+        const allowedNames = allowed.map(c => c.name);
+        const byName = new Map(allowed.map(c => [c.name, c]));
+        const only = allowed.length === 1 ? allowed[0] : undefined;
+        const schema = only
+            ? tool.schema
+            : tool.schema.extend({
+                service: z
+                    .enum(allowedNames)
+                    .describe(`Which ${targetNoun} to target. One of: ${allowedNames.join(', ')}`)
+            });
+        const description = only
+            ? `[${only.name}] ${tool.description}`
+            : `${tool.description} Pass service= to choose the ${targetNoun} (${allowedNames.join(', ')}).`;
+        registerTool(tool.name, tool.title, description, schema, async (params, context) => {
+            const auth = getAuth(sessionManager, context.sessionId);
+            if (only) {
+                return tool.handler(params, context, only, auth);
+            }
+            const { service, ...rest } = (params ?? {});
+            const apiConfig = service ? byName.get(service) : undefined;
+            if (!apiConfig) {
+                // Either no service was given, or one that is disabled for this verb
+                // / not exposed at all. Say which, without leaking disabled names.
+                return respond({
+                    error: service
+                        ? `"${tool.name}" is not available for service "${service}".`
+                        : 'Missing required argument "service".',
+                    available_services: allowedNames
+                });
+            }
+            return tool.handler(rest, context, apiConfig, auth);
+        }, { serviceNames: only ? undefined : serviceNameMap(allowed) });
+    }
+    if (notes.length > 0) {
+        console.log(`[${logLabel}] per-service disables enforced at call time; allowed services per verb: ` +
+            notes.join('; '));
+    }
 }

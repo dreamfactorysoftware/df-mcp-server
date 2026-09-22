@@ -5,7 +5,7 @@ import { SessionService } from './session.service.js';
 import { registerApiConnectorTools } from './api-connector.tools.js';
 import { registerFileApiTools } from './file-api.tools.js';
 import type { ApiConfig, ToolStyle } from '../types.js';
-import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar, WRITE_VERBS } from './tool-utils.js';
+import { createToolRegistrar, getAuth, registerMergedTools, respond, sanitizeApiName, type ToolResponse, WRITE_VERBS } from './tool-utils.js';
 import { serviceNameMap } from './args.js';
 
 type ToolDefinition = {
@@ -285,27 +285,10 @@ export const DB_TOOL_NAMES = BASE_TOOLS.map(t => t.name);
 
 
 /**
- * Merged tool registration (tool_style = 'merged').
- *
- * The prefixed scheme emits every verb once per database, so five databases cost
- * 5 x 16 = 80 tools and ~14k catalog tokens even though the schemas are identical
- * apart from the prefix. Merged mode registers each verb once and selects the
- * backend with a `service` argument.
- *
- * Per-service disables are preserved, not discarded. disabled_tools entries are
- * prefixed (dvdstore_delete_records), and a merged tool spans every service, so:
- *
- *   - a verb disabled for EVERY exposed service (or disabled by its bare name)
- *     is not registered at all;
- *   - a verb disabled for SOME services is registered, but only the services it
- *     is still allowed on appear in the `service` enum, and the handler rejects
- *     any other service as a second line of defence. Without this, flipping
- *     tool_style to merged would silently re-enable a destructive tool an admin
- *     had turned off for one database.
- *
- * When exactly one service is allowed for a verb there is nothing to
- * disambiguate, so the `service` argument is omitted entirely and the call stays
- * a one-argument call.
+ * Merged database registration (tool_style = 'merged'): every verb once, with a
+ * `service` argument choosing the database. The per-service disable semantics
+ * and the single-service collapse live in registerMergedTools, which file
+ * services share.
  */
 function registerMergedDatabaseTools(
   server: McpServer,
@@ -314,79 +297,11 @@ function registerMergedDatabaseTools(
   disabledTools?: Set<string>,
   tools: ToolDefinition[] = BASE_TOOLS
 ) {
-  if (dbConfigs.length === 0) {
-    return;
-  }
-
-  const registerTool = createToolRegistrar(server, disabledTools);
-  const notes: string[] = [];
-
-  for (const tool of tools) {
-    // Services this verb is still permitted on, after per-service disables.
-    const allowed = dbConfigs.filter(
-      c => !disabledTools?.has(`${sanitizeApiName(c.name)}_${tool.name}`)
-    );
-
-    // Bare-name disable, or disabled everywhere: drop the tool entirely.
-    if (disabledTools?.has(tool.name) || allowed.length === 0) {
-      continue;
-    }
-
-    const blocked = dbConfigs.filter(c => !allowed.includes(c));
-    if (blocked.length > 0) {
-      notes.push(`${tool.name}: ${allowed.map(c => c.name).join(', ')} (blocked: ${blocked.map(c => c.name).join(', ')})`);
-    }
-
-    const allowedNames = allowed.map(c => c.name);
-    const byName = new Map(allowed.map(c => [c.name, c]));
-    const only = allowed.length === 1 ? allowed[0] : undefined;
-
-    const schema = only
-      ? tool.schema
-      : (tool.schema as any).extend({
-          service: z
-            .enum(allowedNames as [string, ...string[]])
-            .describe(`Which database to target. One of: ${allowedNames.join(', ')}`)
-        });
-
-    const description = only
-      ? `[${only.name}] ${tool.description}`
-      : `${tool.description} Pass service= to choose the database (${allowedNames.join(', ')}).`;
-
-    registerTool(
-      tool.name,
-      tool.title,
-      description,
-      schema,
-      async (params, context) => {
-        const auth = getAuth(sessionManager, context.sessionId);
-        if (only) {
-          return tool.handler(params, context, only, auth);
-        }
-        const { service, ...rest } = (params ?? {}) as { service?: string };
-        const apiConfig = service ? byName.get(service) : undefined;
-        if (!apiConfig) {
-          // Either no service was given, or one that is disabled for this verb
-          // / not exposed at all. Say which, without leaking disabled names.
-          return respond({
-            error: service
-              ? `"${tool.name}" is not available for service "${service}".`
-              : 'Missing required argument "service".',
-            available_services: allowedNames
-          });
-        }
-        return tool.handler(rest, context, apiConfig, auth);
-      },
-      { serviceNames: only ? undefined : serviceNameMap(allowed) }
-    );
-  }
-
-  if (notes.length > 0) {
-    console.log(
-      '[merged-tools] per-service disables enforced at call time; allowed services per verb: ' +
-      notes.join('; ')
-    );
-  }
+  registerMergedTools(server, sessionManager, dbConfigs, tools, {
+    targetNoun: 'database',
+    logLabel: 'merged-tools',
+    disabledTools
+  });
 }
 
 export function registerDreamFactoryTools(
@@ -403,7 +318,7 @@ export function registerDreamFactoryTools(
   registerApiConnectorTools(server, sessionManager, apiConfigs, disabledTools);
 
   // Register file API tools
-  registerFileApiTools(server, sessionManager, apiConfigs, disabledTools, allowWrites);
+  registerFileApiTools(server, sessionManager, apiConfigs, disabledTools, allowWrites, toolStyle);
 
   // Filter to database services only for database tools
   const dbConfigs = apiConfigs.filter(c => c.category === 'database');
