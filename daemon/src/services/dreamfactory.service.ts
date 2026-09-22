@@ -16,8 +16,16 @@ export type DFService = {
   type: string;
 };
 
-/** Default timeout (in ms) for all HTTP requests to the DreamFactory API. */
-const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Default timeout (in ms) for all HTTP requests to the DreamFactory API.
+ *
+ * 60s, not 30s: `GET {service}/_spec?model=true` (what get_data_model calls)
+ * takes ~33s uncached against a 28-table MySQL service measured over loopback,
+ * so a 30s ceiling aborted the call every time and no amount of routing or
+ * caching changed that. The underlying spec call is still too slow and is
+ * tracked separately.
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
 
 // Known DreamFactory database service types
 const DATABASE_SERVICE_TYPES = new Set([
