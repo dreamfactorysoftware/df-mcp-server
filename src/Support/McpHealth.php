@@ -72,6 +72,7 @@ final class McpHealth
             'mode'       => null,
             'tools'      => null,
             'function_tools' => null,
+            'internal_key' => null,
             'error'      => null,
         ];
         if (!$target['enabled']) {
@@ -99,6 +100,7 @@ final class McpHealth
             $record['mode'] = in_array($body['mode'] ?? null, ['stateful', 'stateless'], true) ? $body['mode'] : null;
             $record['tools'] = isset($body['tools']) && is_numeric($body['tools']) ? (int) $body['tools'] : null;
             $record['function_tools'] = is_bool($body['function_tools'] ?? null) ? $body['function_tools'] : null;
+            $record['internal_key'] = is_string($body['internal_key'] ?? null) ? $body['internal_key'] : null;
         } catch (\Throwable $e) {
             $record['latency_ms'] = (int) round((microtime(true) - $start) * 1000);
             $record['error'] = $e->getMessage();
@@ -214,6 +216,16 @@ final class McpHealth
         $details = ['internal_key_set' => $set, 'source' => $env ? 'env' : ($set ? 'file' : null), 'internal_key_file' => $env ? null : $file];
         if (!$set) {
             return self::check('internal_key', 'error', 'No shared key: MCP_INTERNAL_KEY is unset and DreamFactory could not write ' . ($file ?: 'storage/framework/mcp_internal_key') . '. The data daemon rejects every MCP call without it. Make storage/framework writable by the web server, or set the same MCP_INTERNAL_KEY in DreamFactory and on the daemons.', $details);
+        }
+        // What the data daemon itself found (daemons that predate this report null).
+        $daemonKey = $daemons[0]['internal_key'] ?? null;
+        $details['daemon_internal_key'] = $daemonKey;
+        $fix = 'Set the same MCP_INTERNAL_KEY in DreamFactory\'s .env and in the data daemon\'s environment (for the installer\'s df-mcp systemd unit: an Environment= line or EnvironmentFile), then run php artisan config:clear and restart the daemon.';
+        if ($daemonKey === 'unreadable') {
+            return self::check('internal_key', 'error', 'The data daemon cannot read the shared key file ' . ($file ?: 'storage/framework/mcp_internal_key') . ', so it rejects every MCP call. It runs as a different user than PHP (common with Apache installs). ' . $fix, $details);
+        }
+        if (!$env && in_array($daemonKey, ['missing', 'no_app_root'], true)) {
+            return self::check('internal_key', 'error', 'The data daemon has no shared key (' . ($daemonKey === 'missing' ? 'it looks for the key file somewhere other than ' . $file : 'it could not locate the DreamFactory app root') . '), so it rejects every MCP call. Set MCP_INTERNAL_KEY_FILE=' . $file . ' in the daemon\'s environment, or: ' . $fix, $details);
         }
         $remote = self::remoteDaemons($daemons);
         if (!$env && $remote) {

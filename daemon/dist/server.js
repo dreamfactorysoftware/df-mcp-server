@@ -8,7 +8,7 @@ import { runWithTrace } from './services/trace.service.js';
 import { lazyStateFor } from './services/lazy.service.js';
 import { runWithResponse } from './services/ledger.js';
 import { previewCatalog } from './services/catalog-preview.service.js';
-import { internalKeyGate } from './services/internal-key.js';
+import { internalKeyGate, internalKeyStatus } from './services/internal-key.js';
 import { functionToolsEnabled } from './services/custom-tools.service.js';
 import { createServer, getSessionId, parseConfigFromHeaders, parseMcpConfig, updateSessionConfigFromHeaders, discoverServices } from './utils/utils.js';
 import { extractAndValidateAuth, getAuthModeDescription } from './utils/auth.utils.js';
@@ -74,6 +74,7 @@ app.get('/health', (_req, res) => {
         mode: STATELESS ? 'stateless' : 'stateful',
         active_sessions: sessions.size,
         function_tools: functionToolsEnabled(),
+        internal_key: internalKeyStatus(),
     });
 });
 app.get('/ping', (_req, res) => {

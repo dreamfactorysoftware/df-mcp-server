@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -108,4 +108,32 @@ test('DF_APP_ROOT: key resolved under storage/framework, not storage/app', async
     assert.equal(await call(url, '/mcp/svc', 'app-key', mcpBody), 403);
     assert.equal(await call(url, '/mcp/svc', 'framework-key', mcpBody), 200);
   } finally { proc.kill(); }
+});
+
+test('/health reports the key lookup outcome, never the key', async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'mcp-key-status-'));
+  const file = path.join(dir, 'mcp_internal_key');
+  const health = async (url: string) => (await (await fetch(`${url}/health`)).json()) as Record<string, unknown>;
+
+  const envD = await boot({ MCP_INTERNAL_KEY: 'k'.repeat(64) });
+  t.after(() => envD.proc.kill());
+  const envH = await health(envD.url);
+  assert.equal(envH.internal_key, 'env');
+  assert.ok(!JSON.stringify(envH).includes('k'.repeat(64)));
+
+  const fileD = await boot({ MCP_INTERNAL_KEY_FILE: file });
+  t.after(() => fileD.proc.kill());
+  assert.equal((await health(fileD.url)).internal_key, 'missing');
+  writeFileSync(file, 'f'.repeat(64));
+  assert.equal((await health(fileD.url)).internal_key, 'file');
+
+  // A different OS user than PHP: the daemon cannot read the 0600 file.
+  if (process.getuid && process.getuid() !== 0) {
+    const locked = path.join(dir, 'locked_key');
+    writeFileSync(locked, 'l'.repeat(64));
+    chmodSync(locked, 0o000);
+    const lockedD = await boot({ MCP_INTERNAL_KEY_FILE: locked });
+    t.after(() => lockedD.proc.kill());
+    assert.equal((await health(lockedD.url)).internal_key, 'unreadable');
+  }
 });

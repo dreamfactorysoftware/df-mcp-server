@@ -252,6 +252,37 @@ class McpHealthTest extends TestCase
         $this->assertSame('ok', $this->check($r, 'internal_base_url')['status']);
     }
 
+    /** Data daemon /health reporting its own key lookup outcome. */
+    private function keyProbe(string $status): callable
+    {
+        return function (string $url) use ($status): array {
+            $body = str_contains($url, ':3700')
+                ? ['status' => 'healthy', 'version' => '2.1.0']
+                : ['status' => 'ok', 'version' => '1.0.0', 'mode' => 'stateless', 'internal_key' => $status];
+
+            return ['status' => 200, 'body' => json_encode($body)];
+        };
+    }
+
+    public function testDaemonThatCannotReadTheKeyFileIsAnError(): void
+    {
+        $r = McpHealth::report($this->config(), self::ORIGIN, self::ORIGIN, $this->keyProbe('unreadable'), fn () => 'v20');
+        $key = $this->check($r, 'internal_key');
+        $this->assertSame('error', $key['status']);
+        $this->assertSame('error', $r['status']);
+        $this->assertStringContainsString('different user', $key['message']);
+        $this->assertStringContainsString('MCP_INTERNAL_KEY', $key['message']);
+        $this->assertSame('unreadable', $key['details']['daemon_internal_key']);
+
+        $key = $this->check(McpHealth::report($this->config(), self::ORIGIN, self::ORIGIN, $this->keyProbe('missing'), fn () => 'v20'), 'internal_key');
+        $this->assertSame('error', $key['status']);
+        $this->assertStringContainsString('MCP_INTERNAL_KEY_FILE', $key['message']);
+
+        foreach (['file', 'env'] as $ok) {
+            $this->assertSame('ok', $this->check(McpHealth::report($this->config(), self::ORIGIN, self::ORIGIN, $this->keyProbe($ok), fn () => 'v20'), 'internal_key')['status']);
+        }
+    }
+
     public function testExplicitInternalKeyIsOk(): void
     {
         $r = McpHealth::report($this->config(['daemon' => ['internal_key' => 's3cret']]), self::ORIGIN, self::ORIGIN, $this->upProbe(), fn () => 'v20');

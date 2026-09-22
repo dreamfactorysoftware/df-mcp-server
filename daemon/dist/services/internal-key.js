@@ -13,6 +13,7 @@ import { dirname, join, resolve } from 'node:path';
 // request is rejected: the gate fails closed.
 let cachedKey = '';
 let warned = false;
+let keyStatus = 'missing';
 export function resolveInternalKeyFile() {
     if (process.env.MCP_INTERNAL_KEY_FILE) {
         return process.env.MCP_INTERNAL_KEY_FILE;
@@ -37,6 +38,7 @@ export function resolveInternalKeyFile() {
 }
 export function getInternalKey() {
     if (process.env.MCP_INTERNAL_KEY) {
+        keyStatus = 'env';
         return process.env.MCP_INTERNAL_KEY;
     }
     if (cachedKey) {
@@ -44,18 +46,33 @@ export function getInternalKey() {
     }
     const file = resolveInternalKeyFile();
     if (!file) {
+        keyStatus = 'no_app_root';
         warnNoKey('could not locate the DreamFactory app root from ' + dirname(fileURLToPath(import.meta.url)));
         return '';
     }
+    keyStatus = 'missing';
     try {
         cachedKey = readFileSync(file, 'utf8').trim();
     }
-    catch {
-        // Not written yet: PHP creates it on its first daemon call.
+    catch (e) {
+        // ENOENT: not written yet, PHP creates it on its first daemon call.
+        // EACCES/EPERM: PHP and the daemon run as different users (e.g. Apache).
+        const code = e.code;
+        if (code === 'EACCES' || code === 'EPERM')
+            keyStatus = 'unreadable';
     }
-    if (!cachedKey)
-        warnNoKey('no key at ' + file);
+    if (cachedKey) {
+        keyStatus = 'file';
+    }
+    else {
+        warnNoKey((keyStatus === 'unreadable' ? 'cannot read ' : 'no key at ') + file);
+    }
     return cachedKey;
+}
+/** Key lookup outcome for /health (re-reads the file when no key is cached yet). */
+export function internalKeyStatus() {
+    getInternalKey();
+    return keyStatus;
 }
 /** Constant-time compare; an empty expected key never matches. */
 export function keyMatches(expected, presented) {
