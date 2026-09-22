@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import { DreamFactoryService } from './dreamfactory.service.js';
-import { respond, sanitizeApiName, getAuth, createToolRegistrar, WRITE_VERBS } from './tool-utils.js';
+import { respond, sanitizeApiName, getAuth, createToolRegistrar, registerMergedTools, WRITE_VERBS } from './tool-utils.js';
 function fileContentToToolResponse(result) {
     switch (result.kind) {
         case 'image':
@@ -96,9 +96,14 @@ const FILE_TOOLS = [
 /** Base tool names for file services. */
 export const FILE_TOOL_NAMES = FILE_TOOLS.map(t => t.name);
 /**
- * Register file API tools for each file service.
+ * Register file API tools.
+ *
+ * Prefixed mode emits every verb once per file service (logs_list_files,
+ * files_list_files, ...). Merged mode registers each verb once and takes a
+ * `service` argument, the same shape the database tools use, which is where a
+ * connection with several file services spends most of its catalog.
  */
-export function registerFileApiTools(server, sessionManager, apiConfigs, disabledTools, allowWrites = true) {
+export function registerFileApiTools(server, sessionManager, apiConfigs, disabledTools, allowWrites = true, toolStyle = 'prefixed') {
     const fileConfigs = apiConfigs.filter(c => c.category === 'file');
     const tools = allowWrites ? FILE_TOOLS : FILE_TOOLS.filter(t => !WRITE_VERBS.has(t.name));
     if (fileConfigs.length === 0) {
@@ -107,17 +112,26 @@ export function registerFileApiTools(server, sessionManager, apiConfigs, disable
     }
     console.log('[registerFileApiTools] Registering tools for file services:', fileConfigs.map(c => c.name));
     const registerTool = createToolRegistrar(server, disabledTools);
-    // Register prefixed tools for each file API
-    for (const apiConfig of fileConfigs) {
-        const prefix = sanitizeApiName(apiConfig.name);
-        for (const tool of tools) {
-            const prefixedName = `${prefix}_${tool.name}`;
-            const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
-            const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
-            registerTool(prefixedName, prefixedTitle, prefixedDescription, tool.schema, async (params, context) => {
-                const auth = getAuth(sessionManager, context.sessionId);
-                return tool.handler(params, context, apiConfig, auth);
-            });
+    if (toolStyle === 'merged') {
+        registerMergedTools(server, sessionManager, fileConfigs, tools, {
+            targetNoun: 'file service',
+            logLabel: 'merged-file-tools',
+            disabledTools
+        });
+    }
+    else {
+        // Register prefixed tools for each file API
+        for (const apiConfig of fileConfigs) {
+            const prefix = sanitizeApiName(apiConfig.name);
+            for (const tool of tools) {
+                const prefixedName = `${prefix}_${tool.name}`;
+                const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
+                const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
+                registerTool(prefixedName, prefixedTitle, prefixedDescription, tool.schema, async (params, context) => {
+                    const auth = getAuth(sessionManager, context.sessionId);
+                    return tool.handler(params, context, apiConfig, auth);
+                });
+            }
         }
     }
     // Cross-service aggregator only pays off with 2+ file services.
