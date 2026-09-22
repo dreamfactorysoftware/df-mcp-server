@@ -8,6 +8,9 @@ import { handleError, WRITE_VERBS } from './tool-utils.js';
 import type { ApiConfig, ToolStyle, CustomToolDefinition } from '../types.js';
 import type { LazyMode } from './lazy.service.js';
 
+// These tests exercise function custom tools, which are opt-in (see function-tools.test.ts).
+process.env.MCP_ALLOW_FUNCTION_TOOLS = 'true';
+
 // Run: npm test (node --import tsx --test)
 //
 // Server-wide writes switch (issue #67): with allow_writes=false the daemon

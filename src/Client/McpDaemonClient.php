@@ -5,6 +5,7 @@ namespace DreamFactory\Core\McpServer\Client;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use DreamFactory\Core\McpServer\Support\InternalKey;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -430,20 +431,34 @@ class McpDaemonClient
     }
 
     /**
-     * Shared-secret header for the daemons. Both the data daemon and
-     * df-system-mcp-server reject /mcp/* calls without a matching
-     * x-mcp-internal-key when MCP_INTERNAL_KEY is set on their side.
+     * Shared-secret header for the daemons, sent on every call. The data daemon
+     * rejects /mcp/* without it (fail closed); df-system-mcp-server enforces it
+     * when MCP_INTERNAL_KEY is set on its side.
      *
      * @return array<string, string>
      */
     private static function internalKeyHeader(): array
     {
-        $key = config('mcp.daemon.internal_key');
-        if (is_string($key) && $key !== '') {
-            return ['X-Mcp-Internal-Key' => $key];
+        $key = self::internalKey();
+
+        return $key !== '' ? ['X-Mcp-Internal-Key' => $key] : [];
+    }
+
+    /** MCP_INTERNAL_KEY, else the generated key in storage/framework (see Support\InternalKey). */
+    public static function internalKey(): string
+    {
+        $key = InternalKey::resolve((string) config('mcp.daemon.internal_key'), self::internalKeyFile());
+        if ($key === '') {
+            Log::error('MCP internal key unavailable: MCP_INTERNAL_KEY is unset and ' . self::internalKeyFile()
+                . ' could not be written. The MCP daemon will reject every call.');
         }
 
-        return [];
+        return $key;
+    }
+
+    public static function internalKeyFile(): string
+    {
+        return (string) config('mcp.daemon.internal_key_file') ?: storage_path(InternalKey::FILE);
     }
 
     /**

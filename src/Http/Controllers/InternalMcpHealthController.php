@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace DreamFactory\Core\McpServer\Http\Controllers;
 
 use DreamFactory\Core\Http\Controllers\Controller;
+use DreamFactory\Core\McpServer\Client\McpDaemonClient;
+use DreamFactory\Core\McpServer\Models\McpCustomTool;
 use DreamFactory\Core\McpServer\Support\McpHealth;
 use DreamFactory\Core\Utility\Session;
 use Illuminate\Http\JsonResponse;
@@ -26,8 +28,13 @@ class InternalMcpHealthController extends Controller
         }
 
         $origin = $request->getSchemeAndHttpHost();
+        $mcpConfig = (array) config('mcp', []);
+        // Provisions the generated key if this is the first call, so the report
+        // reflects what the next proxied request will send.
+        $mcpConfig['daemon']['internal_key_resolved'] = McpDaemonClient::internalKey() !== '';
+        $mcpConfig['daemon']['internal_key_file'] = McpDaemonClient::internalKeyFile();
         $report = McpHealth::report(
-            (array) config('mcp', []),
+            $mcpConfig,
             config('app.url'),
             $origin,
             [self::class, 'probe'],
@@ -35,18 +42,29 @@ class InternalMcpHealthController extends Controller
             // Diagnostic only: behind a TLS-terminating proxy PHP sees http://
             // while APP_URL is https://; the forwarded headers say what the
             // client used. Read raw (not via Symfony's trusted-proxy logic) on purpose.
-            McpHealth::forwardedOrigin($request->headers->get('X-Forwarded-Proto'), $request->headers->get('X-Forwarded-Host'), $origin)
+            McpHealth::forwardedOrigin($request->headers->get('X-Forwarded-Proto'), $request->headers->get('X-Forwarded-Host'), $origin),
+            self::functionToolCount()
         );
 
         return response()->json($report);
+    }
+
+    /** Enabled function custom tools across all MCP services; null when the table cannot be read. */
+    private static function functionToolCount(): ?int
+    {
+        try {
+            return McpCustomTool::where('tool_type', 'function')->where('enabled', true)->count();
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /** @return array{status:int, body:string} */
     public static function probe(string $url): array
     {
         $headers = ['Accept' => 'application/json'];
-        $key = config('mcp.daemon.internal_key');
-        if (is_string($key) && $key !== '') {
+        $key = McpDaemonClient::internalKey();
+        if ($key !== '') {
             $headers['X-Mcp-Internal-Key'] = $key;
         }
         $res = (new \GuzzleHttp\Client([

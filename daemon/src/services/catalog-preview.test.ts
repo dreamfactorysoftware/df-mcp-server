@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { previewCatalog, type PreviewTool } from './catalog-preview.service.js';
 
+// These tests exercise function custom tools, which are opt-in (see function-tools.test.ts).
+process.env.MCP_ALLOW_FUNCTION_TOOLS = 'true';
+
 // Run: npm test (node --import tsx --test)
 //
 // Catalog preview (issue #64): the same _mcpConfig / _mcpAvailableServices the

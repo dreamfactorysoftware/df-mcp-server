@@ -13,9 +13,16 @@ return [
         'internal_base_url' => env('MCP_INTERNAL_BASE_URL'),
         // Seconds a PHP worker waits for the daemon to answer one proxied MCP call.
         'timeout' => (int) env('MCP_DAEMON_TIMEOUT', 300),
-        // Shared secret sent as X-Mcp-Internal-Key to BOTH daemons when set
-        // (the daemons enforce it when MCP_INTERNAL_KEY is set on their side).
+        // Shared secret sent as X-Mcp-Internal-Key to BOTH daemons. The data
+        // daemon always requires it. When unset, DreamFactory generates one and
+        // writes it to internal_key_file, which the data daemon reads; set it
+        // explicitly (same value on the daemons) when a daemon cannot read that
+        // file, e.g. a sidecar container.
         'internal_key' => env('MCP_INTERNAL_KEY'),
+        // Where the generated key lives. Default storage/framework/mcp_internal_key.
+        // Never under storage/app: that is the stock "files" service root and is
+        // downloadable over the REST API.
+        'internal_key_file' => env('MCP_INTERNAL_KEY_FILE'),
     ],
 
     // System API MCP daemon (df-system-mcp-server) backing the `system_mcp`

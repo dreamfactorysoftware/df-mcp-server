@@ -5,67 +5,46 @@ namespace DreamFactory\Core\McpServer\Tests\Security;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Security: when MCP_INTERNAL_KEY is configured, the daemon must require
- * the matching `x-mcp-internal-key` header on the MCP service endpoint
- * (/mcp/:serviceName), not only on the cache-clear endpoint.
+ * Security: the daemon requires the shared secret on every /mcp route and fails
+ * closed. The April 2026 audit (df-mcp-server F-03) found that any local process
+ * could call the daemon on 127.0.0.1 with a valid session token and bypass the
+ * PHP RBAC layer. The check used to run only when MCP_INTERNAL_KEY was set, and
+ * the PHP proxy did not send the header by default; now PHP generates a key when
+ * none is configured and the daemon rejects any request without it.
  *
- * The April 2026 audit (df-mcp-server F-03) found that the daemon listens
- * on 127.0.0.1:8006 and only verifies the caller-supplied
- * `x-dreamfactory-session-token` header. Any local process or container
- * sharing the host's loopback can bypass the PHP RBAC layer by speaking
- * directly to the daemon with a valid session token (which can be obtained
- * via a normal user login).
- *
- * The fix re-uses the existing MCP_INTERNAL_KEY env var (already gating
- * /mcp/cache/clear) on the main /mcp/:serviceName endpoint when it is set.
- *
- * Tested at the TypeScript-source level since the daemon has no test
- * framework configured.
+ * Behaviour is covered by daemon/src/services/internal-key.test.ts (real daemon
+ * on an ephemeral port); these assertions pin the wiring at the source level.
  */
 class DaemonSharedSecretTest extends TestCase
 {
-    private string $sourcePath;
-    private string $contents;
-
-    protected function setUp(): void
+    private function src(string $rel): string
     {
-        $this->sourcePath = __DIR__ . '/../../daemon/src/server.ts';
-        $this->assertFileExists($this->sourcePath);
-        $this->contents = file_get_contents($this->sourcePath);
+        $path = __DIR__ . '/../../' . $rel;
+        $this->assertFileExists($path);
+
+        return file_get_contents($path);
     }
 
-    public function testMcpEndpointChecksInternalKeyWhenConfigured(): void
+    public function testGateIsMountedOnEveryMcpRouteBeforeAnyHandler(): void
     {
-        // Find the /mcp/:serviceName route handler.
-        $routeStart = strpos($this->contents, "app.all('/mcp/:serviceName'");
-        $this->assertNotFalse($routeStart, 'MCP service route handler must exist');
-
-        // Slice the next ~3KB which covers the auth-check prelude.
-        $prelude = substr($this->contents, $routeStart, 3000);
-
-        $this->assertMatchesRegularExpression(
-            '/INTERNAL_API_KEY/',
-            $prelude,
-            'MCP service route must reference INTERNAL_API_KEY for shared-secret auth'
-        );
-        $this->assertMatchesRegularExpression(
-            "/x-mcp-internal-key/i",
-            $prelude,
-            'MCP service route must check the x-mcp-internal-key header'
-        );
+        $server = $this->src('daemon/src/server.ts');
+        $gate = strpos($server, "app.use('/mcp', internalKeyGate);");
+        $this->assertNotFalse($gate, 'every /mcp route must be internal-key gated');
+        foreach (["app.post('/mcp/cache/clear'", "app.post('/mcp/catalog/preview'", "app.all('/mcp/:serviceName'"] as $route) {
+            $at = strpos($server, $route);
+            $this->assertNotFalse($at, $route);
+            $this->assertLessThan($at, $gate, "{$route} registered after the gate");
+        }
+        // The old optional gate ("only when MCP_INTERNAL_KEY is set") is gone.
+        $this->assertStringNotContainsString('INTERNAL_API_KEY &&', $server);
     }
 
-    public function testMcpEndpointRejectsWith403WhenKeyMismatches(): void
+    public function testGateFailsClosedWithAConstantTimeCompare(): void
     {
-        $routeStart = strpos($this->contents, "app.all('/mcp/:serviceName'");
-        $prelude = substr($this->contents, $routeStart, 3000);
-
-        // We accept any 403 status response that mentions the internal key
-        // (matches the cache-clear endpoint pattern).
-        $this->assertMatchesRegularExpression(
-            '/\.status\s*\(\s*403\s*\)/',
-            $prelude,
-            'MCP service route must return 403 on internal-key mismatch'
-        );
+        $key = $this->src('daemon/src/services/internal-key.ts');
+        $this->assertStringContainsString('timingSafeEqual(a, b)', $key);
+        $this->assertStringContainsString("expected === ''", $key, 'an empty expected key never matches');
+        $this->assertMatchesRegularExpression('/\.status\(\s*403\s*\)/', $key);
+        $this->assertStringContainsString("'storage', 'framework', 'mcp_internal_key'", $key);
     }
 }

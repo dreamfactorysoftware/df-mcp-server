@@ -16,7 +16,9 @@ class McpHealthTest extends TestCase
     private function config(array $over = []): array
     {
         return array_replace_recursive([
-            'daemon'        => ['enabled' => true, 'url' => 'http://127.0.0.1:8006', 'internal_base_url' => null, 'internal_key' => null],
+            'daemon'        => ['enabled' => true, 'url' => 'http://127.0.0.1:8006', 'internal_base_url' => null, 'internal_key' => null,
+                // What the controller adds: the generated key file exists.
+                'internal_key_resolved' => true, 'internal_key_file' => '/opt/df/storage/framework/mcp_internal_key'],
             'system_daemon' => ['enabled' => true, 'url' => 'http://127.0.0.1:3700', 'base_url' => null],
         ], $over);
     }
@@ -222,9 +224,11 @@ class McpHealthTest extends TestCase
         $cfg = $this->config(['daemon' => ['url' => 'http://mcp-daemon:8006']]);
         $r = McpHealth::report($cfg, self::ORIGIN, self::ORIGIN, $this->upProbe(), fn () => null);
 
+        // A generated key file counts as configured, but a remote daemon cannot read it.
         $key = $this->check($r, 'internal_key');
         $this->assertSame('warn', $key['status']);
-        $this->assertFalse($key['details']['internal_key_set']);
+        $this->assertTrue($key['details']['internal_key_set']);
+        $this->assertSame('file', $key['details']['source']);
         $this->assertStringContainsString('MCP_INTERNAL_KEY', $key['message']);
         $this->assertSame('warn', $this->check($r, 'internal_base_url')['status']);
         // node missing is only a warning when the daemon lives elsewhere
@@ -237,11 +241,67 @@ class McpHealthTest extends TestCase
         $this->assertSame('ok', $this->check($r, 'internal_base_url')['status']);
     }
 
-    public function testLoopbackDaemonsWithoutKeyIsOk(): void
+    public function testLoopbackDaemonsWithGeneratedKeyFileIsOk(): void
     {
         $r = McpHealth::report($this->config(), self::ORIGIN, self::ORIGIN, $this->upProbe(), fn () => 'v20');
-        $this->assertSame('ok', $this->check($r, 'internal_key')['status']);
+        $key = $this->check($r, 'internal_key');
+        $this->assertSame('ok', $key['status']);
+        $this->assertTrue($key['details']['internal_key_set']);
+        $this->assertSame('file', $key['details']['source']);
+        $this->assertStringContainsString('storage/framework/mcp_internal_key', $key['message']);
         $this->assertSame('ok', $this->check($r, 'internal_base_url')['status']);
+    }
+
+    public function testExplicitInternalKeyIsOk(): void
+    {
+        $r = McpHealth::report($this->config(['daemon' => ['internal_key' => 's3cret']]), self::ORIGIN, self::ORIGIN, $this->upProbe(), fn () => 'v20');
+        $key = $this->check($r, 'internal_key');
+        $this->assertSame('ok', $key['status']);
+        $this->assertSame('env', $key['details']['source']);
+    }
+
+    public function testNoKeyAtAllIsAnErrorBecauseTheDaemonFailsClosed(): void
+    {
+        $r = McpHealth::report($this->config(['daemon' => ['internal_key_resolved' => false]]), self::ORIGIN, self::ORIGIN, $this->upProbe(), fn () => 'v20');
+        $key = $this->check($r, 'internal_key');
+        $this->assertSame('error', $key['status']);
+        $this->assertFalse($key['details']['internal_key_set']);
+        $this->assertStringContainsString('storage/framework', $key['message']);
+        $this->assertSame('error', $r['status']);
+    }
+
+    /** Data daemon /health reporting function_tools, plus a configured function-tool count. */
+    private function functionToolsCheck(?bool $enabled, ?int $configured): array
+    {
+        $probe = function (string $url) use ($enabled): array {
+            $body = ['status' => 'ok', 'version' => '1.0.0', 'mode' => 'stateless'];
+            if ($enabled !== null && !str_contains($url, ':3700')) {
+                $body['function_tools'] = $enabled;
+            }
+
+            return ['status' => 200, 'body' => json_encode($body)];
+        };
+
+        return $this->check(McpHealth::report($this->config(), self::ORIGIN, self::ORIGIN, $probe, fn () => 'v20', null, $configured), 'function_tools');
+    }
+
+    public function testFunctionToolsCheck(): void
+    {
+        $c = $this->functionToolsCheck(false, 2);
+        $this->assertSame('warn', $c['status']);
+        $this->assertStringContainsString('2 function tools are configured but not offered', $c['message']);
+        $this->assertStringContainsString('MCP_ALLOW_FUNCTION_TOOLS=true', $c['message']);
+        $this->assertSame(['enabled' => false, 'configured' => 2], $c['details']);
+
+        $this->assertSame('ok', $this->functionToolsCheck(false, 0)['status']);
+        $this->assertSame('ok', $this->functionToolsCheck(false, null)['status']);
+        $on = $this->functionToolsCheck(true, 2);
+        $this->assertSame('ok', $on['status']);
+        $this->assertStringContainsString('enabled', $on['message']);
+        // Older daemon that does not report the flag: unknown, never a warning.
+        $old = $this->functionToolsCheck(null, 2);
+        $this->assertSame('ok', $old['status']);
+        $this->assertNull($old['details']['enabled']);
     }
 
     public function testNodeMissingWithLocalDeadDaemonIsTheHeadlineError(): void
