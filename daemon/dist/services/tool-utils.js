@@ -1,4 +1,5 @@
 import { lazyStateFor } from './lazy.service.js';
+import { annotationsFor, registerArgSpec, specFor } from './args.js';
 export const respond = (data) => {
     let text;
     try {
@@ -18,14 +19,18 @@ export const handleError = (error, operation) => {
         return `Unknown error during ${operation}: ${String(error)}`;
     }
     const message = error.message ?? '';
+    // Every DF sub-call carries the key/session the PHP proxy already validated,
+    // so a 403 — or the 401 "User is not authenticated" df-core raises when a
+    // key-only role has no access to the resource — is a role denial, not an
+    // authentication failure. Say so, or the model wastes turns re-authenticating.
+    if (message.includes('403') || message.includes('Access forbidden') || message.includes('User is not authenticated')) {
+        return `Permission Error: the session's role may not ${operation}. Re-authenticating will not help; the role needs access granted in DreamFactory. DreamFactory said: ${message}`;
+    }
     if (message.includes('Authentication failed') || message.includes('401')) {
         return `Authentication Error: ${message}`;
     }
     if (message.includes('Network error') || message.includes('Unable to connect')) {
         return `Connection Error: ${message}`;
-    }
-    if (message.includes('Access forbidden') || message.includes('403')) {
-        return `Permission Error: ${message}`;
     }
     if (message.includes('Resource not found') || message.includes('404')) {
         return `Resource Error: ${message}`;
@@ -38,6 +43,15 @@ export const handleError = (error, operation) => {
     }
     return `Error during ${operation}: ${message}`;
 };
+/**
+ * Verbs that change data. With allow_writes=false these are never registered,
+ * in either tool style, so neither tools/list nor the lazy facade can reach them.
+ */
+export const WRITE_VERBS = new Set([
+    'create_records', 'update_records', 'delete_records',
+    'call_stored_procedure', 'call_stored_function',
+    'create_file', 'create_folder', 'delete_file'
+]);
 /**
  * Sanitize API name for use as a tool prefix.
  * Converts to lowercase, replaces non-alphanumeric chars with underscores.
@@ -63,15 +77,18 @@ export function getAuth(sessionManager, sessionId) {
     return { sessionToken, apiKey };
 }
 export function createToolRegistrar(server, disabledTools) {
-    return (name, title, description, schema, handler) => {
+    return (name, title, description, schema, handler, opts = {}) => {
         if (disabledTools?.has(name)) {
             return;
         }
+        const annotations = opts.annotations ?? annotationsFor(name);
+        const spec = specFor(schema, opts.serviceNames);
+        registerArgSpec(server, name, spec);
         // Lazy mode keeps a catalog of every tool so the facade can search,
         // describe and call them by name; results are shaped/paged when active.
         const lazy = lazyStateFor(server);
-        lazy?.register({ name, title, description, schema, handler });
-        server.registerTool(name, { title, description, inputSchema: schema }, async (params, context) => {
+        lazy?.register({ name, title, description, schema, handler, annotations, spec });
+        server.registerTool(name, { title, description, inputSchema: schema, annotations }, async (params, context) => {
             console.log(`[tool] ${name} called`);
             try {
                 const result = await handler(params ?? {}, context ?? {});

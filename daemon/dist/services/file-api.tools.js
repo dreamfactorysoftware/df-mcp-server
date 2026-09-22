@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import { DreamFactoryService } from './dreamfactory.service.js';
-import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
+import { respond, sanitizeApiName, getAuth, createToolRegistrar, WRITE_VERBS } from './tool-utils.js';
 function fileContentToToolResponse(result) {
     switch (result.kind) {
         case 'image':
@@ -21,9 +21,9 @@ const FILE_TOOLS = [
         description: 'List files and folders in a path',
         schema: z.object({
             path: z.string().optional().describe('Path to list (empty for root)'),
-            includeFiles: z.boolean().optional().describe('Include files in listing'),
-            includeFolders: z.boolean().optional().describe('Include folders in listing'),
-            fullTree: z.boolean().optional().describe('Return full directory tree')
+            include_files: z.boolean().optional().describe('Include files in listing'),
+            include_folders: z.boolean().optional().describe('Include folders in listing'),
+            full_tree: z.boolean().optional().describe('Return full directory tree')
         }),
         handler: async ({ path, ...options }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.listFiles(apiConfig.baseUrl, auth, path ?? '', options);
@@ -98,8 +98,9 @@ export const FILE_TOOL_NAMES = FILE_TOOLS.map(t => t.name);
 /**
  * Register file API tools for each file service.
  */
-export function registerFileApiTools(server, sessionManager, apiConfigs, disabledTools) {
+export function registerFileApiTools(server, sessionManager, apiConfigs, disabledTools, allowWrites = true) {
     const fileConfigs = apiConfigs.filter(c => c.category === 'file');
+    const tools = allowWrites ? FILE_TOOLS : FILE_TOOLS.filter(t => !WRITE_VERBS.has(t.name));
     if (fileConfigs.length === 0) {
         console.log('[registerFileApiTools] No file services found, skipping file tools registration');
         return;
@@ -109,7 +110,7 @@ export function registerFileApiTools(server, sessionManager, apiConfigs, disable
     // Register prefixed tools for each file API
     for (const apiConfig of fileConfigs) {
         const prefix = sanitizeApiName(apiConfig.name);
-        for (const tool of FILE_TOOLS) {
+        for (const tool of tools) {
             const prefixedName = `${prefix}_${tool.name}`;
             const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
             const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;

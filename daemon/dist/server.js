@@ -1,22 +1,30 @@
 import express from 'express';
 import cors from 'cors';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SessionService } from './services/session.service.js';
 import { runWithTrace } from './services/trace.service.js';
-import { runWithResponse } from './services/lazy.service.js';
-import { createServer, getSessionId, parseConfigFromHeaders, updateSessionConfigFromHeaders, discoverServices } from './utils/utils.js';
+import { lazyStateFor } from './services/lazy.service.js';
+import { runWithResponse } from './services/ledger.js';
+import { previewCatalog } from './services/catalog-preview.service.js';
+import { createServer, getSessionId, parseConfigFromHeaders, parseMcpConfig, updateSessionConfigFromHeaders, discoverServices } from './utils/utils.js';
 import { extractAndValidateAuth, getAuthModeDescription } from './utils/auth.utils.js';
 const app = express();
 const PORT = Number(process.env.MCP_DAEMON_PORT ?? 8006);
 const HOST = process.env.MCP_DAEMON_HOST ?? '127.0.0.1';
-// Stateless mode: issue no session IDs and keep no session state between
-// requests. Every input a session would cache (DreamFactory token, API key,
-// resolved apiConfigs) is sent by the PHP proxy on each request, so a server is
-// built per request and discarded. This lets any node answer any request, which
-// is required behind a load balancer — MCP clients do not return affinity
-// cookies. Trade-off: no server-initiated SSE stream (GET returns 405).
-const STATELESS = (process.env.MCP_STATELESS ?? '').toLowerCase() === 'true';
+// Stateless mode (default): issue no session IDs and keep no session state
+// between requests. Every input a session would cache (DreamFactory token, API
+// key, resolved apiConfigs) is sent by the PHP proxy on each request, so a
+// server is built per request and discarded. This lets any node answer any
+// request, which is required behind a load balancer — MCP clients do not
+// return affinity cookies. Trade-off: no server-initiated SSE stream (GET
+// returns 405). MCP_STATELESS=false opts back into warm, process-pinned
+// sessions for single-node installs.
+const STATELESS = !['false', '0', 'no', 'off'].includes((process.env.MCP_STATELESS ?? 'true').trim().toLowerCase());
+// Reported by /health so DreamFactory's MCP health check can show it.
+// ../package.json resolves from both src/ (tsx) and dist/ (tsc).
+const VERSION = createRequire(import.meta.url)('../package.json').version;
 // MCP clients (Claude Desktop, etc.) are external — CORS must be permissive.
 // The daemon is already protected by requiring a DreamFactory session token.
 app.use(cors());
@@ -56,6 +64,7 @@ const sessions = new Map();
 app.get('/health', (_req, res) => {
     res.json({
         status: 'ok',
+        version: VERSION,
         timestamp: Math.floor(Date.now() / 1000),
         mode: STATELESS ? 'stateless' : 'stateful',
         active_sessions: sessions.size,
@@ -92,6 +101,25 @@ app.post('/mcp/cache/clear', (req, res) => {
         }
         sessions.clear();
         res.json({ message: 'All cache cleared' });
+    }
+});
+// Catalog preview (issue #64): what tools/list would advertise for a given
+// service config + PHP-scoped backend catalog + client name, computed in a
+// throwaway server. Nothing is executed: no DreamFactory calls, no MCP
+// session, no audit row. Internal-key gated like /mcp/cache/clear.
+app.post('/mcp/catalog/preview', async (req, res) => {
+    if (INTERNAL_API_KEY && req.headers['x-mcp-internal-key'] !== INTERNAL_API_KEY) {
+        return res.status(403).json({ error: 'Forbidden: invalid internal key' });
+    }
+    try {
+        const result = await previewCatalog(req.body && typeof req.body === 'object' ? req.body : {});
+        // tools/list attaches the savings ledger to the current response; this is not a proxied MCP call.
+        res.removeHeader('X-Mcp-Ledger');
+        res.json(result);
+    }
+    catch (error) {
+        console.error('[catalog/preview] failed:', error);
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Server error' });
     }
 });
 // ============================================================================
@@ -214,10 +242,6 @@ app.all('/mcp/:serviceName', async (req, res) => {
         }
         // Parse disabled tools and custom tools from service config (body envelope or header fallback)
         // This must happen before the service check so custom-tools-only roles are not rejected.
-        let disabledTools;
-        let customTools;
-        let lazyMode = 'auto';
-        let toolStyle = 'prefixed';
         const mcpConfigData = mcpConfig ?? (() => {
             const header = req.headers['x-mcp-config'];
             if (!header)
@@ -230,36 +254,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
                 return undefined;
             }
         })();
-        if (mcpConfigData) {
-            if (['auto', 'on', 'off'].includes(mcpConfigData.lazy_mode)) {
-                lazyMode = mcpConfigData.lazy_mode;
-            }
-            if (['prefixed', 'merged'].includes(mcpConfigData.tool_style)) {
-                toolStyle = mcpConfigData.tool_style;
-            }
-            if (Array.isArray(mcpConfigData.disabled_tools) && mcpConfigData.disabled_tools.length > 0) {
-                disabledTools = new Set(mcpConfigData.disabled_tools);
-                console.log(`Disabled tools (${disabledTools.size}):`, [...disabledTools]);
-            }
-            if (Array.isArray(mcpConfigData.custom_tools) && mcpConfigData.custom_tools.length > 0) {
-                customTools = mcpConfigData.custom_tools
-                    .filter((t) => t.enabled !== false && t.enabled !== 0)
-                    .map((t) => ({
-                    name: t.name,
-                    description: t.description ?? '',
-                    tool_type: t.tool_type ?? 'api',
-                    http_method: t.http_method ?? undefined,
-                    url: t.url ?? undefined,
-                    parameters: Array.isArray(t.parameters) ? t.parameters : [],
-                    headers: t.headers && typeof t.headers === 'object' && !Array.isArray(t.headers) ? t.headers : {},
-                    function: t.function ?? undefined,
-                    secrets: t.secrets && typeof t.secrets === 'object' && !Array.isArray(t.secrets) ? t.secrets : undefined,
-                }));
-                if (customTools.length > 0) {
-                    console.log(`Custom tools (${customTools.length}):`, customTools.map(t => t.name));
-                }
-            }
-        }
+        const { disabledTools, customTools, lazyMode, toolStyle, allowWrites } = parseMcpConfig(mcpConfigData);
         const hasCustomTools = customTools !== undefined && customTools.length > 0;
         const catalogFromPhp = Array.isArray(availableServicesFromBody)
             || Boolean(req.header('X-Mcp-Available-Services'));
@@ -291,7 +286,15 @@ app.all('/mcp/:serviceName', async (req, res) => {
                 apiKey: dfApiKey,
                 apiConfigs
             });
-            const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle);
+            const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle, allowWrites);
+            // No session remembers that the client already listed tools or who the
+            // client is, so decide lazy behaviour per request from the catalog and
+            // the client name PHP forwards (X-Mcp-Client-Name).
+            const lazy = lazyStateFor(statelessServer);
+            if (lazy) {
+                lazy.clientHint = req.header('x-mcp-client-name');
+                await lazy.prime();
+            }
             const statelessTransport = new StreamableHTTPServerTransport({
                 sessionIdGenerator: undefined,
                 enableJsonResponse: true
@@ -304,7 +307,7 @@ app.all('/mcp/:serviceName', async (req, res) => {
             await statelessTransport.handleRequest(req, res, req.body);
             return;
         }
-        const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode, toolStyle);
+        const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode, toolStyle, allowWrites);
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => {
                 const sessionId = randomUUID();
@@ -370,14 +373,17 @@ setInterval(() => {
         }
     }
 }, 2 * 60 * 1000).unref?.();
-app.listen(PORT, HOST, () => {
-    console.log(`MCP Daemon listening on http://${HOST}:${PORT}`);
+const listener = app.listen(PORT, HOST, () => {
+    const addr = listener.address();
+    const port = addr && typeof addr === 'object' ? addr.port : PORT;
+    console.log(`MCP Daemon listening on http://${HOST}:${port}`);
     console.log(`Session mode: ${STATELESS ? 'stateless (no session IDs; load-balancer safe)' : 'stateful (sessions pinned to this process)'}`);
     console.log('');
     console.log('Endpoints:');
     console.log(`  GET  /health - Health check`);
     console.log(`  GET  /ping - Ping`);
     console.log(`  POST /mcp/cache/clear - Clear session cache`);
+    console.log(`  POST /mcp/catalog/preview - tools/list preview for a config + scoped catalog (no session)`);
     console.log(`  ALL  /mcp/:serviceName - MCP protocol`);
     console.log('');
     console.log('Authentication (at least one required):');

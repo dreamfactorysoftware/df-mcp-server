@@ -50,13 +50,13 @@ export function registerApiConnectorTools(server, sessionManager, apiConfigs, di
     });
     // Get schema for a table across all databases (finds where it exists)
     registerTool('all_find_table', 'Find Table Across All Databases', 'Search for a table by name across all connected databases and return its schema if found', z.object({
-        tableName: z.string().describe('The table name to search for')
-    }), async ({ tableName }, { sessionId }) => {
+        table_name: z.string().describe('The table name to search for')
+    }), async ({ table_name }, { sessionId }) => {
         const auth = getAuth(sessionManager, sessionId);
         const results = {};
         await Promise.all(dbConfigs.map(async (api) => {
             try {
-                const schema = await DreamFactoryService.getTableSchema(tableName, api.baseUrl, auth);
+                const schema = await DreamFactoryService.getTableSchema(table_name, api.baseUrl, auth);
                 results[api.name] = { found: true, schema };
             }
             catch (error) {
@@ -72,7 +72,7 @@ export function registerApiConnectorTools(server, sessionManager, apiConfigs, di
         const foundIn = Object.entries(results)
             .filter(([, v]) => v.found)
             .map(([k]) => k);
-        return respond({ tableName, foundIn, details: results });
+        return respond({ table_name, foundIn, details: results });
     });
     // Get stored procedures from all databases
     registerTool('all_get_stored_procedures', 'Get Stored Procedures from All Databases', 'Retrieve stored procedures from all connected database services', z.object({}), async (_args, { sessionId }) => {
