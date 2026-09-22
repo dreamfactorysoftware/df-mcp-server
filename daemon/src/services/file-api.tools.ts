@@ -2,8 +2,8 @@ import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { DreamFactoryService, type DFAuthConfig, type FileContentResult } from './dreamfactory.service.js';
 import { SessionService } from './session.service.js';
-import type { ApiConfig } from '../types.js';
-import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar, WRITE_VERBS } from './tool-utils.js';
+import type { ApiConfig, ToolStyle } from '../types.js';
+import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar, registerMergedTools, WRITE_VERBS } from './tool-utils.js';
 
 type FileToolDefinition = {
   name: string;
@@ -116,14 +116,20 @@ const FILE_TOOLS: FileToolDefinition[] = [
 export const FILE_TOOL_NAMES = FILE_TOOLS.map(t => t.name);
 
 /**
- * Register file API tools for each file service.
+ * Register file API tools.
+ *
+ * Prefixed mode emits every verb once per file service (logs_list_files,
+ * files_list_files, ...). Merged mode registers each verb once and takes a
+ * `service` argument, the same shape the database tools use, which is where a
+ * connection with several file services spends most of its catalog.
  */
 export function registerFileApiTools(
   server: McpServer,
   sessionManager: SessionService,
   apiConfigs: ApiConfig[],
   disabledTools?: Set<string>,
-  allowWrites = true
+  allowWrites = true,
+  toolStyle: ToolStyle = 'prefixed'
 ) {
   const fileConfigs = apiConfigs.filter(c => c.category === 'file');
   const tools = allowWrites ? FILE_TOOLS : FILE_TOOLS.filter(t => !WRITE_VERBS.has(t.name));
@@ -137,25 +143,33 @@ export function registerFileApiTools(
 
   const registerTool = createToolRegistrar(server, disabledTools);
 
-  // Register prefixed tools for each file API
-  for (const apiConfig of fileConfigs) {
-    const prefix = sanitizeApiName(apiConfig.name);
+  if (toolStyle === 'merged') {
+    registerMergedTools(server, sessionManager, fileConfigs, tools, {
+      targetNoun: 'file service',
+      logLabel: 'merged-file-tools',
+      disabledTools
+    });
+  } else {
+    // Register prefixed tools for each file API
+    for (const apiConfig of fileConfigs) {
+      const prefix = sanitizeApiName(apiConfig.name);
 
-    for (const tool of tools) {
-      const prefixedName = `${prefix}_${tool.name}`;
-      const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
-      const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
+      for (const tool of tools) {
+        const prefixedName = `${prefix}_${tool.name}`;
+        const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
+        const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
 
-      registerTool(
-        prefixedName,
-        prefixedTitle,
-        prefixedDescription,
-        tool.schema,
-        async (params, context) => {
-          const auth = getAuth(sessionManager, context.sessionId);
-          return tool.handler(params, context, apiConfig, auth);
-        }
-      );
+        registerTool(
+          prefixedName,
+          prefixedTitle,
+          prefixedDescription,
+          tool.schema,
+          async (params, context) => {
+            const auth = getAuth(sessionManager, context.sessionId);
+            return tool.handler(params, context, apiConfig, auth);
+          }
+        );
+      }
     }
   }
 
