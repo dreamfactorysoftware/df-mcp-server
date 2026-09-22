@@ -51,8 +51,8 @@ class McpStreamMiddleware
     {
         return [
             'Access-Control-Allow-Origin' => '*',
-            'Access-Control-Allow-Methods' => 'GET, POST, DELETE, OPTIONS',
-            'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id',
+            'Access-Control-Allow-Methods' => 'GET, HEAD, POST, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id, X-DreamFactory-API-Key, X-DreamFactory-Session-Token',
             'Access-Control-Expose-Headers' => 'WWW-Authenticate',
         ];
     }
@@ -106,7 +106,7 @@ class McpStreamMiddleware
             foreach (self::corsHeaders() as $key => $value) {
                 $response->headers->set($key, $value);
             }
-            return $response;
+            return self::stripBodyForHead($response, $method);
         }
 
         return $next($request);
@@ -123,7 +123,7 @@ class McpStreamMiddleware
         }
 
         $controllerMethod = self::RFC8414_WELL_KNOWN[$wellKnownType] ?? null;
-        if ($controllerMethod && $method === 'GET') {
+        if ($controllerMethod && in_array($method, ['GET', 'HEAD'], true)) {
             $this->attachServiceAttributes($request, $mcpService);
 
             $controller = new McpOAuthController();
@@ -133,11 +133,25 @@ class McpStreamMiddleware
                 foreach (self::corsHeaders() as $key => $value) {
                     $response->headers->set($key, $value);
                 }
-                return $response;
+                return self::stripBodyForHead($response, $method);
             }
         }
 
         return $next($request);
+    }
+
+    /**
+     * A HEAD response carries the same status and headers as GET but no body
+     * (RFC 9110 sec. 9.3.2). The middleware returns responses directly rather than
+     * through the router, so Symfony's own prepare() body-stripping never runs.
+     */
+    private static function stripBodyForHead($response, string $method)
+    {
+        if ($method === 'HEAD' && method_exists($response, 'setContent')) {
+            $response->setContent('');
+        }
+
+        return $response;
     }
 
     /**
@@ -193,6 +207,7 @@ class McpStreamMiddleware
 
         return match ($method) {
             'GET' => $controller->handleGet($request, $mcpService),
+            'HEAD' => $controller->handleHead($request, $mcpService),
             'POST' => $controller->handlePost($request, $mcpService),
             'DELETE' => $controller->handleDelete($request, $mcpService),
             default => null,

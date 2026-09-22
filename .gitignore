@@ -1,8 +1,8 @@
 composer.phar
 /vendor/
+.phpunit.result.cache
 
 daemon/node_modules/
-daemon/package-lock.json
 daemon/*.log
 daemon/.env
 

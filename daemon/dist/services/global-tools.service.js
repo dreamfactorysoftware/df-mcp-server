@@ -13,8 +13,10 @@ const REQUEST_TIMEOUT_MS = 30_000;
 async function dfFetch(method, url, auth, body) {
     const headers = {
         Accept: 'application/json',
-        'X-DreamFactory-Session-Token': auth.sessionToken,
     };
+    if (auth.sessionToken) {
+        headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+    }
     if (auth.apiKey) {
         headers['X-DreamFactory-API-Key'] = auth.apiKey;
     }

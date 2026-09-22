@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { DreamFactoryService, type DFAuthConfig, type FileContentResult } from './dreamfactory.service.js';
 import { SessionService } from './session.service.js';
 import type { ApiConfig } from '../types.js';
-import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
+import { type ToolResponse, respond, sanitizeApiName, getAuth, createToolRegistrar, WRITE_VERBS } from './tool-utils.js';
 
 type FileToolDefinition = {
   name: string;
@@ -39,9 +39,9 @@ const FILE_TOOLS: FileToolDefinition[] = [
     description: 'List files and folders in a path',
     schema: z.object({
       path: z.string().optional().describe('Path to list (empty for root)'),
-      includeFiles: z.boolean().optional().describe('Include files in listing'),
-      includeFolders: z.boolean().optional().describe('Include folders in listing'),
-      fullTree: z.boolean().optional().describe('Return full directory tree')
+      include_files: z.boolean().optional().describe('Include files in listing'),
+      include_folders: z.boolean().optional().describe('Include folders in listing'),
+      full_tree: z.boolean().optional().describe('Return full directory tree')
     }),
     handler: async ({ path, ...options }, _context, apiConfig, auth) => {
       const data = await DreamFactoryService.listFiles(apiConfig.baseUrl, auth, path ?? '', options);
@@ -122,9 +122,11 @@ export function registerFileApiTools(
   server: McpServer,
   sessionManager: SessionService,
   apiConfigs: ApiConfig[],
-  disabledTools?: Set<string>
+  disabledTools?: Set<string>,
+  allowWrites = true
 ) {
   const fileConfigs = apiConfigs.filter(c => c.category === 'file');
+  const tools = allowWrites ? FILE_TOOLS : FILE_TOOLS.filter(t => !WRITE_VERBS.has(t.name));
 
   if (fileConfigs.length === 0) {
     console.log('[registerFileApiTools] No file services found, skipping file tools registration');
@@ -139,7 +141,7 @@ export function registerFileApiTools(
   for (const apiConfig of fileConfigs) {
     const prefix = sanitizeApiName(apiConfig.name);
 
-    for (const tool of FILE_TOOLS) {
+    for (const tool of tools) {
       const prefixedName = `${prefix}_${tool.name}`;
       const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
       const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
@@ -157,7 +159,11 @@ export function registerFileApiTools(
     }
   }
 
-  // Register cross-file-service tools
+  // Cross-service aggregator only pays off with 2+ file services.
+  if (fileConfigs.length < 2) {
+    return;
+  }
+
   registerTool(
     'all_list_files',
     'List Files from All Storage Services',

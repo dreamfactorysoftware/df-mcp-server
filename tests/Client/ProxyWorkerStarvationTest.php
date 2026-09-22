@@ -34,12 +34,18 @@ class ProxyWorkerStarvationTest extends TestCase
     {
         $src = $this->src('src/Http/Controllers/McpStreamController.php');
         $start = strpos($src, 'public function handleGet(');
-        $end = strpos($src, 'public function handlePost(');
         $this->assertNotFalse($start);
+        // End at handleGet's own closing brace, not at the next named method:
+        // anything inserted after it (handleHead) would otherwise drag its
+        // docblock into $body and trip the processMcpRequest assertion below.
+        $end = strpos($src, "\n    }\n", $start);
+        $this->assertNotFalse($end);
         $body = substr($src, $start, $end - $start);
 
-        // Token still validated first so unauthenticated GETs get 401 + WWW-Authenticate.
-        $this->assertStringContainsString('validateBearerToken', $body);
+        // Credentials still validated first so unauthenticated GETs get
+        // 401 + WWW-Authenticate. authenticateRequest wraps the Bearer path
+        // and the per-service opt-in API-key path.
+        $this->assertStringContainsString('authenticateRequest', $body);
         $this->assertStringContainsString('405', $body);
         $this->assertStringContainsString("'Allow'", $body);
         // The GET must never reach the daemon proxy.

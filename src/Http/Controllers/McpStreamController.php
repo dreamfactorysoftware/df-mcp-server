@@ -9,8 +9,12 @@ use DreamFactory\Core\McpServer\Support\DaemonTarget;
 use DreamFactory\Core\McpServer\Support\SecretFieldManifest;
 use DreamFactory\Core\McpServer\Models\McpCustomTool;
 use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
+use DreamFactory\Core\McpServer\Utility\ApiKeyAuth;
+use DreamFactory\Core\McpServer\Utility\AvailableServices;
 use DreamFactory\Core\McpServer\Utility\RequestLogger;
-use DreamFactory\Core\Enums\ServiceTypeGroups;
+use DreamFactory\Core\McpServer\Utility\RoleAccessGate;
+use DreamFactory\Core\Models\App;
+use DreamFactory\Core\Utility\JWTUtilities;
 use DreamFactory\Core\Utility\Session as SessionUtilities;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -19,12 +23,12 @@ class McpStreamController extends Controller
 {
     public function handleGet(Request $request, string $mcpService)
     {
-        // Validate the Bearer token FIRST so unauthenticated GET requests receive
+        // Authenticate FIRST so unauthenticated GET requests receive
         // 401 + WWW-Authenticate (triggering OAuth discovery) rather than 406,
         // which clients like Claude.ai cannot act on.
-        $token = $this->validateBearerToken($request);
-        if ($token instanceof \Illuminate\Http\JsonResponse) {
-            return $token;
+        $auth = $this->authenticateRequest($request);
+        if ($auth instanceof \Illuminate\Http\JsonResponse) {
+            return $auth;
         }
 
         // Decline the server-initiated SSE stream (MCP spec allows 405; clients
@@ -43,6 +47,31 @@ class McpStreamController extends Controller
         ], 405)->header('Allow', 'POST, DELETE');
     }
 
+    /**
+     * HEAD must answer exactly as GET would — same status and headers, no body
+     * (RFC 9110 sec. 9.3.2). Previously no HEAD arm existed in the middleware, so
+     * these fell through to DreamFactory's routing and returned 404, hiding the
+     * 401 + WWW-Authenticate that drives OAuth discovery.
+     *
+     * This deliberately stops short of processMcpRequest(): a HEAD probe must not
+     * open an MCP session against the daemon as a side effect.
+     */
+    public function handleHead(Request $request, string $mcpService)
+    {
+        $token = $this->validateBearerToken($request);
+        if ($token instanceof \Illuminate\Http\JsonResponse) {
+            return response('', $token->getStatusCode())
+                ->withHeaders($token->headers->all());
+        }
+
+        $accept = strtolower($request->header('Accept', ''));
+        if (!str_contains($accept, 'text/event-stream')) {
+            return response('', 406);
+        }
+
+        return response('', 200)->header('Content-Type', 'text/event-stream');
+    }
+
     public function handlePost(Request $request, string $mcpService)
     {
         return $this->processMcpRequest($request, $mcpService);
@@ -53,19 +82,26 @@ class McpStreamController extends Controller
         return $this->processMcpRequest($request, $mcpService);
     }
 
-    private function processMcpRequest(Request $request, string $mcpService)
+    /**
+     * @param array|null $auth Pre-computed auth result (from handleGet) so the
+     *        credentials are not validated twice on SSE connects.
+     */
+    private function processMcpRequest(Request $request, string $mcpService, ?array $auth = null)
     {
         $startNs = hrtime(true);
 
-        // Validate Bearer token
-        $token = $this->validateBearerToken($request);
-        if ($token instanceof \Illuminate\Http\JsonResponse) {
-            // Don't audit-log failed token validations — service_id can't be
-            // attributed to a session and the noise dwarfs the signal.
-            return $token;
+        // Authenticate: OAuth Bearer (always wins), or a static API key when
+        // the service opted in via allow_api_key_auth.
+        $auth ??= $this->authenticateRequest($request);
+        if ($auth instanceof \Illuminate\Http\JsonResponse) {
+            // Don't audit-log failed credential validations — service_id can't
+            // be attributed to a session and the noise dwarfs the signal.
+            return $auth;
         }
 
-        $dfSessionToken = $token->getDfSessionToken();
+        /** @var McpOAuthAccessToken|null $token null for API-key auth */
+        $token = $auth['token'];
+        $dfSessionToken = $auth['session_token']; // null for key-only auth
 
         // Get service configuration from request (set by middleware)
         $config = $request->attributes->get('mcp_service_config');
@@ -79,8 +115,40 @@ class McpStreamController extends Controller
 
         // Initialize DreamFactory session context so role.services is populated.
         // McpStreamMiddleware runs before AuthCheck, so we must set this up manually.
-        $appId = $config['app_id'] ?? null;
-        SessionUtilities::setSessionData($appId, $token->user_id);
+        if (($auth['auth_type'] ?? '') === ApiKeyAuth::MODE_API_KEY) {
+            // Mirror df-core's AuthCheck for API-key requests: record the key,
+            // then establish the session from the key's app (NOT the service's
+            // configured app). With no user, setSessionData() picks up the
+            // app's role, so the role-filtered service list works off the
+            // app's role; with a layered session token, the user's app-role
+            // mapping wins, exactly as in the REST pipeline.
+            SessionUtilities::setApiKey($auth['api_key']);
+            if (!empty($dfSessionToken)) {
+                SessionUtilities::setSessionToken($dfSessionToken);
+            }
+            SessionUtilities::setSessionData($auth['app_id'], $auth['user_id']);
+        } else {
+            $appId = $config['app_id'] ?? null;
+            SessionUtilities::setSessionData($appId, $token->user_id);
+        }
+
+        // "Require role access": with the switch on, a non-admin identity needs a
+        // grant on this MCP service itself before it may connect. Runs after the
+        // session is seeded (role.services populated) and before anything is
+        // resolved or proxied, so a refused identity learns nothing about the
+        // catalog. Admins always pass.
+        if (RoleAccessGate::requires($config) && !RoleAccessGate::sessionMayConnect($mcpService)) {
+            $message = RoleAccessGate::denialMessage($mcpService);
+            try { RequestLogger::log($mcpService, $request, $token, $startNs, 0, 'denied', $message); } catch (\Throwable $e) { /* never break the response on audit failure */ }
+            return response()->json([
+                'jsonrpc' => '2.0',
+                'id' => null,
+                'error' => [
+                    'code' => RoleAccessGate::ERROR_CODE,
+                    'message' => $message,
+                ],
+            ], 403);
+        }
 
         // Resolve lookup placeholders in custom tool configs (headers, URLs, parameters).
         // Must run AFTER setSessionData() so the user's lookup maps are populated.
@@ -142,10 +210,12 @@ class McpStreamController extends Controller
         // Resolve available services server-side so the daemon doesn't need
         // to call GET /api/v2/system/service (which requires system permissions).
         // The system daemon exposes the System API itself and never auto-mounts
-        // DB/file services, so skip the lookup for it.
+        // DB/file services, so skip the lookup for it. The data daemon's catalog
+        // is scoped to this MCP service when scope_tools / exposed_services /
+        // MCP_SCOPE_TOOLS is set — otherwise the historical instance-wide catalog.
         $availableServices = McpServiceTypes::isSystem($target['type'])
             ? []
-            : $this->getAvailableServices();
+            : AvailableServices::resolve($mcpService, is_array($config) ? $config : []);
 
         $client = new McpDaemonClient($target['url']);
         // The system daemon masks service configs using DreamFactory's own secret field metadata.
@@ -153,7 +223,7 @@ class McpStreamController extends Controller
             $client->withSecretFields(SecretFieldManifest::cached());
         }
         try {
-            $response = $client->proxyRequest($request, $mcpService, $config, $baseUrl, $dfSessionToken, $availableServices);
+            $response = $client->proxyRequest($request, $mcpService, $config, $baseUrl, $auth, $availableServices);
             // The daemon's savings ledger is internal — persist it, don't forward it to the MCP client.
             $ledger = json_decode((string) $response->headers->get('X-Mcp-Ledger'), true);
             $response->headers->remove('X-Mcp-Ledger');
@@ -250,78 +320,156 @@ class McpStreamController extends Controller
     }
 
     /**
-     * Get available database and file services, filtered by the user's role.
+     * Authenticate the request: OAuth Bearer token, or a static API key when
+     * the service has opted in via allow_api_key_auth.
      *
-     * Uses ServiceManager internally (bypasses HTTP RBAC middleware), then
-     * filters the result using the session's role.services — the same pattern
-     * used by Service::getUserAccessibleServices().
+     * Bearer always wins — a request carrying `Authorization: Bearer ...` goes
+     * through the unchanged OAuth validation path regardless of any API-key
+     * headers. Without a Bearer credential, the API-key path applies only when
+     * the service's allow_api_key_auth flag is enabled; otherwise the response
+     * is the exact same 401 Bearer-required (+ WWW-Authenticate) as before.
      *
-     * @return array List of services with name, label, type, and category
+     * @return array|\Illuminate\Http\JsonResponse Auth result with keys:
+     *         auth_type ('oauth'|'api_key'), token (McpOAuthAccessToken|null),
+     *         session_token (?string), api_key (?string), app_id (?int),
+     *         user_id (?int) — or an error response.
      */
-    private function getAvailableServices(): array
+    private function authenticateRequest(Request $request): array|\Illuminate\Http\JsonResponse
+    {
+        $config = $request->attributes->get('mcp_service_config');
+
+        $mode = ApiKeyAuth::decide(
+            $request->header('Authorization'),
+            ApiKeyAuth::allowsApiKeyAuth(is_array($config) ? $config : null)
+        );
+
+        if ($mode === ApiKeyAuth::MODE_API_KEY) {
+            return $this->validateApiKeyAuth($request);
+        }
+
+        // MODE_BEARER validates the presented token; MODE_UNAUTHORIZED falls
+        // through to the same method's 401 Bearer-required response, keeping
+        // pre-existing behavior byte-for-byte for services without the flag.
+        $token = $this->validateBearerToken($request);
+        if ($token instanceof \Illuminate\Http\JsonResponse) {
+            return $token;
+        }
+
+        return [
+            'auth_type' => 'oauth',
+            'token' => $token,
+            'session_token' => $token->getDfSessionToken(),
+            'api_key' => null,
+            'app_id' => null,
+            'user_id' => $token->user_id,
+        ];
+    }
+
+    /**
+     * Validate API-key authentication: the key must resolve to an existing,
+     * active app with a role assigned. An optional X-DreamFactory-Session-Token
+     * (DF JWT) layers user identity/RBAC on top of the app context.
+     *
+     * @return array|\Illuminate\Http\JsonResponse Auth result or error response
+     */
+    private function validateApiKeyAuth(Request $request): array|\Illuminate\Http\JsonResponse
+    {
+        $apiKey = trim((string) $request->header(ApiKeyAuth::HEADER_API_KEY, ''));
+
+        if ($apiKey === '') {
+            return $this->unauthorizedResponse($request, 'Unauthorized: API key required (X-DreamFactory-API-Key header)');
+        }
+
+        // Format gate (64-char hex, the shape of every DF-generated key)
+        // before any cache/DB lookup. Same message as an unknown key so the
+        // response doesn't distinguish malformed from nonexistent.
+        if (!ApiKeyAuth::isValidKeyFormat($apiKey)) {
+            return $this->unauthorizedResponse($request, 'Unauthorized: Invalid API key');
+        }
+
+        $appId = App::getAppIdByApiKey($apiKey);
+        if (!$appId) {
+            return $this->unauthorizedResponse($request, 'Unauthorized: Invalid API key');
+        }
+
+        $app = App::find($appId);
+        $rejection = ApiKeyAuth::appRejection(
+            $app ? ['is_active' => $app->is_active, 'role_id' => $app->role_id] : null
+        );
+        if ($rejection !== null) {
+            return $this->unauthorizedResponse($request, 'Unauthorized: ' . $rejection);
+        }
+
+        // Optional session token for user-specific RBAC on top of the app.
+        $sessionToken = trim((string) $request->header(ApiKeyAuth::HEADER_SESSION_TOKEN, ''));
+        $userId = null;
+        if ($sessionToken !== '') {
+            $validated = $this->validateSessionToken($request, $sessionToken);
+            if ($validated instanceof \Illuminate\Http\JsonResponse) {
+                return $validated;
+            }
+            $userId = $validated;
+        } else {
+            $sessionToken = null;
+        }
+
+        Log::debug('MCP API key auth successful', [
+            'app_id' => $appId,
+            'app_name' => $app->name,
+            'has_session_token' => !empty($sessionToken),
+        ]);
+
+        return [
+            'auth_type' => 'api_key',
+            'token' => null,
+            'session_token' => $sessionToken, // null for API-key-only auth
+            'api_key' => $apiKey,
+            'app_id' => $appId,
+            'user_id' => $userId,
+        ];
+    }
+
+    /**
+     * Validate a DreamFactory session token (JWT) the same way df-core's
+     * AuthCheck middleware does: signature/expiry via JWTAuth, then the
+     * user-mapping check via JWTUtilities::verifyUser().
+     *
+     * @return int|null|\Illuminate\Http\JsonResponse The token's user id, or an error response
+     */
+    private function validateSessionToken(Request $request, string $sessionToken): int|null|\Illuminate\Http\JsonResponse
     {
         try {
-            /** @var \DreamFactory\Core\Services\ServiceManager $serviceManager */
-            $serviceManager = app('df.service');
-            $fields = ['id', 'name', 'label', 'type'];
+            \JWTAuth::setToken($sessionToken);
+            /** @var \Tymon\JWTAuth\Payload $payload */
+            $payload = \JWTAuth::getPayload();
+            JWTUtilities::verifyUser($payload);
 
-            $dbServices = $serviceManager->getServiceListByGroup(ServiceTypeGroups::DATABASE, $fields, true);
-            $fileServices = $serviceManager->getServiceListByGroup(ServiceTypeGroups::FILE, $fields, true);
+            $userId = $payload->get('user_id');
 
-            $allServices = array_merge(
-                array_map(fn($s) => array_merge($s, ['category' => 'database']), $dbServices),
-                array_map(fn($s) => array_merge($s, ['category' => 'file']), $fileServices)
-            );
-
-            // Sysadmins get all services; non-admin users are filtered by role
-            if (!SessionUtilities::isSysAdmin()) {
-                $accessibleIds = $this->getUserAccessibleServiceIds();
-                if ($accessibleIds === null) {
-                    // null means role grants access to all services — no filtering needed
-                } elseif (!empty($accessibleIds)) {
-                    $allServices = array_values(array_filter(
-                        $allServices,
-                        fn($s) => in_array((int)($s['id'] ?? 0), $accessibleIds, true)
-                    ));
-                } else {
-                    $allServices = [];
-                }
-            }
-
-            return $allServices;
+            return is_numeric($userId) ? (int) $userId : null;
         } catch (\Throwable $e) {
-            Log::warning('Failed to resolve available services for MCP daemon', [
+            Log::warning('MCP session token validation failed', [
                 'error' => $e->getMessage(),
             ]);
-            return [];
+
+            return $this->unauthorizedResponse($request, 'Unauthorized: Invalid or expired session token');
         }
     }
 
     /**
-     * Get service IDs the current user's role has access to.
-     *
-     * Mirrors Service::getUserAccessibleServices() — reads the role_service_access
-     * entries stored in the session by Session::setSessionData().
-     *
-     * @return int[]|null  Array of service IDs, or null if role grants access to ALL services.
+     * JSON-RPC 401 with the OAuth discovery header, so clients that fail
+     * API-key auth can still fall back to the OAuth flow.
      */
-    private function getUserAccessibleServiceIds(): ?array
+    private function unauthorizedResponse(Request $request, string $message): \Illuminate\Http\JsonResponse
     {
-        $roleServices = (array)SessionUtilities::get('role.services');
-        $ids = [];
-
-        foreach ($roleServices as $serviceAccess) {
-            $serviceId = $serviceAccess['service_id'] ?? null;
-            if ($serviceId === null || $serviceId === 0 || $serviceId === '') {
-                // A null service_id entry means "all services"
-                return null;
-            }
-            if (is_numeric($serviceId) && $serviceId > 0) {
-                $ids[] = (int)$serviceId;
-            }
-        }
-
-        return array_unique($ids);
+        return response()->json([
+            'jsonrpc' => '2.0',
+            'id' => null,
+            'error' => [
+                'code' => -32001,
+                'message' => $message,
+            ],
+        ], 401)->header('WWW-Authenticate', $this->buildWwwAuthenticateHeader($request));
     }
 
     /**

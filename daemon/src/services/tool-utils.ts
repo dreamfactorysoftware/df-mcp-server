@@ -2,7 +2,16 @@ import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { DFAuthConfig } from './dreamfactory.service.js';
 import type { SessionService } from './session.service.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { lazyStateFor } from './lazy.service.js';
+import { annotationsFor, registerArgSpec, specFor } from './args.js';
+
+export type RegisterOptions = {
+  /** Override the verb-prefix heuristic (custom tools know their HTTP method). */
+  annotations?: ToolAnnotations;
+  /** Merged mode: lowercased service name/label -> name, so `service` accepts labels. */
+  serviceNames?: Map<string, string>;
+};
 
 type TextBlock = { type: 'text'; text: string };
 type ImageBlock = { type: 'image'; data: string; mimeType: string };
@@ -34,14 +43,18 @@ export const handleError = (error: unknown, operation: string): string => {
   }
 
   const message = error.message ?? '';
+  // Every DF sub-call carries the key/session the PHP proxy already validated,
+  // so a 403 — or the 401 "User is not authenticated" df-core raises when a
+  // key-only role has no access to the resource — is a role denial, not an
+  // authentication failure. Say so, or the model wastes turns re-authenticating.
+  if (message.includes('403') || message.includes('Access forbidden') || message.includes('User is not authenticated')) {
+    return `Permission Error: the session's role may not ${operation}. Re-authenticating will not help; the role needs access granted in DreamFactory. DreamFactory said: ${message}`;
+  }
   if (message.includes('Authentication failed') || message.includes('401')) {
     return `Authentication Error: ${message}`;
   }
   if (message.includes('Network error') || message.includes('Unable to connect')) {
     return `Connection Error: ${message}`;
-  }
-  if (message.includes('Access forbidden') || message.includes('403')) {
-    return `Permission Error: ${message}`;
   }
   if (message.includes('Resource not found') || message.includes('404')) {
     return `Resource Error: ${message}`;
@@ -54,6 +67,16 @@ export const handleError = (error: unknown, operation: string): string => {
   }
   return `Error during ${operation}: ${message}`;
 };
+
+/**
+ * Verbs that change data. With allow_writes=false these are never registered,
+ * in either tool style, so neither tools/list nor the lazy facade can reach them.
+ */
+export const WRITE_VERBS = new Set([
+  'create_records', 'update_records', 'delete_records',
+  'call_stored_procedure', 'call_stored_function',
+  'create_file', 'create_folder', 'delete_file'
+]);
 
 /**
  * Sanitize API name for use as a tool prefix.
@@ -71,11 +94,13 @@ export function getAuth(sessionManager: SessionService, sessionId?: string): DFA
   // Always consult the manager: in stateless mode there is no session ID and the
   // per-request config is served from the default slot.
   const sessionConfig = sessionManager.getConfig(sessionId);
-  const sessionToken = sessionConfig?.sessionToken ?? '';
-  const apiKey = sessionConfig?.apiKey;
+  const sessionToken = sessionConfig?.sessionToken || undefined;
+  const apiKey = sessionConfig?.apiKey || undefined;
 
-  if (!sessionToken) {
-    throw new Error('DreamFactory session not found. Please authenticate via OAuth.');
+  // At least one credential is required. API-key-only auth is valid when the
+  // key's app has a role assigned (validated by the PHP proxy).
+  if (!sessionToken && !apiKey) {
+    throw new Error('DreamFactory session not found. Please authenticate via OAuth or provide an API key.');
   }
 
   return { sessionToken, apiKey };
@@ -87,18 +112,22 @@ export function createToolRegistrar(server: McpServer, disabledTools?: Set<strin
     title: string,
     description: string,
     schema: z.ZodTypeAny,
-    handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>
+    handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>,
+    opts: RegisterOptions = {}
   ) => {
     if (disabledTools?.has(name)) {
       return;
     }
+    const annotations = opts.annotations ?? annotationsFor(name);
+    const spec = specFor(schema, opts.serviceNames);
+    registerArgSpec(server, name, spec);
     // Lazy mode keeps a catalog of every tool so the facade can search,
     // describe and call them by name; results are shaped/paged when active.
     const lazy = lazyStateFor(server);
-    lazy?.register({ name, title, description, schema, handler });
+    lazy?.register({ name, title, description, schema, handler, annotations, spec });
     server.registerTool(
       name,
-      { title, description, inputSchema: schema },
+      { title, description, inputSchema: schema, annotations },
       async (params, context) => {
         console.log(`[tool] ${name} called`);
         try {
