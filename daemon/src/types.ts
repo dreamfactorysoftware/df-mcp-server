@@ -14,6 +14,7 @@ export type ApiConfig = {
   baseUrl: string;
   category: ServiceCategory;
   type: string; // The specific service type (e.g., 'sqlite', 'local_file')
+  label?: string; // Admin-facing label; accepted as an alias for `service` in merged mode
 };
 
 export type CustomToolParameter = {

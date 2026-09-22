@@ -49,7 +49,7 @@ const text = (r: any) => r.content[0].text as string;
 test('lazy on: facade only, call_tool validates, pages, fetch_more, no list_changed', async () => {
   const { client, changed } = await connect(build('on', 'svc-a'), 'claude-code');
   const names = (await client.listTools()).tools.map(t => t.name).sort();
-  assert.deepEqual(names, ['call_tool', 'describe_tool', 'fetch_more', 'search_tools']);
+  assert.deepEqual(names, ['call_tool', 'describe_tool', 'fetch_more', 'list_tools', 'search_tools']);
 
   const hits = JSON.parse(text(await client.callTool({ name: 'search_tools', arguments: { query: 'table data' } })));
   assert.equal(hits.tools[0].name, 'db_get_table_data');

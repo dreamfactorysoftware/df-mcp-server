@@ -1,12 +1,12 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import type { Response } from 'express';
 import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { ListToolsRequestSchema, type ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { normalizeObjectSchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 import { type ToolResponse, respond, respondError, handleError } from './tool-utils.js';
+import { ledgerSet, ledgerBump } from './ledger.js';
+import { type ArgSpec, annotationsFor, normalizeArgs, registerArgSpec, specFor } from './args.js';
 
 /**
  * Lazy mode (issue #52): instead of advertising every prefixed tool of every
@@ -30,9 +30,12 @@ export type CatalogEntry = {
   description: string;
   schema: z.ZodTypeAny;
   handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>;
+  annotations?: ToolAnnotations;
+  spec?: ArgSpec;
 };
 
 const FACADE = new Set(['search_tools', 'describe_tool', 'call_tool', 'fetch_more', 'list_tools']);
+export const isFacadeTool = (name: string) => FACADE.has(name);
 const HOT_MAX = 8;
 const PAGE_KEEP = 64;
 const FETCH_MAX = 12_000;
@@ -49,13 +52,6 @@ export const LAZY_THRESHOLD_BYTES = env('MCP_LAZY_THRESHOLD_BYTES', 32 * 1024); 
 export const PAGE_CHARS = Math.max(500, env('MCP_LAZY_PAGE_CHARS', 6_000));
 const PASSTHROUGH = (process.env.MCP_LAZY_PASSTHROUGH ?? 'codex,grok,hermes')
   .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-
-// ---------------------------------------------------------------------------
-// Per-request plumbing: the express Response for the request being served, so
-// tool handlers can attach the ledger header PHP persists to mcp_request_log.
-// ---------------------------------------------------------------------------
-const requestResponse = new AsyncLocalStorage<Response>();
-export const runWithResponse = <T>(res: Response, fn: () => T): T => requestResponse.run(res, fn);
 
 // ---------------------------------------------------------------------------
 // Process-wide state. ponytail: hot tools and page handles live in daemon
@@ -204,9 +200,7 @@ export function toJsonSchema(schema: z.ZodTypeAny): unknown {
   return obj ? toJsonSchemaCompat(obj, { strictUnions: true, pipeStrategy: 'input' }) : { type: 'object' };
 }
 
-// ponytail: read-only is a name heuristic; the base tools carry no annotations.
-const READ_ONLY = /(^|_)(get|list|search|fetch|describe|aggregate|whoami)(_|$)/;
-export const isReadOnly = (name: string) => READ_ONLY.test(name);
+const readOnly = (t: CatalogEntry) => t.annotations?.readOnlyHint === true;
 
 // ---------------------------------------------------------------------------
 // Per-server state
@@ -223,6 +217,8 @@ export class LazyState {
   private facadeBytes = 0;
   /** The SDK's own tools/list handler, captured before we override it, so non-lazy lists stay byte-identical to `off`. */
   sdkList?: (req: unknown, extra: unknown) => Promise<{ tools: unknown[] }>;
+  /** Client name forwarded by PHP (X-Mcp-Client-Name); used when this server never saw the client's initialize. */
+  clientHint?: string;
 
   constructor(readonly service: string, readonly mode: Exclude<LazyMode, 'off'>, private readonly server: McpServer) {
     this.hot = hotByService.get(service) ?? [];
@@ -247,10 +243,20 @@ export class LazyState {
     return this.fullList;
   }
 
+  /**
+   * The catalog as tools/list advertises it with the facade off, and its
+   * serialized size (what `auto` compares against LAZY_THRESHOLD_BYTES).
+   * For the catalog preview; needs a prior tools/list on this server.
+   */
+  async catalogTools(): Promise<{ tools: Array<{ name: string; title?: string; description?: string }>; bytes: number }> {
+    const all = await this.allTools();
+    return { tools: all.filter((t: any) => !FACADE.has(t.name)) as any, bytes: this.catalogBytes };
+  }
+
   decide(): LazyDecision {
     if (this.decision) return this.decision;
     if (!this.fullList) throw new Error('lazy: tools/list must run before the mode is decided');
-    const client = (this.server.server.getClientVersion()?.name ?? '').toLowerCase();
+    const client = (this.server.server.getClientVersion()?.name ?? this.clientHint ?? '').toLowerCase();
     if (PASSTHROUGH.some(p => client.includes(p))) this.decision = 'passthrough';
     else if (this.mode === 'on' || this.catalogBytes > LAZY_THRESHOLD_BYTES) this.decision = 'lazy';
     else this.decision = 'direct';
@@ -263,6 +269,16 @@ export class LazyState {
     return this.fullList !== undefined && this.decide() === 'lazy';
   }
 
+  /**
+   * Stateless daemon: every request gets a fresh server that never saw the
+   * client's tools/list, so without this the "call before list" rule would
+   * disable shaping, paging, hot tools and the ledger on every call. Measure
+   * the catalog up front so isLazy() answers from mode and size alone.
+   */
+  async prime(): Promise<void> {
+    await this.allTools();
+  }
+
   /** What tools/list returns for this session. */
   async listTools(extra?: unknown): Promise<unknown[]> {
     const all = await this.allTools(extra);
@@ -273,16 +289,15 @@ export class LazyState {
 
   /** Attach the savings ledger for this request; PHP copies it into mcp_request_log. */
   ledger(extra: { result_chars_withheld?: number; facade_calls?: number }): void {
-    const res = requestResponse.getStore();
-    if (!res || res.headersSent || !this.fullList) return;
+    if (!this.fullList) return;
     const tokens = (b: number) => Math.round(b / 4);
-    res.setHeader('X-Mcp-Ledger', JSON.stringify({
+    ledgerSet({
       mode: this.decide(),
       catalog_tokens: tokens(this.catalogBytes),
       preamble_saved_per_turn: this.isLazy() ? tokens(this.catalogBytes - this.facadeBytes) : 0,
       result_chars_withheld: extra.result_chars_withheld ?? 0,
       facade_calls: extra.facade_calls ?? 0
-    }));
+    });
   }
 
   /** Post-process a catalog tool result: hot-set bookkeeping, shaping, paging. No-op unless lazy. */
@@ -322,7 +337,7 @@ export class LazyState {
     }
     const hits = this.index.rank(query, limit).map(i => this.catalog.get(this.names[i])!);
     const out: Record<string, unknown> = {
-      tools: hits.map(t => ({ name: t.name, description: shortDesc(t.description), read_only: isReadOnly(t.name) }))
+      tools: hits.map(t => ({ name: t.name, description: shortDesc(t.description), read_only: readOnly(t) }))
     };
     // Unambiguous hit: include the schema so no describe_tool round trip is needed.
     if (hits.length === 1 || hits[0]?.name.toLowerCase() === query.trim().toLowerCase()) {
@@ -348,7 +363,7 @@ export class LazyState {
         ? page
         : page.map(n => {
             const t = this.catalog.get(n)!;
-            return { name: n, description: shortDesc(t.description), read_only: isReadOnly(n) };
+            return { name: n, description: shortDesc(t.description), read_only: readOnly(t) };
           })
     };
     const next = start + page.length;
@@ -361,20 +376,24 @@ export class LazyState {
   describe(name: string): ToolResponse {
     const t = this.catalog.get(name);
     if (!t || FACADE.has(name)) return respondError(`unknown tool ${name}; use search_tools`);
-    return respond({ name, description: t.description, read_only: isReadOnly(name), inputSchema: compactSchema(toJsonSchema(t.schema)) });
+    return respond({ name, description: t.description, read_only: readOnly(t), annotations: t.annotations, inputSchema: compactSchema(toJsonSchema(t.schema)) });
   }
 
   async call(name: string, args: unknown, context: { sessionId?: string }): Promise<ToolResponse> {
     const t = this.catalog.get(name);
     if (!t || FACADE.has(name)) return respondError(`unknown tool ${name}; use search_tools`);
-    const parsed = t.schema.safeParse(args ?? {});
-    if (!parsed.success) {
+    // Same alias/unknown-key handling as a direct call (installArgNormalizer), then Zod.
+    const norm = normalizeArgs(t.spec ?? specFor(t.schema), args ?? {});
+    ledgerBump({ arg_aliases: norm.aliases.length, arg_errors: norm.errors.length });
+    const parsed = norm.errors.length ? undefined : t.schema.safeParse(norm.args);
+    if (!parsed?.success) {
+      this.ledger({ facade_calls: 1 });
       // Error and schema in one result so the model can retry without describe_tool.
       return {
         isError: true,
         content: [{ type: 'text', text: JSON.stringify({
           error: `invalid arguments for ${name}`,
-          issues: parsed.error.issues.map(i => `${i.path.join('.') || '(root)'}: ${i.message}`),
+          issues: parsed ? parsed.error.issues.map(i => `${i.path.join('.') || '(root)'}: ${i.message}`) : norm.errors,
           schema: compactSchema(toJsonSchema(t.schema))
         }) }]
       };
@@ -408,8 +427,11 @@ export const LAZY_INSTRUCTIONS = [
 /** Register the facade and override tools/list. Call after every other tool is registered, before connect. */
 export function installLazyFacade(server: McpServer, state: LazyState): void {
   const facade = (name: string, title: string, description: string, schema: z.ZodObject<any>, handler: (params: any, ctx: { sessionId?: string }) => Promise<ToolResponse>) => {
-    state.register({ name, title, description, schema, handler });
-    server.registerTool(name, { title, description, inputSchema: schema }, async (params: any, ctx: any) => {
+    const annotations = annotationsFor(name);
+    const spec = specFor(schema);
+    registerArgSpec(server, name, spec);
+    state.register({ name, title, description, schema, handler, annotations, spec });
+    server.registerTool(name, { title, description, inputSchema: schema, annotations }, async (params: any, ctx: any) => {
       try {
         return await handler(params ?? {}, ctx ?? {});
       } catch (error) {
