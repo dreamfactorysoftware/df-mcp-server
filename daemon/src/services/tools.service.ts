@@ -5,7 +5,7 @@ import { SessionService } from './session.service.js';
 import { registerApiConnectorTools } from './api-connector.tools.js';
 import { registerFileApiTools } from './file-api.tools.js';
 import type { ApiConfig, ToolStyle } from '../types.js';
-import { createToolRegistrar, getAuth, registerMergedTools, respond, sanitizeApiName, type ToolResponse, WRITE_VERBS } from './tool-utils.js';
+import { type CallStyle, createToolRegistrar, getAuth, registerMergedTools, respond, sanitizeApiName, type ToolResponse, WRITE_VERBS } from './tool-utils.js';
 import { serviceNameMap } from './args.js';
 
 type ToolDefinition = {
@@ -17,9 +17,26 @@ type ToolDefinition = {
     params: any,
     context: { sessionId?: string },
     apiConfig: ApiConfig,
-    auth: DFAuthConfig
+    auth: DFAuthConfig,
+    call?: CallStyle
   ) => Promise<ToolResponse>;
 };
+
+/**
+ * df-core's data model ships `query_templates` naming bare verbs (`get_table_data`)
+ * with no `service`. Rewrite each one into the exact call this server accepts:
+ * `{prefix}_{verb}` in prefixed mode, `service` added in merged mode.
+ */
+export function adaptQueryTemplates(model: any, call: CallStyle = {}): any {
+  const templates = model?.query_templates;
+  if (!templates || typeof templates !== 'object') return model;
+  for (const t of Object.values(templates) as any[]) {
+    if (!t || typeof t.tool !== 'string') continue;
+    if (call.prefix) t.tool = `${call.prefix}_${t.tool}`;
+    if (call.service && t.params && typeof t.params === 'object') t.params = { ...t.params, service: call.service };
+  }
+  return model;
+}
 
 /**
  * Base tool definitions that will be registered for each API.
@@ -55,12 +72,12 @@ const BASE_TOOLS: ToolDefinition[] = [
     schema: z.object({
       refresh: z.boolean().optional().describe('Force refresh cached data')
     }),
-    handler: async (args, _context, apiConfig, auth) => {
+    handler: async (args, _context, apiConfig, auth, call) => {
       const data = await DreamFactoryService.getApiSpec(apiConfig.baseUrl, auth, {
         model: true,
         refresh: args?.refresh
       });
-      return respond(data);
+      return respond(adaptQueryTemplates(data, call));
     }
   },
   {
@@ -346,7 +363,7 @@ export function registerDreamFactoryTools(
           tool.schema,
           async (params, context) => {
             const auth = getAuth(sessionManager, context.sessionId);
-            return tool.handler(params, context, apiConfig, auth);
+            return tool.handler(params, context, apiConfig, auth, { prefix });
           }
         );
       }

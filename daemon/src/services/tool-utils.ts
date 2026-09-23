@@ -150,6 +150,13 @@ export function createToolRegistrar(server: McpServer, disabledTools?: Set<strin
  * the whole connection (merged mode). Database and file tools share this shape,
  * so both styles are driven from the same definitions.
  */
+/**
+ * How a tool for one service is called under the active tool style: `prefix` for
+ * prefixed tools (`{prefix}_{verb}`), `service` when merged tools need a
+ * `service` argument, neither for a single-service merged collapse.
+ */
+export type CallStyle = { prefix?: string; service?: string };
+
 export type MergedToolDefinition = {
   name: string;
   title: string;
@@ -159,7 +166,8 @@ export type MergedToolDefinition = {
     params: any,
     context: { sessionId?: string },
     apiConfig: ApiConfig,
-    auth: DFAuthConfig
+    auth: DFAuthConfig,
+    call?: CallStyle
   ) => Promise<ToolResponse>;
 };
 
@@ -242,7 +250,7 @@ export function registerMergedTools(
       async (params, context) => {
         const auth = getAuth(sessionManager, context.sessionId);
         if (only) {
-          return tool.handler(params, context, only, auth);
+          return tool.handler(params, context, only, auth, {});
         }
         const { service, ...rest } = (params ?? {}) as { service?: string };
         const apiConfig = service ? byName.get(service) : undefined;
@@ -256,7 +264,7 @@ export function registerMergedTools(
             available_services: allowedNames
           });
         }
-        return tool.handler(rest, context, apiConfig, auth);
+        return tool.handler(rest, context, apiConfig, auth, { service: apiConfig.name });
       },
       { serviceNames: only ? undefined : serviceNameMap(allowed) }
     );
