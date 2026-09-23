@@ -162,7 +162,7 @@ export function registerMergedTools(server, sessionManager, configs, tools, opts
         registerTool(tool.name, tool.title, description, schema, async (params, context) => {
             const auth = getAuth(sessionManager, context.sessionId);
             if (only) {
-                return tool.handler(params, context, only, auth);
+                return tool.handler(params, context, only, auth, {});
             }
             const { service, ...rest } = (params ?? {});
             const apiConfig = service ? byName.get(service) : undefined;
@@ -176,7 +176,7 @@ export function registerMergedTools(server, sessionManager, configs, tools, opts
                     available_services: allowedNames
                 });
             }
-            return tool.handler(rest, context, apiConfig, auth);
+            return tool.handler(rest, context, apiConfig, auth, { service: apiConfig.name });
         }, { serviceNames: only ? undefined : serviceNameMap(allowed) });
     }
     if (notes.length > 0) {
