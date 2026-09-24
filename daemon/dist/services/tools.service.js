@@ -100,7 +100,7 @@ const BASE_TOOLS = [
             count_only: z.boolean().optional().describe('Return only the record count, no data. Use this instead of COUNT() in fields.'),
             include_count: z.boolean().optional().describe('Include total record count in response metadata alongside data.'),
             include_schema: z.boolean().optional(),
-            ids: z.array(z.string()).optional()
+            ids: z.array(z.union([z.string(), z.number()])).optional()
         }),
         handler: async (args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableData(apiConfig.baseUrl, auth, args);
@@ -133,7 +133,7 @@ const BASE_TOOLS = [
             records: z.array(z.record(z.string(), z.unknown())),
             fields: z.array(z.string()).optional(),
             related: z.string().optional(),
-            ids: z.array(z.string()).optional(),
+            ids: z.array(z.union([z.string(), z.number()])).optional(),
             filter: z.string().optional(),
             continue: z.boolean().optional(),
             rollback: z.boolean().optional()
@@ -149,7 +149,7 @@ const BASE_TOOLS = [
         description: 'Delete rows by ids or filter.',
         schema: z.object({
             table_name: z.string(),
-            ids: z.array(z.string()).optional(),
+            ids: z.array(z.union([z.string(), z.number()])).optional(),
             filter: z.string().optional(),
             force: z.boolean().optional(),
             fields: z.array(z.string()).optional(),

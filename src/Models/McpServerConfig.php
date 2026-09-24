@@ -3,8 +3,10 @@
 namespace DreamFactory\Core\McpServer\Models;
 
 use DreamFactory\Core\Enums\ServiceTypeGroups;
+use DreamFactory\Core\Exceptions\BadRequestException;
 use DreamFactory\Core\McpServer\Utility\AvailableServices;
 use DreamFactory\Core\Models\BaseServiceConfigModel;
+use DreamFactory\Core\Models\Service;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class McpServerConfig extends BaseServiceConfigModel
@@ -126,6 +128,7 @@ class McpServerConfig extends BaseServiceConfigModel
 
         // Read-only projection of the OAuth client row — never written back.
         unset($config['registered_redirect_uris']);
+        $config = static::normalizeConfig($config);
 
         parent::setConfig($id, $config, $local_config);
         static::warnIfEmptyExposed($id, $config);
@@ -146,6 +149,7 @@ class McpServerConfig extends BaseServiceConfigModel
 
         // Read-only projection of the OAuth client row — never written back.
         unset($config['registered_redirect_uris']);
+        $config = static::normalizeConfig($config);
 
         parent::storeConfig($id, $config);
         static::warnIfEmptyExposed($id, $config);
@@ -153,6 +157,44 @@ class McpServerConfig extends BaseServiceConfigModel
         if ($id && is_array($customTools)) {
             self::syncCustomTools((int) $id, $customTools);
         }
+    }
+
+    /** Allowed values for the picklist settings; anything else is rejected on save. */
+    public const PICKLISTS = [
+        'tool_style' => ['merged', 'prefixed'],
+        'lazy_mode'  => ['auto', 'on', 'off'],
+    ];
+
+    /**
+     * Validate picklists and store exposed_services as names. The daemon and
+     * the rename/delete sync match on names, so an API caller passing service
+     * ids used to save a list that exposed nothing.
+     */
+    protected static function normalizeConfig(array $config): array
+    {
+        foreach (self::PICKLISTS as $key => $allowed) {
+            if (isset($config[$key]) && $config[$key] !== '' && !in_array($config[$key], $allowed, true)) {
+                throw new BadRequestException("Invalid $key '{$config[$key]}'. Allowed: " . implode(', ', $allowed) . '.');
+            }
+        }
+
+        if (!empty($config['exposed_services']) && is_array($config['exposed_services'])) {
+            $ids = array_filter($config['exposed_services'], fn ($v) => is_int($v) || ctype_digit((string) $v));
+            if ($ids) {
+                $names = Service::whereIn('id', array_map('intval', $ids))->pluck('name', 'id');
+                $config['exposed_services'] = array_values(array_unique(array_map(function ($v) use ($names) {
+                    if (!(is_int($v) || ctype_digit((string) $v))) {
+                        return $v;
+                    }
+                    if (!isset($names[(int) $v])) {
+                        throw new BadRequestException("Exposed service id $v does not exist.");
+                    }
+                    return $names[(int) $v];
+                }, $config['exposed_services'])));
+            }
+        }
+
+        return $config;
     }
 
     /**
