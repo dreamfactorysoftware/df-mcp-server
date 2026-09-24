@@ -98,6 +98,27 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             return;
         }
 
+        // df-core only stores config for a service created with a non-empty
+        // config, so an API create with `config: {}` left no row and therefore
+        // no OAuth client credentials. Create the row so the model's creating
+        // hook fills them in, exactly as a UI create does.
+        Service::created(function (Service $service): void {
+            try {
+                $handler = [
+                    McpServiceTypes::DATA   => McpServerConfig::class,
+                    McpServiceTypes::SYSTEM => SystemMcpServerConfig::class,
+                ][(string) $service->getAttribute('type')] ?? null;
+                if ($handler && !$handler::whereServiceId($service->getKey())->exists()) {
+                    $handler::storeConfig($service->getKey(), []);
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('Failed to initialise MCP service config', [
+                    'service_id' => $service->getKey(),
+                    'error'      => $e->getMessage(),
+                ]);
+            }
+        });
+
         Service::updated(function (Service $service): void {
             try {
                 if (!$service->wasChanged('name')) {

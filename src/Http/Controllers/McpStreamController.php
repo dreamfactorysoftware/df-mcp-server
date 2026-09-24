@@ -496,6 +496,13 @@ class McpStreamController extends Controller
         $bearerToken = substr($authHeader, 7);
         $token = McpOAuthAccessToken::findValidAccessToken($bearerToken);
 
+        // Each MCP service is its own OAuth client, so a token is only good on
+        // the service that issued it.
+        $serviceClientId = $request->attributes->get('mcp_service_config')['oauth_client_id'] ?? null;
+        if ($token && $serviceClientId && !hash_equals((string) $serviceClientId, (string) $token->client_id)) {
+            $token = null;
+        }
+
         if (!$token) {
             return response()->json([
                 'jsonrpc' => '2.0',

@@ -78,7 +78,7 @@ class McpOAuthController extends Controller
             'registration_endpoint' => "{$baseUrl}/mcp/{$mcpService}/register",
             'response_types_supported' => ['code'],
             'grant_types_supported' => ['authorization_code', 'refresh_token'],
-            'token_endpoint_auth_methods_supported' => ['none', 'client_secret_post'],
+            'token_endpoint_auth_methods_supported' => ['client_secret_post'],
             'code_challenge_methods_supported' => ['S256', 'plain'],
             'scopes_supported' => self::SUPPORTED_SCOPES,
         ]);
@@ -800,7 +800,7 @@ class McpOAuthController extends Controller
         }
 
         // Validate client_id
-        if (empty($clientId) || $clientId !== $serviceConfig['oauth_client_id']) {
+        if (empty($clientId) || !hash_equals((string) $serviceConfig['oauth_client_id'], (string) $clientId)) {
             Log::warning('OAuth token: Invalid client_id', [
                 'provided' => $clientId,
                 'service' => $mcpService,
@@ -809,7 +809,7 @@ class McpOAuthController extends Controller
         }
 
         // Validate client_secret
-        if (empty($clientSecret) || $clientSecret !== $serviceConfig['oauth_client_secret']) {
+        if (empty($clientSecret) || !hash_equals((string) $serviceConfig['oauth_client_secret'], (string) $clientSecret)) {
             Log::warning('OAuth token: Invalid client_secret', [
                 'service' => $mcpService,
             ]);
@@ -907,7 +907,7 @@ class McpOAuthController extends Controller
         }
 
         // Validate client_secret
-        if (empty($clientSecret) || $clientSecret !== $serviceConfig['oauth_client_secret']) {
+        if (empty($clientSecret) || !hash_equals((string) $serviceConfig['oauth_client_secret'], (string) $clientSecret)) {
             return $this->tokenErrorResponse('invalid_client', 'Invalid client_secret');
         }
 
