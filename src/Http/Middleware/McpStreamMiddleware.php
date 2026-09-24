@@ -51,8 +51,8 @@ class McpStreamMiddleware
     {
         return [
             'Access-Control-Allow-Origin' => '*',
-            'Access-Control-Allow-Methods' => 'GET, POST, DELETE, OPTIONS',
-            'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id',
+            'Access-Control-Allow-Methods' => 'GET, HEAD, POST, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers' => 'Content-Type, Authorization, mcp-session-id, X-DreamFactory-API-Key, X-DreamFactory-Session-Token',
             'Access-Control-Expose-Headers' => 'WWW-Authenticate',
         ];
     }
@@ -87,10 +87,8 @@ class McpStreamMiddleware
         $mcpService = $matches[1];
         $subPath = $matches[2] ?? null;
 
-        // Load service config and store in request for controllers
-        $serviceConfig = $this->getServiceConfig($mcpService);
-        $request->attributes->set('mcp_service_name', $mcpService);
-        $request->attributes->set('mcp_service_config', $serviceConfig);
+        // Load service config/type and store in request for controllers
+        $this->attachServiceAttributes($request, $mcpService);
 
         // Route to appropriate handler
         if ($subPath === null) {
@@ -108,7 +106,7 @@ class McpStreamMiddleware
             foreach (self::corsHeaders() as $key => $value) {
                 $response->headers->set($key, $value);
             }
-            return $response;
+            return self::stripBodyForHead($response, $method);
         }
 
         return $next($request);
@@ -125,10 +123,8 @@ class McpStreamMiddleware
         }
 
         $controllerMethod = self::RFC8414_WELL_KNOWN[$wellKnownType] ?? null;
-        if ($controllerMethod && $method === 'GET') {
-            $serviceConfig = $this->getServiceConfig($mcpService);
-            $request->attributes->set('mcp_service_name', $mcpService);
-            $request->attributes->set('mcp_service_config', $serviceConfig);
+        if ($controllerMethod && in_array($method, ['GET', 'HEAD'], true)) {
+            $this->attachServiceAttributes($request, $mcpService);
 
             $controller = new McpOAuthController();
             $response = $controller->$controllerMethod($request, $mcpService);
@@ -137,7 +133,7 @@ class McpStreamMiddleware
                 foreach (self::corsHeaders() as $key => $value) {
                     $response->headers->set($key, $value);
                 }
-                return $response;
+                return self::stripBodyForHead($response, $method);
             }
         }
 
@@ -145,17 +141,52 @@ class McpStreamMiddleware
     }
 
     /**
-     * Get service configuration from ServiceManager
+     * A HEAD response carries the same status and headers as GET but no body
+     * (RFC 9110 sec. 9.3.2). The middleware returns responses directly rather than
+     * through the router, so Symfony's own prepare() body-stripping never runs.
      */
-    private function getServiceConfig(string $mcpService): ?array
+    private static function stripBodyForHead($response, string $method)
     {
+        if ($method === 'HEAD' && method_exists($response, 'setContent')) {
+            $response->setContent('');
+        }
+
+        return $response;
+    }
+
+    /**
+     * Resolve the service by name and stash its name, config and type on the
+     * request for the controllers. The service type (`mcp` vs `system_mcp`)
+     * decides which daemon the stream controller proxies to.
+     */
+    private function attachServiceAttributes(Request $request, string $mcpService): void
+    {
+        [$serviceConfig, $serviceType] = $this->getServiceConfig($mcpService);
+        $request->attributes->set('mcp_service_name', $mcpService);
+        $request->attributes->set('mcp_service_config', $serviceConfig);
+        $request->attributes->set('mcp_service_type', $serviceType);
+    }
+
+    /**
+     * Get service configuration (and type) from ServiceManager
+     *
+     * @return array{0: ?array, 1: ?string} [config, type]
+     */
+    private function getServiceConfig(string $mcpService): array
+    {
+        $config = null;
+        $type = null;
         try {
             /** @var \DreamFactory\Core\Services\ServiceManager $serviceManager */
             $serviceManager = app('df.service');
             $service = $serviceManager->getService($mcpService);
 
+            if (method_exists($service, 'getType')) {
+                $type = $service->getType();
+                $type = is_string($type) ? $type : null;
+            }
             if (method_exists($service, 'getConfig')) {
-                return $service->getConfig();
+                $config = $service->getConfig();
             }
         } catch (\Throwable $e) {
             Log::error('Failed to get service config', [
@@ -164,7 +195,7 @@ class McpStreamMiddleware
             ]);
         }
 
-        return null;
+        return [$config, $type];
     }
 
     /**
@@ -176,6 +207,7 @@ class McpStreamMiddleware
 
         return match ($method) {
             'GET' => $controller->handleGet($request, $mcpService),
+            'HEAD' => $controller->handleHead($request, $mcpService),
             'POST' => $controller->handlePost($request, $mcpService),
             'DELETE' => $controller->handleDelete($request, $mcpService),
             default => null,

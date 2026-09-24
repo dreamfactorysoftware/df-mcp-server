@@ -27,6 +27,7 @@ class RequestLogger
         int $bytesOut,
         string $status,
         ?string $errorMessage = null,
+        ?array $ledger = null,
     ): void {
         if (!config('mcp.audit_logging.enabled', true)) {
             return;
@@ -59,11 +60,34 @@ class RequestLogger
                 'status'        => $status,
                 'error_message' => $errorMessage,
                 'request_id'    => \DreamFactory\Core\Utility\TraceId::get(),
-            ]);
+            ] + self::ledgerColumns($ledger));
         } catch (\Throwable $e) {
             // Audit logging must never break the MCP response path.
             Log::warning('Failed to log MCP request: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Ledger the daemon attaches to responses as the X-Mcp-Ledger header
+     * (see daemon ledger.ts, lazy.service.ts, args.ts). Only known keys are
+     * stored; everything is coerced so a malformed header cannot break the row.
+     */
+    private static function ledgerColumns(?array $ledger): array
+    {
+        if (!$ledger) {
+            return [];
+        }
+        $mode = $ledger['mode'] ?? null;
+        return [
+            'mode'                    => in_array($mode, ['lazy', 'direct', 'passthrough'], true) ? $mode : null,
+            'catalog_tokens'          => (int) ($ledger['catalog_tokens'] ?? 0),
+            'preamble_saved_per_turn' => (int) ($ledger['preamble_saved_per_turn'] ?? 0),
+            'result_chars_withheld'   => (int) ($ledger['result_chars_withheld'] ?? 0),
+            'facade_calls'            => (int) ($ledger['facade_calls'] ?? 0),
+            // Argument normaliser counters (issue #66); sent in every mode, not only lazy.
+            'arg_errors'              => (int) ($ledger['arg_errors'] ?? 0),
+            'arg_aliases'             => (int) ($ledger['arg_aliases'] ?? 0),
+        ];
     }
 
     /** @var array<string, ?int> */
@@ -107,7 +131,7 @@ class RequestLogger
      * registration captured `client_name`; surface it so the dashboard can
      * say "Claude Desktop" instead of a UUID.
      */
-    private static function resolveClientName(?McpOAuthAccessToken $token): ?string
+    public static function resolveClientName(?McpOAuthAccessToken $token): ?string
     {
         if (!$token || empty($token->client_id)) {
             return null;

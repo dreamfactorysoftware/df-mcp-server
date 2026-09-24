@@ -24,8 +24,10 @@ async function dfFetch(
 ): Promise<unknown> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    'X-DreamFactory-Session-Token': auth.sessionToken,
   };
+  if (auth.sessionToken) {
+    headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+  }
   if (auth.apiKey) {
     headers['X-DreamFactory-API-Key'] = auth.apiKey;
   }
@@ -68,7 +70,8 @@ export function registerGlobalTools(
     z.object({}),
     async (_params, context) => {
       try {
-        const cfg = context.sessionId ? sessionManager.getConfig(context.sessionId) : undefined;
+        // No session ID in stateless mode: getConfig falls back to the per-request default.
+        const cfg = sessionManager.getConfig(context.sessionId);
         if (!cfg) {
           return respondError('DreamFactory session not found. Please authenticate.');
         }
@@ -98,7 +101,8 @@ export function registerGlobalTools(
     }),
     async (params, context) => {
       try {
-        const cfg = context.sessionId ? sessionManager.getConfig(context.sessionId) : undefined;
+        // No session ID in stateless mode: getConfig falls back to the per-request default.
+        const cfg = sessionManager.getConfig(context.sessionId);
         if (!cfg) {
           return respondError('DreamFactory session not found. Please authenticate.');
         }

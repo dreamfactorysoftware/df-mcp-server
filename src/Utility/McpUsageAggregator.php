@@ -55,6 +55,10 @@ class McpUsageAggregator
         $totalBytesOut = (int) (clone $base)->sum('bytes_out');
         $errorCount = (clone $base)->where('status', 'error')->count();
         $avgDuration = (int) round((float) (clone $base)->avg('duration_ms'));
+        // Lazy-mode savings (issue #52): what the facade kept out of the model's context.
+        $preambleSaved = (int) (clone $base)->sum('preamble_saved_per_turn');
+        $resultCharsWithheld = (int) (clone $base)->sum('result_chars_withheld');
+        $facadeCalls = (int) (clone $base)->sum('facade_calls');
 
         $byService = (clone $base)
             ->selectRaw('service_id, COUNT(*) as requests, SUM(bytes_in) as bytes_in, SUM(bytes_out) as bytes_out, AVG(duration_ms) as avg_duration')
@@ -126,6 +130,10 @@ class McpUsageAggregator
             'total_bytes_out' => $totalBytesOut,
             'errors'          => $errorCount,
             'avg_duration_ms' => $avgDuration,
+            'tokens_saved'    => $preambleSaved + (int) round($resultCharsWithheld / 4),
+            'preamble_saved_tokens'  => $preambleSaved,
+            'result_chars_withheld'  => $resultCharsWithheld,
+            'facade_calls'    => $facadeCalls,
             'by_service'      => $byService,
             'by_user'         => $byUser,
             'by_role'         => $byRole,

@@ -1,5 +1,6 @@
 import * as z from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { CustomToolParameter, CustomToolDefinition } from '../types.js';
 import type { DFAuthConfig } from './dreamfactory.service.js';
 import type { SessionService } from './session.service.js';
@@ -8,6 +9,20 @@ import { respond, respondError, createToolRegistrar, getAuth } from './tool-util
 const MAX_RESPONSE_SIZE = 1_048_576; // 1 MB
 const REQUEST_TIMEOUT_MS = 30_000; // 30 seconds
 const FUNCTION_TIMEOUT_MS = 30_000; // 30 seconds
+
+/**
+ * Function-type custom tools run an admin-authored JS body through new Function()
+ * inside the daemon: arbitrary code execution on a request-driven path. Off by
+ * default; an operator who accepts that sets MCP_ALLOW_FUNCTION_TOOLS=true.
+ * Read per call so the health endpoint and tests see the live value.
+ */
+export function functionToolsEnabled(): boolean {
+  return (process.env.MCP_ALLOW_FUNCTION_TOOLS ?? '').trim().toLowerCase() === 'true';
+}
+
+export function isFunctionTool(t: CustomToolDefinition): boolean {
+  return t.tool_type === 'function' || (!t.url && !!t.function);
+}
 
 function safeStringify(value: unknown): string {
   try {
@@ -70,6 +85,11 @@ export async function executeFunctionToolRequest(
   const functionBody = toolDef.function;
   console.log(`[custom-tool] Executing function "${toolDef.name}", params:`, safeStringify(params));
 
+  // createServer does not register function tools when disabled; this is the backstop.
+  if (!functionToolsEnabled()) {
+    return respondError('Function tools are disabled on this server (MCP_ALLOW_FUNCTION_TOOLS is not true).');
+  }
+
   if (!functionBody) {
     console.error(`[custom-tool] Function "${toolDef.name}" has no function body`);
     return respondError('Function tool has no function defined.');
@@ -90,6 +110,7 @@ export async function executeFunctionToolRequest(
     }
   });
 
+  let timer: NodeJS.Timeout | undefined;
   try {
     // Wrap the body in an async IIFE so that `await` is valid inside user-written formulas.
     // The outer (sync) function returns the Promise produced by the IIFE; Promise.race then
@@ -97,9 +118,9 @@ export async function executeFunctionToolRequest(
     const fn = new Function('secrets', ...paramNames, `return (async () => { ${functionBody} })()`);
     const result = await Promise.race([
       fn(toolDef.secrets ?? {}, ...paramValues) as Promise<unknown>,
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Function execution timed out after 30s')), FUNCTION_TIMEOUT_MS)
-      ),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Function execution timed out after 30s')), FUNCTION_TIMEOUT_MS);
+      }),
     ]);
     console.log(`[custom-tool] Function "${toolDef.name}" result:`, safeStringify(result));
     return respond(result);
@@ -107,6 +128,8 @@ export async function executeFunctionToolRequest(
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[custom-tool] Function "${toolDef.name}" error:`, message);
     return respondError(`Function execution error: ${message}`);
+  } finally {
+    clearTimeout(timer); // otherwise the pending timer pins the event loop for 30s after a fast call
   }
 }
 
@@ -217,6 +240,14 @@ export async function executeCustomToolRequest(
   }
 }
 
+/** External HTTP calls are open-world; only the method says whether they read or write. */
+function customAnnotations(t: CustomToolDefinition): ToolAnnotations {
+  const m = t.http_method;
+  if (!m) return { openWorldHint: true }; // function tools: effect unknown
+  if (m === 'GET') return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
+  return { readOnlyHint: false, destructiveHint: m === 'DELETE', idempotentHint: m !== 'POST', openWorldHint: true };
+}
+
 /**
  * Register custom tools on the MCP server.
  */
@@ -231,7 +262,7 @@ export function registerCustomTools(
   for (const toolDef of customTools) {
     const schema = buildZodSchema(toolDef.parameters);
 
-    const isFunction = toolDef.tool_type === 'function' || (!toolDef.url && !!toolDef.function);
+    const isFunction = isFunctionTool(toolDef);
     console.log(`[custom-tool] Registering "${toolDef.name}" — tool_type=${toolDef.tool_type}, isFunction=${isFunction}, url=${toolDef.url ?? '(none)'}`);
 
     registerTool(
@@ -250,7 +281,8 @@ export function registerCustomTools(
           // Auth not available — custom tool will run without DF headers
         }
         return executeCustomToolRequest(toolDef, params, auth);
-      }
+      },
+      { annotations: customAnnotations(toolDef) }
     );
   }
 }

@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import { DreamFactoryService } from './dreamfactory.service.js';
-import { respond, sanitizeApiName, getAuth, createToolRegistrar } from './tool-utils.js';
+import { respond, sanitizeApiName, getAuth, createToolRegistrar, registerMergedTools, WRITE_VERBS } from './tool-utils.js';
 function fileContentToToolResponse(result) {
     switch (result.kind) {
         case 'image':
@@ -21,9 +21,9 @@ const FILE_TOOLS = [
         description: 'List files and folders in a path',
         schema: z.object({
             path: z.string().optional().describe('Path to list (empty for root)'),
-            includeFiles: z.boolean().optional().describe('Include files in listing'),
-            includeFolders: z.boolean().optional().describe('Include folders in listing'),
-            fullTree: z.boolean().optional().describe('Return full directory tree')
+            include_files: z.boolean().optional().describe('Include files in listing'),
+            include_folders: z.boolean().optional().describe('Include folders in listing'),
+            full_tree: z.boolean().optional().describe('Return full directory tree')
         }),
         handler: async ({ path, ...options }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.listFiles(apiConfig.baseUrl, auth, path ?? '', options);
@@ -96,30 +96,48 @@ const FILE_TOOLS = [
 /** Base tool names for file services. */
 export const FILE_TOOL_NAMES = FILE_TOOLS.map(t => t.name);
 /**
- * Register file API tools for each file service.
+ * Register file API tools.
+ *
+ * Prefixed mode emits every verb once per file service (logs_list_files,
+ * files_list_files, ...). Merged mode registers each verb once and takes a
+ * `service` argument, the same shape the database tools use, which is where a
+ * connection with several file services spends most of its catalog.
  */
-export function registerFileApiTools(server, sessionManager, apiConfigs, disabledTools) {
+export function registerFileApiTools(server, sessionManager, apiConfigs, disabledTools, allowWrites = true, toolStyle = 'prefixed') {
     const fileConfigs = apiConfigs.filter(c => c.category === 'file');
+    const tools = allowWrites ? FILE_TOOLS : FILE_TOOLS.filter(t => !WRITE_VERBS.has(t.name));
     if (fileConfigs.length === 0) {
         console.log('[registerFileApiTools] No file services found, skipping file tools registration');
         return;
     }
     console.log('[registerFileApiTools] Registering tools for file services:', fileConfigs.map(c => c.name));
     const registerTool = createToolRegistrar(server, disabledTools);
-    // Register prefixed tools for each file API
-    for (const apiConfig of fileConfigs) {
-        const prefix = sanitizeApiName(apiConfig.name);
-        for (const tool of FILE_TOOLS) {
-            const prefixedName = `${prefix}_${tool.name}`;
-            const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
-            const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
-            registerTool(prefixedName, prefixedTitle, prefixedDescription, tool.schema, async (params, context) => {
-                const auth = getAuth(sessionManager, context.sessionId);
-                return tool.handler(params, context, apiConfig, auth);
-            });
+    if (toolStyle === 'merged') {
+        registerMergedTools(server, sessionManager, fileConfigs, tools, {
+            targetNoun: 'file service',
+            logLabel: 'merged-file-tools',
+            disabledTools
+        });
+    }
+    else {
+        // Register prefixed tools for each file API
+        for (const apiConfig of fileConfigs) {
+            const prefix = sanitizeApiName(apiConfig.name);
+            for (const tool of tools) {
+                const prefixedName = `${prefix}_${tool.name}`;
+                const prefixedTitle = `${apiConfig.name}: ${tool.title}`;
+                const prefixedDescription = `[${apiConfig.name}] ${tool.description}`;
+                registerTool(prefixedName, prefixedTitle, prefixedDescription, tool.schema, async (params, context) => {
+                    const auth = getAuth(sessionManager, context.sessionId);
+                    return tool.handler(params, context, apiConfig, auth);
+                });
+            }
         }
     }
-    // Register cross-file-service tools
+    // Cross-service aggregator only pays off with 2+ file services.
+    if (fileConfigs.length < 2) {
+        return;
+    }
     registerTool('all_list_files', 'List Files from All Storage Services', 'List root files and folders from all connected file storage services', z.object({
         path: z.string().optional().describe('Path to list (empty for root)')
     }), async ({ path }, { sessionId }) => {

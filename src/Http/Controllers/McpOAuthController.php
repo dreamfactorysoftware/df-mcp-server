@@ -7,9 +7,12 @@ use DreamFactory\Core\McpServer\Models\McpOAuthAccessToken;
 use DreamFactory\Core\McpServer\Models\McpOAuthAuthorizationCode;
 use DreamFactory\Core\McpServer\Models\McpOAuthClient;
 use DreamFactory\Core\McpServer\Models\McpServerConfig;
-use GuzzleHttp\Client;
+use DreamFactory\Core\Enums\Verbs;
+use DreamFactory\Core\Utility\JWTUtilities;
+use DreamFactory\Core\Utility\Session as DfSession;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use ServiceManager;
 
 /**
  * OAuth 2.0 Authorization Server for MCP
@@ -18,13 +21,13 @@ use Illuminate\Support\Facades\Log;
  */
 class McpOAuthController extends Controller
 {
-    private string $dfUrl;
-
-    public function __construct()
-    {
-        // Internal API URL for server-to-server calls (not proxied)
-        $this->dfUrl = rtrim(config('app.url', env('DF_URL', 'http://localhost')), '/');
-    }
+    /**
+     * Scopes this MCP authorization server issues. Advertised in both the
+     * protected-resource metadata (RFC 9728, where scopes_supported is
+     * RECOMMENDED and is consumed by MCP clients to build their scope request)
+     * and the authorization-server metadata (RFC 8414), so keep them in one place.
+     */
+    private const SUPPORTED_SCOPES = ['mcp:tools', 'mcp:resources', 'mcp:prompts'];
 
     /**
      * Get frontend URL for login redirects
@@ -56,6 +59,7 @@ class McpOAuthController extends Controller
             'resource' => "{$baseUrl}/mcp/{$mcpService}",
             'authorization_servers' => ["{$baseUrl}/mcp/{$mcpService}"],
             'bearer_methods_supported' => ['header'],
+            'scopes_supported' => self::SUPPORTED_SCOPES,
         ]);
     }
 
@@ -74,9 +78,9 @@ class McpOAuthController extends Controller
             'registration_endpoint' => "{$baseUrl}/mcp/{$mcpService}/register",
             'response_types_supported' => ['code'],
             'grant_types_supported' => ['authorization_code', 'refresh_token'],
-            'token_endpoint_auth_methods_supported' => ['none', 'client_secret_post'],
+            'token_endpoint_auth_methods_supported' => ['client_secret_post'],
             'code_challenge_methods_supported' => ['S256', 'plain'],
-            'scopes_supported' => ['mcp:tools', 'mcp:resources', 'mcp:prompts'],
+            'scopes_supported' => self::SUPPORTED_SCOPES,
         ]);
     }
 
@@ -98,55 +102,43 @@ class McpOAuthController extends Controller
             ], 400);
         }
 
-        // Get client-provided redirect_uris from the registration request
-        $requestedRedirectUris = $request->input('redirect_uris', []);
+        $requestedRedirectUris = array_values(array_filter((array) $request->input('redirect_uris', []), 'is_string'));
         $clientName = $request->input('client_name', $mcpService);
 
-        // Validate redirect_uris - must be valid URLs
-        $validatedRedirectUris = [];
-        foreach ($requestedRedirectUris as $uri) {
-            if (!is_string($uri)) {
-                continue;
-            }
-            $parsed = parse_url($uri);
-            // Accept https:// URIs and localhost for development
-            if (!empty($parsed['scheme']) && !empty($parsed['host'])) {
-                if ($parsed['scheme'] === 'https' ||
-                    ($parsed['scheme'] === 'http' && in_array($parsed['host'], ['localhost', '127.0.0.1']))) {
-                    $validatedRedirectUris[] = $uri;
-                }
-            }
+        // Redirect URIs configured on the service are always allowed.
+        $configuredUris = McpServerConfig::normalizeRedirectUris($serviceConfig['redirect_uris'] ?? null);
+
+        // This endpoint is unauthenticated, so caller-supplied redirect_uris are
+        // not persisted into the shared client unless they are loopback (native
+        // apps, RFC 8252). The registered set is Claude's callbacks, the admin
+        // allowlist, and loopback URIs. Anything else is dropped: add it to the
+        // service's redirect_uris to allow it.
+        $client = McpOAuthClient::findByClientId($serviceConfig['oauth_client_id']);
+        $allowedUris = McpOAuthClient::registrableRedirectUris($requestedRedirectUris, $client->redirect_uris ?? [], $configuredUris);
+        $dropped = array_values(array_filter($requestedRedirectUris, fn ($uri) => !in_array($uri, $allowedUris, true)));
+        if ($dropped) {
+            Log::warning('MCP OAuth: registration redirect_uris not in the allowlist were dropped; add them to the service redirect_uris to allow them', [
+                'dropped' => $dropped,
+                'service' => $mcpService,
+            ]);
         }
 
-        // Always allow Claude's known redirect URIs for compatibility
-        $claudeRedirectUris = [
-            'https://claude.ai/api/mcp/auth_callback',
-            'https://claude.com/api/mcp/auth_callback',
-        ];
-
-        // Merge with any existing redirect_uris, avoiding duplicates
-        $client = McpOAuthClient::findByClientId($serviceConfig['oauth_client_id']);
         if ($client) {
-            $existingUris = $client->redirect_uris ?? [];
-            $allUris = array_unique(array_merge($existingUris, $validatedRedirectUris, $claudeRedirectUris));
-            $client->update(['redirect_uris' => array_values($allUris)]);
-            $validatedRedirectUris = $allUris;
+            $client->update(['redirect_uris' => $allowedUris]);
         } else {
-            // Create client entry if it doesn't exist
-            $allUris = array_unique(array_merge($validatedRedirectUris, $claudeRedirectUris));
             McpOAuthClient::create([
                 'client_id' => $serviceConfig['oauth_client_id'],
                 'client_secret' => $serviceConfig['oauth_client_secret'],
                 'name' => $clientName,
-                'redirect_uris' => array_values($allUris),
+                'redirect_uris' => $allowedUris,
                 'is_active' => true,
             ]);
-            $validatedRedirectUris = $allUris;
         }
+        $validatedRedirectUris = $allowedUris;
 
         Log::info('MCP OAuth: Client registration', [
             'client_name' => $clientName,
-            'redirect_uris' => $validatedRedirectUris,
+            'redirect_uris' => array_values($validatedRedirectUris),
             'service' => $mcpService,
         ]);
 
@@ -176,7 +168,7 @@ class McpOAuthController extends Controller
         $codeChallenge = $request->query('code_challenge');
         $codeChallengeMethod = $request->query('code_challenge_method', 'plain');
         $responseType = $request->query('response_type', 'code');
-        $scope = $request->query('scope', 'mcp:tools mcp:resources mcp:prompts');
+        $scope = $request->query('scope', implode(' ', self::SUPPORTED_SCOPES));
 
         // Validate response_type
         if ($responseType !== 'code') {
@@ -229,15 +221,23 @@ class McpOAuthController extends Controller
             return $this->errorResponse('invalid_request', 'redirect_uri scheme must be http or https');
         }
 
+        // Redirect URIs configured on the service are always allowed, no matter
+        // which client registered first. This is the escape hatch for clients
+        // that do not perform dynamic registration (e.g. Mistral Vibe), which
+        // would otherwise be locked out by whichever client authorized first.
+        $configuredUris = McpServerConfig::normalizeRedirectUris($serviceConfig['redirect_uris'] ?? null);
+
         // Ensure client exists in the OAuth clients table (for foreign key constraints)
         $client = McpOAuthClient::findByClientId($clientId);
         if (!$client) {
-            // Create the client entry for the pre-configured credentials
+            // Create the client entry for the pre-configured credentials. When an
+            // admin has configured an allowlist, seed from that instead of trusting
+            // whichever client happens to authorize first.
             $client = McpOAuthClient::create([
                 'client_id' => $clientId,
                 'client_secret' => $serviceConfig['oauth_client_secret'],
                 'name' => $mcpService,
-                'redirect_uris' => [$redirectUri],
+                'redirect_uris' => !empty($configuredUris) ? $configuredUris : [$redirectUri],
                 'is_active' => true,
             ]);
         }
@@ -246,10 +246,11 @@ class McpOAuthController extends Controller
         // the empty-registered-list case (returns true to allow first-time
         // dynamic registration) but rejects any redirect_uri whose origin
         // does not exactly match a registered entry.
-        if (!$client->isValidRedirectUri($redirectUri)) {
+        if (!$client->isValidRedirectUri($redirectUri, $configuredUris)) {
             Log::warning('MCP OAuth: redirect_uri not registered', [
                 'provided'   => $redirectUri,
                 'registered' => $client->redirect_uris ?? [],
+                'configured' => $configuredUris,
                 'service'    => $mcpService,
             ]);
             return $this->errorResponse('invalid_request', 'redirect_uri is not registered for this client');
@@ -405,6 +406,29 @@ class McpOAuthController extends Controller
 
         if (empty($email) || empty($password)) {
             return $this->errorResponse('invalid_request', 'Email and password are required');
+        }
+
+        // Validate client_id and redirect_uri BEFORE issuing an authorization
+        // code, exactly as authorizeGet does. The form posts them back from the
+        // browser, so without this a code could be delivered to any origin.
+        $serviceConfig = $request->attributes->get('mcp_service_config');
+        if (!$serviceConfig || empty($serviceConfig['oauth_client_id']) || !is_string($clientId) || $clientId !== $serviceConfig['oauth_client_id']) {
+            return $this->errorResponse('invalid_client', 'Invalid client_id');
+        }
+        if (empty($redirectUri) || !is_string($redirectUri)) {
+            return $this->errorResponse('invalid_request', 'Missing redirect_uri');
+        }
+        if (!in_array(parse_url($redirectUri, PHP_URL_SCHEME), ['http', 'https'], true)) {
+            return $this->errorResponse('invalid_request', 'redirect_uri scheme must be http or https');
+        }
+        $configuredUris = McpServerConfig::normalizeRedirectUris($serviceConfig['redirect_uris'] ?? null);
+        $client = McpOAuthClient::findByClientId($clientId);
+        if (!$client || !$client->isValidRedirectUri($redirectUri, $configuredUris)) {
+            Log::warning('MCP OAuth login: redirect_uri not registered', [
+                'provided' => $redirectUri,
+                'service'  => $mcpService,
+            ]);
+            return $this->errorResponse('invalid_request', 'redirect_uri is not registered for this client');
         }
 
         // Authenticate against DreamFactory
@@ -776,7 +800,7 @@ class McpOAuthController extends Controller
         }
 
         // Validate client_id
-        if (empty($clientId) || $clientId !== $serviceConfig['oauth_client_id']) {
+        if (empty($clientId) || !hash_equals((string) $serviceConfig['oauth_client_id'], (string) $clientId)) {
             Log::warning('OAuth token: Invalid client_id', [
                 'provided' => $clientId,
                 'service' => $mcpService,
@@ -785,7 +809,7 @@ class McpOAuthController extends Controller
         }
 
         // Validate client_secret
-        if (empty($clientSecret) || $clientSecret !== $serviceConfig['oauth_client_secret']) {
+        if (empty($clientSecret) || !hash_equals((string) $serviceConfig['oauth_client_secret'], (string) $clientSecret)) {
             Log::warning('OAuth token: Invalid client_secret', [
                 'service' => $mcpService,
             ]);
@@ -883,7 +907,7 @@ class McpOAuthController extends Controller
         }
 
         // Validate client_secret
-        if (empty($clientSecret) || $clientSecret !== $serviceConfig['oauth_client_secret']) {
+        if (empty($clientSecret) || !hash_equals((string) $serviceConfig['oauth_client_secret'], (string) $clientSecret)) {
             return $this->tokenErrorResponse('invalid_client', 'Invalid client_secret');
         }
 
@@ -923,59 +947,64 @@ class McpOAuthController extends Controller
     }
 
     /**
-     * Authenticate with DreamFactory
+     * Authenticate with DreamFactory.
+     *
+     * Runs in-process (ServiceManager) rather than over HTTP to APP_URL: the
+     * HTTP round trip needed a second PHP-FPM worker from the same pool, so a
+     * busy pool made valid logins fail with "Invalid credentials" (#50).
      */
     private function authenticateWithDreamFactory(string $email, string $password): array
     {
-        $client = new Client(['timeout' => 30]);
+        $credentials = ['email' => $email, 'password' => $password];
 
         // Try user session first
         try {
-            $response = $client->post("{$this->dfUrl}/api/v2/user/session", [
-                'json' => [
-                    'email' => $email,
-                    'password' => $password,
-                ],
-                'headers' => [
-                    'Accept' => 'application/json',
-                ],
-            ]);
-
-            return json_decode($response->getBody()->getContents(), true);
+            return $this->dfRequest('user', Verbs::POST, 'session', $credentials);
         } catch (\Exception $e) {
             // Fall back to admin session endpoint
             Log::debug('MCP OAuth: User session failed, trying admin session', ['error' => $e->getMessage()]);
         }
 
         // Try admin session
-        $response = $client->post("{$this->dfUrl}/api/v2/system/admin/session", [
-            'json' => [
-                'email' => $email,
-                'password' => $password,
-            ],
-            'headers' => [
-                'Accept' => 'application/json',
-            ],
-        ]);
-
-        return json_decode($response->getBody()->getContents(), true);
+        return $this->dfRequest('system', Verbs::POST, 'admin/session', $credentials);
     }
 
     /**
-     * Validate DreamFactory session token
+     * Validate a DreamFactory session token (JWT) and return the session info,
+     * exactly as GET /api/v2/user/session would. Throws if the token is
+     * expired, blacklisted, invalid, or belongs to an unknown user.
      */
     private function validateDreamFactorySession(string $token): array
     {
-        $client = new Client(['timeout' => 30]);
+        \JWTAuth::setToken($token);
+        $payload = \JWTAuth::getPayload();
+        JWTUtilities::verifyUser($payload);
 
-        $response = $client->get("{$this->dfUrl}/api/v2/user/session", [
-            'headers' => [
-                'Accept' => 'application/json',
-                'X-DreamFactory-Session-Token' => $token,
-            ],
-        ]);
+        DfSession::setSessionToken($token);
+        DfSession::setSessionData(null, $payload->get('user_id'));
 
-        return json_decode($response->getBody()->getContents(), true);
+        return DfSession::getPublicInfo();
+    }
+
+    /**
+     * Dispatch a REST call to a DreamFactory service in-process. The service
+     * layer converts exceptions into an error response body, so surface those
+     * as exceptions to keep the callers' try/catch semantics.
+     */
+    private function dfRequest(string $service, string $verb, string $resource, array $payload = []): array
+    {
+        $response = ServiceManager::handleRequest($service, $verb, $resource, [], [], $payload ?: null, null, false);
+        $content = $response->getContent();
+        $status = (int) $response->getStatusCode();
+
+        if ($status >= 400) {
+            $message = is_array($content)
+                ? ($content['error']['message'] ?? json_encode($content))
+                : (string) $content;
+            throw new \RuntimeException("{$service}/{$resource} failed ({$status}): {$message}", $status);
+        }
+
+        return is_array($content) ? $content : [];
     }
 
     /**
@@ -1108,15 +1137,7 @@ class McpOAuthController extends Controller
     private function getAvailableOAuthServices(): array
     {
         try {
-            $client = new Client(['timeout' => 10]);
-
-            $response = $client->get("{$this->dfUrl}/api/v2/system/environment", [
-                'headers' => [
-                    'Accept' => 'application/json',
-                ],
-            ]);
-
-            $env = json_decode($response->getBody()->getContents(), true);
+            $env = $this->dfRequest('system', Verbs::GET, 'environment');
 
             return $env['authentication']['oauth'] ?? [];
         } catch (\Exception $e) {

@@ -1,6 +1,14 @@
 import { currentTraceId } from './trace.service.js';
-/** Default timeout (in ms) for all HTTP requests to the DreamFactory API. */
-const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Default timeout (in ms) for all HTTP requests to the DreamFactory API.
+ *
+ * 60s, not 30s: `GET {service}/_spec?model=true` (what get_data_model calls)
+ * takes ~33s uncached against a 28-table MySQL service measured over loopback,
+ * so a 30s ceiling aborted the call every time and no amount of routing or
+ * caching changed that. The underlying spec call is still too slow and is
+ * tracked separately.
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
 // Known DreamFactory database service types
 const DATABASE_SERVICE_TYPES = new Set([
     'sqlite',
@@ -75,12 +83,12 @@ export class DreamFactoryService {
      */
     static async listFiles(baseUrl, auth, path = '', options = {}) {
         const params = new URLSearchParams();
-        if (options.includeFiles !== undefined)
-            params.set('include_files', String(options.includeFiles));
-        if (options.includeFolders !== undefined)
-            params.set('include_folders', String(options.includeFolders));
-        if (options.fullTree !== undefined)
-            params.set('full_tree', String(options.fullTree));
+        if (options.include_files !== undefined)
+            params.set('include_files', String(options.include_files));
+        if (options.include_folders !== undefined)
+            params.set('include_folders', String(options.include_folders));
+        if (options.full_tree !== undefined)
+            params.set('full_tree', String(options.full_tree));
         if (options.zip !== undefined)
             params.set('zip', String(options.zip));
         const encodedPath = path ? encodeURIComponent(path).replace(/%2F/g, '/') : '';
@@ -160,7 +168,6 @@ export class DreamFactoryService {
                 params.set(key, String(value));
             }
         };
-        append('tableName', options.tableName);
         append('fields', options.fields);
         append('filter', options.filter);
         append('offset', options.offset);
@@ -169,11 +176,11 @@ export class DreamFactoryService {
         append('group', options.group);
         append('continue', options.continue);
         append('related', options.related);
-        append('count_only', options.countOnly);
-        append('include_count', options.includeCount);
-        append('include_schema', options.includeSchema);
+        append('count_only', options.count_only);
+        append('include_count', options.include_count);
+        append('include_schema', options.include_schema);
         append('ids', options.ids);
-        const url = `${baseUrl}/_table/${encodeURIComponent(String(options.tableName ?? ''))}`;
+        const url = `${baseUrl}/_table/${encodeURIComponent(String(options.table_name ?? ''))}`;
         return this.request('GET', url, auth, params);
     }
     static async createRecords(tableName, baseUrl, auth, records, options = {}) {
@@ -232,7 +239,7 @@ export class DreamFactoryService {
      * Falls back to client-side pagination if the server doesn't support aggregate fields.
      */
     static async aggregateData(baseUrl, auth, options) {
-        const { tableName, aggregates, filter, groupBy } = options;
+        const { table_name: tableName, aggregates, filter, group_by: groupBy } = options;
         // Build fields list: group-by columns + aggregate expressions
         const fields = [];
         if (groupBy) {
@@ -243,21 +250,43 @@ export class DreamFactoryService {
             const field = agg.field || '*';
             fields.push(`${fn}(${field})`);
         }
-        // Try server-side aggregation first (single API call)
-        if (groupBy && groupBy.length > 0) {
+        // Try server-side aggregation first (single API call). DreamFactory accepts
+        // aggregate fields with or without GROUP BY, so whole-table MIN/MAX/COUNT
+        // also push down instead of paging the table through the 100k-row fallback.
+        {
             try {
-                const params = {
-                    tableName,
-                    fields,
-                    limit: 0, // no limit on grouped results
-                };
-                params.group = groupBy.join(',');
+                const params = { table_name: tableName, fields };
                 if (filter) {
                     params.filter = filter;
                 }
-                const data = await this.getTableData(baseUrl, auth, params);
-                const rows = (data?.resource ?? []);
-                return { results: rows, mode: 'server-side' };
+                if (!groupBy || groupBy.length === 0) {
+                    // Whole-table aggregate: exactly one row.
+                    const data = await this.getTableData(baseUrl, auth, { ...params, limit: 1 });
+                    return { results: (data?.resource ?? []), mode: 'server-side' };
+                }
+                // Grouped: DreamFactory caps every response at the service's max_records
+                // (commonly 1000), so page through the groups. Ordering by the group
+                // columns makes offset paging deterministic (no missing or duplicate groups).
+                params.group = groupBy.join(',');
+                params.order = groupBy.join(',');
+                const PAGE = 1000;
+                const MAX_GROUPS = 50000;
+                const rows = [];
+                let truncated = false;
+                for (let offset = 0;; offset += PAGE) {
+                    const data = await this.getTableData(baseUrl, auth, { ...params, limit: PAGE, offset });
+                    const page = (data?.resource ?? []);
+                    rows.push(...page);
+                    if (page.length < PAGE)
+                        break;
+                    if (rows.length >= MAX_GROUPS) {
+                        truncated = true;
+                        break;
+                    }
+                }
+                return truncated
+                    ? { results: rows, mode: 'server-side', groups: rows.length, truncated: true, note: `Stopped at ${MAX_GROUPS} groups; add a filter to narrow the grouping.` }
+                    : { results: rows, mode: 'server-side', groups: rows.length };
             }
             catch (serverErr) {
                 console.warn('[aggregateData] Server-side aggregation failed, falling back to client-side:', serverErr instanceof Error ? serverErr.message : serverErr);
@@ -279,13 +308,13 @@ export class DreamFactoryService {
         let offset = 0;
         let totalCount = null;
         while (true) {
-            const params = { tableName, limit: PAGE_SIZE, offset };
+            const params = { table_name: tableName, limit: PAGE_SIZE, offset };
             if (fieldsParam)
                 params.fields = fieldsParam;
             if (filter)
                 params.filter = filter;
             if (offset === 0)
-                params.includeCount = true;
+                params.include_count = true;
             const data = await this.getTableData(baseUrl, auth, params);
             const rows = (data?.resource ?? []);
             if (totalCount === null && data?.meta?.count !== undefined) {
@@ -351,8 +380,8 @@ export class DreamFactoryService {
         const params = new URLSearchParams();
         if (options.compact)
             params.set('compact', 'true');
-        if (options.resourceName)
-            params.set('resource_name', options.resourceName);
+        if (options.resource_name)
+            params.set('resource_name', options.resource_name);
         if (options.tables)
             params.set('tables', 'true');
         if (options.model)
@@ -379,16 +408,18 @@ export class DreamFactoryService {
         return params;
     }
     static async requestRaw(method, url, auth, params) {
-        if (!auth.sessionToken) {
-            throw new Error('Session token is required');
+        // Require at least one auth method (API-key-only works when the app has a role)
+        if (!auth.sessionToken && !auth.apiKey) {
+            throw new Error('Either session token or API key is required');
         }
         const target = new URL(url);
         if (params) {
             params.forEach((value, key) => target.searchParams.set(key, value));
         }
-        const headers = {
-            'X-DreamFactory-Session-Token': auth.sessionToken,
-        };
+        const headers = {};
+        if (auth.sessionToken) {
+            headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+        }
         if (auth.apiKey) {
             headers['X-DreamFactory-API-Key'] = auth.apiKey;
         }
@@ -411,8 +442,9 @@ export class DreamFactoryService {
         return response;
     }
     static async request(method, url, auth, params, body) {
-        if (!auth.sessionToken) {
-            throw new Error('Session token is required');
+        // Require at least one auth method (API-key-only works when the app has a role)
+        if (!auth.sessionToken && !auth.apiKey) {
+            throw new Error('Either session token or API key is required');
         }
         const target = new URL(url);
         if (params) {
@@ -420,8 +452,10 @@ export class DreamFactoryService {
         }
         const headers = {
             Accept: 'application/json',
-            'X-DreamFactory-Session-Token': auth.sessionToken,
         };
+        if (auth.sessionToken) {
+            headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+        }
         if (auth.apiKey) {
             headers['X-DreamFactory-API-Key'] = auth.apiKey;
         }

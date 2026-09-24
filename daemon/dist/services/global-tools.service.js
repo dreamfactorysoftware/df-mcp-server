@@ -13,8 +13,10 @@ const REQUEST_TIMEOUT_MS = 30_000;
 async function dfFetch(method, url, auth, body) {
     const headers = {
         Accept: 'application/json',
-        'X-DreamFactory-Session-Token': auth.sessionToken,
     };
+    if (auth.sessionToken) {
+        headers['X-DreamFactory-Session-Token'] = auth.sessionToken;
+    }
     if (auth.apiKey) {
         headers['X-DreamFactory-API-Key'] = auth.apiKey;
     }
@@ -45,7 +47,8 @@ export function registerGlobalTools(server, sessionManager, disabledTools) {
         + 'service catalog with the operations (GET/POST/PUT/PATCH/DELETE) allowed on each. '
         + 'Call this first to learn your boundaries before querying any data.', z.object({}), async (_params, context) => {
         try {
-            const cfg = context.sessionId ? sessionManager.getConfig(context.sessionId) : undefined;
+            // No session ID in stateless mode: getConfig falls back to the per-request default.
+            const cfg = sessionManager.getConfig(context.sessionId);
             if (!cfg) {
                 return respondError('DreamFactory session not found. Please authenticate.');
             }
@@ -67,7 +70,8 @@ export function registerGlobalTools(server, sessionManager, disabledTools) {
         note: z.string().optional().describe('Why you need this access (shown to the approving admin).'),
     }), async (params, context) => {
         try {
-            const cfg = context.sessionId ? sessionManager.getConfig(context.sessionId) : undefined;
+            // No session ID in stateless mode: getConfig falls back to the per-request default.
+            const cfg = sessionManager.getConfig(context.sessionId);
             if (!cfg) {
                 return respondError('DreamFactory session not found. Please authenticate.');
             }

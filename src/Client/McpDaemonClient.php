@@ -5,6 +5,7 @@ namespace DreamFactory\Core\McpServer\Client;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use DreamFactory\Core\McpServer\Support\InternalKey;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -14,41 +15,95 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 class McpDaemonClient
 {
     private string $daemonUrl;
+    private int $timeout;
+    /** @var array<string, array{secret: string[], maps: string[]}>|null sent as _mcpSecretFields on POSTs */
+    private ?array $secretFields = null;
 
     public function __construct(?string $daemonUrl = null)
     {
         $this->daemonUrl = $daemonUrl ?? config('mcp.daemon.url', 'http://127.0.0.1:8006');
+        // Upper bound on how long one PHP-FPM worker is held per proxied call.
+        // The daemon caps each of its own REST sub-calls at 30s, so this only
+        // matters for tools that chain many sub-calls.
+        $this->timeout = (int) config('mcp.daemon.timeout', 300);
+    }
+
+    /**
+     * Send a secret field manifest (see SecretFieldManifest) with every POST envelope, as
+     * `_mcpSecretFields`. Only the System API MCP daemon reads it. GET/DELETE requests carry
+     * their config in a header, so the manifest is never added there.
+     */
+    public function withSecretFields(array $manifest): self
+    {
+        $this->secretFields = $manifest;
+
+        return $this;
+    }
+
+    /** The POST envelope sent to the daemon. */
+    private function envelope(mixed $payload, array $config, array $availableServices): object
+    {
+        $envelope = (object) [
+            '_mcpPayload' => $payload,
+            '_mcpConfig' => $config,
+            '_mcpAvailableServices' => $availableServices ?: [],
+        ];
+        if ($this->secretFields) {
+            $envelope->_mcpSecretFields = $this->secretFields;
+        }
+
+        return $envelope;
     }
 
     /**
      * Proxy request to daemon server
      *
+     * @param array $authResult Auth result from McpStreamController with keys:
+     *        auth_type ('oauth'|'api_key'), session_token (?string),
+     *        api_key (?string), app_id (?int)
      * @param array $availableServices Pre-resolved list of available services (bypasses RBAC)
      */
-    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl, string $dfSessionToken, array $availableServices = []): Response|JsonResponse|StreamedResponse
+    public function proxyRequest(Request $request, string $mcpService, array $config, string $baseUrl, array $authResult, array $availableServices = []): Response|JsonResponse|StreamedResponse
     {
         try {
             $client = new \GuzzleHttp\Client([
-                'timeout' => 300,
+                'timeout' => $this->timeout,
             ]);
 
             $headers = [
                 'X-Mcp-Base-Url' => $baseUrl,
-                'X-DreamFactory-Session-Token' => $dfSessionToken,
                 'Accept' => 'application/json, text/event-stream',
                 // Platform trace id: the daemon re-attaches this to its DF REST
                 // sub-calls so all rows of one MCP action join on one id.
                 \DreamFactory\Core\Utility\TraceId::HEADER => \DreamFactory\Core\Utility\TraceId::get(),
             ];
+            $headers += self::internalKeyHeader();
+            $headers += self::clientNameHeader($authResult);
 
-            // Pass API key if configured (required for non-admin users)
-            $appId = $config['app_id'] ?? null;
-            Log::debug('MCP API Key lookup', ['app_id' => $appId, 'config_keys' => array_keys($config)]);
-            if ($appId) {
-                $apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId);
-                Log::debug('MCP API Key result', ['app_id' => $appId, 'api_key_found' => !empty($apiKey)]);
-                if ($apiKey) {
-                    $headers['X-DreamFactory-API-Key'] = $apiKey;
+            // Session token when present (OAuth, or API key + layered session
+            // token). Absent for API-key-only auth — the daemon's DF REST
+            // calls then run on the key alone, under the key app's role.
+            $dfSessionToken = $authResult['session_token'] ?? null;
+            if (!empty($dfSessionToken)) {
+                $headers['X-DreamFactory-Session-Token'] = $dfSessionToken;
+            }
+
+            $clientApiKey = $authResult['api_key'] ?? null;
+            if (!empty($clientApiKey)) {
+                // API-key auth: forward the caller's own key so downstream DF
+                // REST calls carry the same app/role identity that was gated.
+                $headers['X-DreamFactory-API-Key'] = $clientApiKey;
+                Log::debug('MCP using client-provided API key', ['auth_type' => $authResult['auth_type'] ?? null]);
+            } else {
+                // OAuth auth: pass the configured app's key (required for non-admin users)
+                $appId = $config['app_id'] ?? null;
+                Log::debug('MCP API Key lookup', ['app_id' => $appId, 'config_keys' => array_keys($config)]);
+                if ($appId) {
+                    $apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId);
+                    Log::debug('MCP API Key result', ['app_id' => $appId, 'api_key_found' => !empty($apiKey)]);
+                    if ($apiKey) {
+                        $headers['X-DreamFactory-API-Key'] = $apiKey;
+                    }
                 }
             }
 
@@ -74,21 +129,16 @@ class McpDaemonClient
                 // Use json_decode WITHOUT assoc flag to preserve empty objects ({} vs [])
                 // PHP's json_decode($str, true) converts {} to [] which breaks JSON-RPC schemas
                 $mcpPayload = json_decode($originalBody);
-                $envelope = (object)[
-                    '_mcpPayload' => $mcpPayload,
-                    '_mcpConfig' => $config,
-                    '_mcpAvailableServices' => $availableServices ?: [],
-                ];
-                $body = json_encode($envelope);
+                $body = json_encode($this->envelope($mcpPayload, $config, $availableServices));
                 // Override Content-Type since we're wrapping the payload
                 $headers['content-type'] = 'application/json';
             } else {
                 // For non-POST requests, pass config via headers (these are smaller
                 // requests like session resumption that don't carry disabled_tools).
                 $headers['X-Mcp-Config'] = json_encode($config);
-                if (!empty($availableServices)) {
-                    $headers['X-Mcp-Available-Services'] = json_encode($availableServices);
-                }
+                // Always send the list, including [] — an omitted header makes
+                // the daemon fall back to GET /system/service and undo scoping.
+                $headers['X-Mcp-Available-Services'] = json_encode(array_values($availableServices));
             }
 
             $daemonPath = "/mcp/{$mcpService}";
@@ -126,13 +176,34 @@ class McpDaemonClient
             ], $e->getResponse()?->getStatusCode() ?? 400);
 
         } catch (\GuzzleHttp\Exception\ConnectException $e) {
+            // cURL 28 = the daemon accepted the request but did not finish
+            // answering within the timeout. Not a "daemon down" condition.
+            if (($e->getHandlerContext()['errno'] ?? null) === CURLE_OPERATION_TIMEOUTED) {
+                Log::error('MCP daemon request timed out', [
+                    'mcpService' => $mcpService,
+                    'timeout' => $this->timeout,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return response()->json([
+                    'jsonrpc' => '2.0',
+                    'id' => null,
+                    'error' => [
+                        'code' => -32000,
+                        'message' => "MCP daemon did not respond within {$this->timeout}s (backend busy or timed out)",
+                    ],
+                ], 504);
+            }
+
             Log::error('Failed to connect to MCP daemon', [
                 'daemonUrl' => $this->daemonUrl,
                 'error' => $e->getMessage(),
             ]);
 
             return response()->json([
-                'error' => 'MCP daemon is not running. Please start it with: php artisan mcp:daemon',
+                'error' => 'MCP daemon is not reachable at ' . $this->daemonUrl
+                    . '. Start it (data daemon: scripts/start-daemon.sh; System API daemon:'
+                    . ' scripts/start-system-daemon.sh or its container) or fix MCP_DAEMON_URL / MCP_SYSTEM_DAEMON_URL.',
             ], 503);
 
         } catch (\GuzzleHttp\Exception\ServerException $e) {
@@ -193,7 +264,7 @@ class McpDaemonClient
         array $availableServices,
         array $jsonRpc
     ): array {
-        $client = new \GuzzleHttp\Client(['timeout' => 300]);
+        $client = new \GuzzleHttp\Client(['timeout' => $this->timeout]);
         $url = $this->daemonUrl . "/mcp/{$mcpService}";
 
         $headers = [
@@ -202,6 +273,8 @@ class McpDaemonClient
             'Content-Type'                 => 'application/json',
             'Accept'                       => 'application/json, text/event-stream',
         ];
+        $headers += self::internalKeyHeader();
+        $headers['X-Mcp-Client-Name'] = 'df-ai-chat';
         if ($appId = ($config['app_id'] ?? null)) {
             if ($apiKey = \DreamFactory\Core\Models\App::getApiKeyByAppId($appId)) {
                 $headers['X-DreamFactory-API-Key'] = $apiKey;
@@ -225,11 +298,7 @@ class McpDaemonClient
         // the message as invalid JSON-RPC.
         $jsonRpc = self::restoreEmptyJsonObjects($jsonRpc);
 
-        $envelope = fn (array $payload) => json_encode([
-            '_mcpPayload'           => $payload,
-            '_mcpConfig'            => $config,
-            '_mcpAvailableServices' => $availableServices ?: [],
-        ]);
+        $envelope = fn (array $payload) => json_encode($this->envelope($payload, $config, $availableServices));
         // $headers is captured by reference — the Mcp-Session-Id added after
         // initialize must be sent on the follow-up POSTs.
         $post = function (array $payload) use ($client, $url, &$headers, $envelope) {
@@ -261,6 +330,135 @@ class McpDaemonClient
         $resp = $post($jsonRpc);
 
         return $this->decodeDaemonBody((string) $resp->getBody());
+    }
+
+    /**
+     * Who is calling, on every proxied request. The daemon's lazy facade
+     * gives passthrough clients (codex, grok, hermes) the full catalog, but in
+     * stateless mode it only ever sees clientInfo on the initialize request,
+     * which is a different HTTP request from tools/list. Forward the name we
+     * already know server-side: the OAuth client row's registered
+     * client_name, or the app name for API-key auth.
+     *
+     * @return array<string, string>
+     */
+    public static function clientNameHeader(array $authResult): array
+    {
+        $name = null;
+        $token = $authResult['token'] ?? null;
+        if ($token instanceof \DreamFactory\Core\McpServer\Models\McpOAuthAccessToken) {
+            $name = \DreamFactory\Core\McpServer\Utility\RequestLogger::resolveClientName($token);
+        } elseif ($appId = ($authResult['app_id'] ?? null)) {
+            $name = \DreamFactory\Core\Models\App::find($appId)?->name;
+        }
+        $value = self::clientHeaderValue($name);
+
+        return $value === null ? [] : ['X-Mcp-Client-Name' => $value];
+    }
+
+    /**
+     * Header-safe form of a client-supplied name: printable ASCII only (the
+     * OAuth client registered it, so it is untrusted), capped at 128 chars.
+     */
+    public static function clientHeaderValue(?string $name): ?string
+    {
+        if ($name === null) {
+            return null;
+        }
+        $clean = trim(substr((string) preg_replace('/[^\x20-\x7E]+/', '', $name), 0, 128));
+
+        return $clean === '' ? null : $clean;
+    }
+
+    /**
+     * Ask the data daemon what tools/list would advertise for this service
+     * config + PHP-scoped backend catalog + client name, without opening an
+     * MCP session (POST /mcp/catalog/preview). Carries the same _mcpConfig and
+     * _mcpAvailableServices a proxied envelope would, but never an
+     * _mcpPayload — nothing is executed and no audit row is written.
+     *
+     * @param array<string, mixed> $config
+     * @param array<int, array<string, mixed>> $availableServices
+     * @return array<string, mixed> the daemon's preview, or ['error' => string, 'status' => int]
+     */
+    public function catalogPreview(
+        string $mcpService,
+        array $config,
+        array $availableServices,
+        string $clientName,
+        ?string $lazyMode = null
+    ): array {
+        $body = [
+            'serviceName'           => $mcpService,
+            '_mcpConfig'            => $config ?: (object) [],
+            '_mcpAvailableServices' => array_values($availableServices),
+            'clientName'            => $clientName,
+        ];
+        if ($lazyMode !== null) {
+            $body['lazyMode'] = $lazyMode;
+        }
+
+        try {
+            $client = new \GuzzleHttp\Client(['timeout' => $this->timeout]);
+            $response = $client->post($this->daemonUrl . '/mcp/catalog/preview', [
+                'headers'     => ['Content-Type' => 'application/json'] + self::internalKeyHeader(),
+                'body'        => json_encode($body),
+                'expect'      => false,
+                'http_errors' => false,
+            ]);
+        } catch (\GuzzleHttp\Exception\ConnectException $e) {
+            Log::error('Failed to connect to MCP daemon for catalog preview', [
+                'daemonUrl' => $this->daemonUrl,
+                'error'     => $e->getMessage(),
+            ]);
+
+            return ['error' => 'MCP daemon is not reachable at ' . $this->daemonUrl, 'status' => 503];
+        }
+
+        $status = $response->getStatusCode();
+        $decoded = json_decode((string) $response->getBody(), true);
+        if ($status >= 400 || !is_array($decoded) || !isset($decoded['tools'])) {
+            Log::error('MCP daemon catalog preview failed', ['mcpService' => $mcpService, 'status' => $status]);
+
+            return [
+                'error'  => 'MCP daemon catalog preview failed (HTTP ' . $status . ')'
+                    . (is_array($decoded) && isset($decoded['error']) ? ': ' . json_encode($decoded['error']) : ''),
+                'status' => 502,
+            ];
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * Shared-secret header for the daemons, sent on every call. The data daemon
+     * rejects /mcp/* without it (fail closed); df-system-mcp-server enforces it
+     * when MCP_INTERNAL_KEY is set on its side.
+     *
+     * @return array<string, string>
+     */
+    private static function internalKeyHeader(): array
+    {
+        $key = self::internalKey();
+
+        return $key !== '' ? ['X-Mcp-Internal-Key' => $key] : [];
+    }
+
+    /** MCP_INTERNAL_KEY, else the generated key in storage/framework (see Support\InternalKey). */
+    public static function internalKey(): string
+    {
+        $key = InternalKey::resolve((string) config('mcp.daemon.internal_key'), self::internalKeyFile());
+        if ($key === '') {
+            Log::error('MCP internal key unavailable: MCP_INTERNAL_KEY is unset and ' . self::internalKeyFile()
+                . ' could not be written. The MCP daemon will reject every call.');
+        }
+
+        return $key;
+    }
+
+    public static function internalKeyFile(): string
+    {
+        return (string) config('mcp.daemon.internal_key_file') ?: storage_path(InternalKey::FILE);
     }
 
     /**

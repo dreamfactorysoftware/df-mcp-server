@@ -13,6 +13,9 @@
     "php": ">=8.3",
     "guzzlehttp/guzzle": "^7.0"
   },
+  "suggest": {
+    "dreamfactory/df-system-mcp-server": "System API MCP daemon for the system_mcp service type; start it with scripts/start-system-daemon.sh"
+  },
   "autoload": {
     "psr-4": {
       "DreamFactory\\Core\\McpServer\\": "src/"
