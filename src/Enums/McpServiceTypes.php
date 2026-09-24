@@ -22,6 +22,12 @@ final class McpServiceTypes
         return [self::DATA, self::SYSTEM];
     }
 
+    /** Whether a service of this type answers /mcp/{service} (the stream and OAuth routes). */
+    public static function isEndpoint(string $type): bool
+    {
+        return in_array($type, self::all(), true);
+    }
+
     public static function isSystem(?string $type): bool
     {
         return $type === self::SYSTEM;
