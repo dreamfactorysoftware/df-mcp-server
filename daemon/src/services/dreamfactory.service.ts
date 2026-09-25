@@ -493,7 +493,7 @@ export class DreamFactoryService {
       compact?: boolean;
       resource_name?: string;
       tables?: boolean;
-      model?: boolean;
+      model?: boolean | 'semantics';
       refresh?: boolean;
       format?: string;
     } = {}
@@ -502,7 +502,7 @@ export class DreamFactoryService {
     if (options.compact) params.set('compact', 'true');
     if (options.resource_name) params.set('resource_name', options.resource_name);
     if (options.tables) params.set('tables', 'true');
-    if (options.model) params.set('model', 'true');
+    if (options.model) params.set('model', options.model === 'semantics' ? 'semantics' : 'true');
     if (options.refresh) params.set('refresh', 'true');
     if (options.format) params.set('format', options.format);
     return this.request('GET', `${baseUrl}/_spec`, auth, params);

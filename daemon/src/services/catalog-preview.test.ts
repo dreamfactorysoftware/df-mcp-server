@@ -88,7 +88,7 @@ test('lazy auto follows the catalog size; lazyMode overrides the config; passthr
   const large = await previewCatalog({ serviceName: 'preview-auto-large', _mcpConfig: { lazy_mode: 'auto' }, _mcpAvailableServices: many });
   assert.equal(large.lazy, 'lazy');
   assert.ok(large.bytes > 32 * 1024, `catalog bytes ${large.bytes} exceed the auto threshold`);
-  assert.equal(large.count, 20 * 16 + 5 + 5, '16 verbs x 20 dbs + 5 aggregators + 5 globals');
+  assert.equal(large.count, 20 * 17 + 5 + 5, '17 verbs x 20 dbs + 5 aggregators + 5 globals');
 
   const forcedOff = await previewCatalog({ serviceName: 'preview-forced-off', _mcpConfig: { lazy_mode: 'on' }, _mcpAvailableServices: many, lazyMode: 'off' });
   assert.equal(forcedOff.lazy, 'direct');

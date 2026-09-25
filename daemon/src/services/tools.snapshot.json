@@ -217,6 +217,25 @@
     }
   },
   {
+    "name": "ordersdb_get_semantics",
+    "title": "ordersdb: Get Business Definitions",
+    "description": "[ordersdb] CALL FIRST. Approved business definitions for this database: what terms like \"current\", \"active\" or \"headcount\" mean in the data, metrics and verified queries with the exact tool arguments to run them. Small; follow these definitions instead of guessing.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
     "name": "ordersdb_get_data_model",
     "title": "ordersdb: Get Data Model",
     "description": "[ordersdb] BEST FIRST CALL. Condensed model of every table, columns (name/type/FK), row counts, hierarchies, and junction tables. Use this to plan queries before get_table_data.",
@@ -829,6 +848,25 @@
           "type": "boolean"
         }
       },
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "crm_get_semantics",
+    "title": "crm: Get Business Definitions",
+    "description": "[crm] CALL FIRST. Approved business definitions for this database: what terms like \"current\", \"active\" or \"headcount\" mean in the data, metrics and verified queries with the exact tool arguments to run them. Small; follow these definitions instead of guessing.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
       "$schema": "http://json-schema.org/draft-07/schema#"
     },
     "annotations": {
