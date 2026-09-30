@@ -385,7 +385,7 @@ export class DreamFactoryService {
         if (options.tables)
             params.set('tables', 'true');
         if (options.model)
-            params.set('model', 'true');
+            params.set('model', options.model === 'semantics' ? 'semantics' : 'true');
         if (options.refresh)
             params.set('refresh', 'true');
         if (options.format)

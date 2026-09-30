@@ -50,6 +50,19 @@ const BASE_TOOLS = [
         }
     },
     {
+        name: 'get_semantics',
+        title: 'Get Business Definitions',
+        description: 'CALL FIRST. Approved business definitions for this database: what terms like "current", "active" or "headcount" mean in the data, metrics and verified queries with the exact tool arguments to run them. Small; follow these definitions instead of guessing.',
+        schema: z.object({}),
+        handler: async (_args, _context, apiConfig, auth) => {
+            const data = await DreamFactoryService.getApiSpec(apiConfig.baseUrl, auth, { model: 'semantics' });
+            if (!data || !data.semantics) {
+                return respond({ semantics: null, note: 'No approved business definitions for this database. Use get_data_model.' });
+            }
+            return respond(data);
+        }
+    },
+    {
         name: 'get_data_model',
         title: 'Get Data Model',
         description: 'BEST FIRST CALL. Condensed model of every table, columns (name/type/FK), row counts, hierarchies, and junction tables. Use this to plan queries before get_table_data.',
