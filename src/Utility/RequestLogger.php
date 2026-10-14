@@ -51,7 +51,7 @@ class RequestLogger
                 'role_id'       => Session::getRoleId(),
                 'app_id'        => Session::get('app.id'),
                 'client_id'     => $token?->client_id,
-                'client_name'   => self::resolveClientName($token),
+                'client_name'   => self::resolveClientName($token) ?? self::resolveAppName(Session::get('app.id')),
                 'method'        => $method,
                 'tool_name'     => $toolName,
                 'bytes_in'      => strlen($body),
@@ -92,6 +92,27 @@ class RequestLogger
 
     /** @var array<string, ?int> */
     private static array $serviceIdCache = [];
+
+    /** @var array<int, ?string> */
+    private static array $appNameCache = [];
+
+    /**
+     * API-key and session callers have no OAuth client row. Mirror
+     * McpDaemonClient::clientNameHeader() and label them by the app the key
+     * belongs to, so the dashboard's "MCP clients" panel reads "semantic_eval"
+     * instead of "unknown client".
+     */
+    private static function resolveAppName(mixed $appId): ?string
+    {
+        if (!$appId) {
+            return null;
+        }
+        $appId = (int) $appId;
+        if (!array_key_exists($appId, self::$appNameCache)) {
+            self::$appNameCache[$appId] = \DreamFactory\Core\Models\App::find($appId)?->name;
+        }
+        return self::$appNameCache[$appId];
+    }
 
     private static function resolveServiceId(string $serviceName): ?int
     {

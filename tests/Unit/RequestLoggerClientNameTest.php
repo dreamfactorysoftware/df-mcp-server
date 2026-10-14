@@ -26,6 +26,17 @@ class RequestLoggerClientNameTest extends TestCase
         $this->assertStringNotContainsString('$client?->client_name', $logger);
     }
 
+    public function testNonOauthCallersAreLabelledByTheirApp(): void
+    {
+        $logger = file_get_contents(__DIR__ . '/../../src/Utility/RequestLogger.php');
+        $daemon = file_get_contents(__DIR__ . '/../../src/Client/McpDaemonClient.php');
+
+        // Same fallback the proxy already uses for X-Mcp-Client-Name: OAuth client name, else the app name.
+        $this->assertStringContainsString("self::resolveClientName(\$token) ?? self::resolveAppName(Session::get('app.id'))", $logger);
+        $this->assertStringContainsString('App::find($appId)?->name', $logger);
+        $this->assertStringContainsString("App::find(\$appId)?->name", $daemon);
+    }
+
     public function testResolveClientNameReturnsTheRegisteredName(): void
     {
         if (!class_exists(\Illuminate\Database\Capsule\Manager::class)) {
