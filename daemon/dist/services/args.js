@@ -90,12 +90,15 @@ export function serviceNameMap(services) {
 const READ = /(^|_)(get|list|search|fetch|describe|aggregate|discover|find|whoami)(_|$)/;
 const DESTRUCTIVE = /(^|_)(delete|update)(_|$)/;
 const ADDITIVE = /(^|_)create(_|$)/;
+// create_file is a POST with check_exist=false: it replaces an existing file at
+// the same path, so it is an overwrite (destructive, idempotent), not an insert.
+const OVERWRITE = /(^|_)create_file$/;
 export function annotationsFor(name) {
     if (name === 'call_tool')
         return { openWorldHint: false }; // runs any catalog tool: unknown
     if (READ.test(name))
         return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
-    if (DESTRUCTIVE.test(name))
+    if (DESTRUCTIVE.test(name) || OVERWRITE.test(name))
         return { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
     if (ADDITIVE.test(name))
         return { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
