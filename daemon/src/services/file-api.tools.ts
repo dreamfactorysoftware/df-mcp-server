@@ -36,12 +36,12 @@ const FILE_TOOLS: FileToolDefinition[] = [
   {
     name: 'list_files',
     title: 'List Files',
-    description: 'List files and folders in a path',
+    description: 'List files and folders under a path in this file service: names, paths, sizes and last-modified times. One level only unless full_tree=true.',
     schema: z.object({
-      path: z.string().optional().describe('Path to list (empty for root)'),
-      include_files: z.boolean().optional().describe('Include files in listing'),
-      include_folders: z.boolean().optional().describe('Include folders in listing'),
-      full_tree: z.boolean().optional().describe('Return full directory tree')
+      path: z.string().optional().describe('Folder path relative to the service root; empty or omitted for the root.'),
+      include_files: z.boolean().optional().describe('Include files in the listing (default true).'),
+      include_folders: z.boolean().optional().describe('Include folders in the listing (default true).'),
+      full_tree: z.boolean().optional().describe('Recurse into every subfolder (can be large).')
     }),
     handler: async ({ path, ...options }, _context, apiConfig, auth) => {
       const data = await DreamFactoryService.listFiles(apiConfig.baseUrl, auth, path ?? '', options);
@@ -51,9 +51,9 @@ const FILE_TOOLS: FileToolDefinition[] = [
   {
     name: 'get_file',
     title: 'Get File Content',
-    description: 'Get the content of a file',
+    description: 'Return one file\'s content. Text-like files (text, JSON, XML) come back as text; images and audio as base64 with their MIME type. Use get_file_properties for size and modified time without downloading.',
     schema: z.object({
-      path: z.string().describe('Path to the file')
+      path: z.string().describe('File path relative to the service root, e.g. reports/2024/q1.csv.')
     }),
     handler: async ({ path }, _context, apiConfig, auth) => {
       const result = await DreamFactoryService.getFileContent(apiConfig.baseUrl, auth, path);
@@ -63,10 +63,10 @@ const FILE_TOOLS: FileToolDefinition[] = [
   {
     name: 'create_file',
     title: 'Create File',
-    description: 'Create a new file with the given content',
+    description: 'Write a text file at path, creating it or replacing an existing file at the same path. Returns the written path. Create the parent folder with create_folder first if it may not exist.',
     schema: z.object({
-      path: z.string().describe('Path for the new file (e.g. folder/filename.txt)'),
-      content: z.string().describe('Content to write to the file')
+      path: z.string().describe('Path for the file relative to the service root, e.g. folder/filename.txt.'),
+      content: z.string().describe('Full text content to write; replaces any existing content.')
     }),
     handler: async ({ path, content }, _context, apiConfig, auth) => {
       const data = await DreamFactoryService.createFile(apiConfig.baseUrl, auth, path, content);
@@ -76,9 +76,9 @@ const FILE_TOOLS: FileToolDefinition[] = [
   {
     name: 'get_file_properties',
     title: 'Get File Properties',
-    description: 'Get properties/metadata of a file or folder',
+    description: 'Metadata for one file or folder (name, path, type, size, content type, last modified) without returning its content. Use get_file to read the content.',
     schema: z.object({
-      path: z.string().describe('Path to the file or folder')
+      path: z.string().describe('File or folder path relative to the service root.')
     }),
     handler: async ({ path }, _context, apiConfig, auth) => {
       const data = await DreamFactoryService.getFileProperties(apiConfig.baseUrl, auth, path);
@@ -88,9 +88,9 @@ const FILE_TOOLS: FileToolDefinition[] = [
   {
     name: 'create_folder',
     title: 'Create Folder',
-    description: 'Create a new folder',
+    description: 'Create a folder at path in this file service. Check with list_files on the parent first if the folder may already exist.',
     schema: z.object({
-      path: z.string().describe('Path for the new folder')
+      path: z.string().describe('Folder path relative to the service root, e.g. reports/2024.')
     }),
     handler: async ({ path }, _context, apiConfig, auth) => {
       const data = await DreamFactoryService.createFolder(apiConfig.baseUrl, auth, path);
@@ -100,10 +100,10 @@ const FILE_TOOLS: FileToolDefinition[] = [
   {
     name: 'delete_file',
     title: 'Delete File or Folder',
-    description: 'Delete a file or folder',
+    description: 'Permanently delete a file, or a folder (with force=true when it is not empty). There is no undo.',
     schema: z.object({
-      path: z.string().describe('Path to the file or folder to delete'),
-      force: z.boolean().optional().describe('Force delete non-empty folders')
+      path: z.string().describe('File or folder path relative to the service root.'),
+      force: z.boolean().optional().describe('Delete a non-empty folder together with everything inside it.')
     }),
     handler: async ({ path, force }, _context, apiConfig, auth) => {
       const data = await DreamFactoryService.deleteFile(apiConfig.baseUrl, auth, path, { force });
@@ -181,7 +181,7 @@ export function registerFileApiTools(
   registerTool(
     'all_list_files',
     'List Files from All Storage Services',
-    'List root files and folders from all connected file storage services',
+    'Files and folders at one path (default: root) from every connected file service in one call, keyed by service. For one service call list_files.',
     z.object({
       path: z.string().optional().describe('Path to list (empty for root)')
     }),
