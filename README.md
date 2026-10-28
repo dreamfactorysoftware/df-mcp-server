@@ -17,25 +17,26 @@ Edit your project’s composer.json to require the following package.
 Save your composer.json and do a "composer update" to install the package.
 
 ### MCP Daemon process
-The Laravel package proxies every MCP request through a persistent Node.js daemon that keeps long-lived MCP server instances warm.
+The Laravel package proxies every MCP request through a persistent Node.js daemon that keeps long-lived MCP server instances warm. The daemon needs **Node.js 20 or newer** (22 LTS recommended); Node 18 lacks the global Web Crypto API that the MCP SDK relies on.
 
-1. Install dependencies
+1. Install the runtime dependencies. The versions are pinned in `daemon/package-lock.json`, so every install resolves the same tree:
    ```
    cd daemon
-   npm install
+   npm ci --omit=dev
    ```
+   The compiled daemon (`daemon/dist/`) ships with the package, so no build step is needed. Repeat this step after every `composer update` that touches `dreamfactory/df-mcp-server`: Composer replaces the package directory, which removes `daemon/node_modules`.
 2. Configure the daemon host/port (or use defaults) and point DreamFactory to it by adding the following to your `.env` file:
    ```
    MCP_DAEMON_ENABLED=true
    MCP_DAEMON_URL=http://127.0.0.1:8006
    ```
-3. Start the daemon (choose the mode you need):
+3. Start the daemon:
    ```
-   # Development
-   npm run dev
+   # Production (runs dist/server.js, resolves the internal key, sets stateless mode)
+   ../scripts/start-daemon.sh
 
-   # Production
-   npm start
+   # Development (TypeScript sources with reload; needs the dev dependencies: npm install)
+   npm run dev
    ```
 
 Once the daemon is online, the MCP routes in DreamFactory automatically forward traffic to it.
