@@ -331,10 +331,14 @@ vendor/dreamfactory/df-mcp-server/scripts/start-system-daemon.sh          # Linu
 vendor\dreamfactory\df-mcp-server\scripts\start-system-daemon-win.ps1     # Windows
 ```
 
-The launcher installs the daemon's production dependencies on first run, listens on
-`127.0.0.1:3700`, and calls DreamFactory back on `MCP_INTERNAL_BASE_URL` or
-`http://127.0.0.1`. Because the daemon listens on loopback, it accepts DreamFactory's callback
-URL without `MCP_INTERNAL_KEY` (the data daemon, by contrast, always requires a key). The launcher reads
+The launcher installs the daemon's runtime dependencies from its lockfile
+(`npm ci --omit=dev`) when `node_modules` is missing, so every host runs the same versions
+(the package ships `build/`, so nothing is compiled). A `composer update` replaces the
+package directory, including `node_modules`; restart the daemon afterwards and the launcher
+reinstalls them. It listens on `127.0.0.1:3700` and calls DreamFactory back on
+`MCP_INTERNAL_BASE_URL` or `http://127.0.0.1`. Because the daemon listens on loopback, it
+accepts DreamFactory's callback URL without `MCP_INTERNAL_KEY` (the data daemon, by contrast,
+always requires a key). The launcher reads
 `MCP_SYSTEM_DAEMON_HOST`, `MCP_SYSTEM_DAEMON_PORT` (keep `MCP_SYSTEM_DAEMON_URL` in step),
 `DREAMFACTORY_URL` and `DF_SYSTEM_MCP_DIR`, and passes the daemon only its own settings, not
 the rest of DreamFactory's environment. On a VM, run it from a systemd unit with
