@@ -230,14 +230,14 @@ class McpOAuthController extends Controller
         // Ensure client exists in the OAuth clients table (for foreign key constraints)
         $client = McpOAuthClient::findByClientId($clientId);
         if (!$client) {
-            // Create the client entry for the pre-configured credentials. When an
-            // admin has configured an allowlist, seed from that instead of trusting
-            // whichever client happens to authorize first.
+            // Create the client entry for the pre-configured credentials. Seed
+            // from the registrable set (Claude, the admin allowlist, loopback) so
+            // the first caller does not choose the origin.
             $client = McpOAuthClient::create([
                 'client_id' => $clientId,
                 'client_secret' => $serviceConfig['oauth_client_secret'],
                 'name' => $mcpService,
-                'redirect_uris' => !empty($configuredUris) ? $configuredUris : [$redirectUri],
+                'redirect_uris' => McpOAuthClient::firstUseRedirectUris($redirectUri, $configuredUris),
                 'is_active' => true,
             ]);
         }
