@@ -122,6 +122,17 @@ class McpOAuthClient extends Model
         return array_values(array_unique(array_merge(self::CLAUDE_REDIRECT_URIS, $configured, $loopback)));
     }
 
+    /**
+     * Redirect URIs to seed a client row with on its first /authorize. Same set
+     * /register stores, so the first caller cannot choose the origin.
+     *
+     * @return string[]
+     */
+    public static function firstUseRedirectUris(string $requested, array $configured): array
+    {
+        return static::registrableRedirectUris([$requested], [], $configured);
+    }
+
     /** http:// on a loopback host: the RFC 8252 native-app redirect. */
     public static function isLoopbackRedirectUri(string $uri): bool
     {
@@ -145,7 +156,7 @@ class McpOAuthClient extends Model
             $additionalUris
         )));
 
-        // If no URIs registered, allow any (for dynamic registration)
+        // Empty list allows any. No /authorize or /register path stores an empty list.
         if (empty($allowedUris)) {
             return true;
         }
