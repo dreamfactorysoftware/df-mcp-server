@@ -170,6 +170,9 @@ class McpUsageAggregator
         if ($driver === 'pgsql') {
             return "to_char(created_at, 'YYYY-MM-DD')";
         }
+        if ($driver === 'sqlsrv') {
+            return "CONVERT(varchar(10), created_at, 23)";
+        }
         return "DATE_FORMAT(created_at, '%Y-%m-%d')";
     }
 }
