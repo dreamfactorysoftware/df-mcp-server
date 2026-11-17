@@ -107,28 +107,60 @@ class OAuthClientNameAttributionTest extends TestCase
         $this->assertNull($neverRegistered->registeredNameFor(self::A_URI), 'no names: callers fall back to the row name');
     }
 
-    public function testNewLoopbackPortResolvesToTheLatestMatchingRegistration(): void
+    public function testNewLoopbackPortTakesTheNameOfTheSameHostAndPathOnly(): void
     {
         $this->needsEloquent();
         $client = $this->registerAThenB();
-        $cUri = 'http://127.0.0.1:41003/cb';
-        $client->client_names = McpOAuthClient::withRegisteredName(
-            $client->client_names,
-            [$cUri],
-            McpOAuthClient::registrableRedirectUris([$cUri], $client->redirect_uris, []),
-            'Client C'
-        );
 
-        // Exact match wins even though C registered later on the same path.
-        $this->assertSame('Client A', $client->registeredNameFor(self::A_URI));
-        // A native app back on a new ephemeral port: the latest registration that accepts it.
-        $this->assertSame('Client C', $client->registeredNameFor('http://127.0.0.1:49999/cb'));
+        // A native app back on a new ephemeral port without registering again.
+        $this->assertSame('Client A', $client->registeredNameFor('http://127.0.0.1:49999/cb'));
         $this->assertSame('Client B', $client->registeredNameFor('http://localhost:60000/callback'));
+
+        // Only the port may differ: another host spelling, a sub-path or a remote origin is not that app.
+        $this->assertNull($client->registeredNameFor('http://localhost:49999/cb'));
+        $this->assertNull($client->registeredNameFor('http://127.0.0.1:49999/cb/more'));
+        $this->assertNull($client->registeredNameFor('http://127.0.0.1:60000/callback'));
         $this->assertNull($client->registeredNameFor('https://other.example/cb'));
 
-        // A registering again moves it to the end, so it now wins the loopback match.
-        $client->client_names = McpOAuthClient::withRegisteredName($client->client_names, [self::A_URI], $client->redirect_uris, 'Client A');
-        $this->assertSame('Client A', $client->registeredNameFor('http://127.0.0.1:49999/cb'));
+        // Two names on the same host and path: ambiguous, so the row name, while exact matches keep theirs.
+        $this->register($client, 'http://127.0.0.1:41003/cb', 'Client C');
+        $this->assertNull($client->registeredNameFor('http://127.0.0.1:49999/cb'));
+        $this->assertSame('Client A', $client->registeredNameFor(self::A_URI));
+        $this->assertSame('Client C', $client->registeredNameFor('http://127.0.0.1:41003/cb'));
+    }
+
+    public function testALaterRegistrationDoesNotRelabelAUriRegisteredBeforeClientNames(): void
+    {
+        $this->needsEloquent();
+        // The row as develop leaves it: first registrant's name, no client_names.
+        $legacyUri = 'http://localhost:51234/callback';
+        $client = new McpOAuthClient();
+        $client->name = 'Claude Code';
+        $client->redirect_uris = McpOAuthClient::registrableRedirectUris([$legacyUri], [], []);
+
+        $this->register($client, 'http://127.0.0.1:60000/callback', 'Codex CLI');
+        $this->register($client, 'http://localhost:60001/callback', 'Cursor');
+
+        $this->assertNull($client->registeredNameFor($legacyUri), 'its own registered URI: the row name, as on develop');
+        $this->assertNull($client->registeredNameFor('http://localhost:49999/callback'), 'same host and path as an unnamed URI: the row name');
+        $this->assertSame('Codex CLI', $client->registeredNameFor('http://127.0.0.1:60000/callback'));
+        $this->assertSame('Cursor', $client->registeredNameFor('http://localhost:60001/callback'));
+        // Claude's callbacks are on every row but carry no name until a client registers one.
+        $this->assertNull($client->registeredNameFor(McpOAuthClient::CLAUDE_REDIRECT_URIS[0]));
+    }
+
+    public function testARootPathRegistrationDoesNotCatchOtherLoopbackRedirects(): void
+    {
+        $this->needsEloquent();
+        $client = new McpOAuthClient();
+        $client->name = 'Claude Code';
+        $this->register($client, 'http://localhost:41001/callback', 'Claude Code');
+        $this->register($client, 'http://127.0.0.1:33418', 'Visual Studio Code');
+
+        $this->assertSame('Claude Code', $client->registeredNameFor('http://localhost:50000/callback'));
+        $this->assertNull($client->registeredNameFor('http://localhost:6274/oauth/callback'), 'a client that never registered');
+        $this->assertNull($client->registeredNameFor('http://127.0.0.1:6274/oauth/callback'));
+        $this->assertSame('Visual Studio Code', $client->registeredNameFor('http://127.0.0.1:40000/'));
     }
 
     public function testClientNameIsNormalizedBeforeItIsStored(): void
@@ -183,6 +215,43 @@ class OAuthClientNameAttributionTest extends TestCase
         $this->assertSame('Client B', RequestLogger::resolveClientName(McpOAuthAccessToken::findValidAccessToken($tokenB->access_token)));
     }
 
+    public function testARowRegisteredBeforeTheUpgradeKeepsLoggingItsName(): void
+    {
+        $this->needsEloquent();
+        if (!in_array('sqlite', \PDO::getAvailableDrivers(), true)) {
+            $this->markTestSkipped('pdo_sqlite is not available.');
+        }
+        $this->bootSqliteWithMigrations();
+
+        // Registered on develop: name set once, no client_names.
+        $legacyUri = 'http://localhost:51234/callback';
+        McpOAuthClient::create([
+            'client_id' => self::CLIENT_ID,
+            'client_secret' => 'secret',
+            'name' => 'Claude Code',
+            'redirect_uris' => McpOAuthClient::registrableRedirectUris([$legacyUri], [], []),
+            'is_active' => true,
+        ]);
+
+        // After the upgrade another client registers the same path on another port.
+        $client = McpOAuthClient::findByClientId(self::CLIENT_ID);
+        $codexUri = 'http://127.0.0.1:60000/callback';
+        $after = McpOAuthClient::registrableRedirectUris([$codexUri], $client->redirect_uris ?? [], []);
+        $client->update([
+            'redirect_uris' => $after,
+            'client_names' => McpOAuthClient::withRegisteredName($client->client_names ?? [], [$codexUri], $after, 'Codex CLI'),
+        ]);
+
+        $nameFor = fn (string $uri) => RequestLogger::resolveClientName(McpOAuthAccessToken::findValidAccessToken(
+            $this->issueToken(McpOAuthClient::findByClientId(self::CLIENT_ID)?->registeredNameFor($uri))->access_token
+        ));
+
+        $this->assertSame('Claude Code', $nameFor($legacyUri), 'the legacy client re-authorizing on its own URI');
+        $this->assertSame('Claude Code', $nameFor('http://localhost:49999/callback'), 'the legacy client on a new port');
+        $this->assertSame('Codex CLI', $nameFor($codexUri));
+        $this->assertSame('Codex CLI', $nameFor('http://127.0.0.1:49999/callback'), 'Codex on a new port');
+    }
+
     public function testRegisterAndTokenEndpointRecordThePerRegistrationName(): void
     {
         $src = file_get_contents(__DIR__ . '/../../src/Http/Controllers/McpOAuthController.php');
@@ -205,6 +274,14 @@ class OAuthClientNameAttributionTest extends TestCase
             strpos($resolve, 'return $token->client_name;'),
             'the token\'s own client name wins over the shared row name'
         );
+    }
+
+    /** One /register of $uri as $name on the shared row, the way register() does it. */
+    private function register(McpOAuthClient $client, string $uri, string $name): void
+    {
+        $registered = McpOAuthClient::registrableRedirectUris([$uri], $client->redirect_uris ?? [], []);
+        $client->client_names = McpOAuthClient::withRegisteredName($client->client_names ?? [], [$uri], $registered, $name);
+        $client->redirect_uris = $registered;
     }
 
     private function issueToken(?string $clientName): McpOAuthAccessToken

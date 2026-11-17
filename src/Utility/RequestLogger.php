@@ -152,8 +152,8 @@ class RequestLogger
      * can say "Claude Desktop" instead of a UUID. Every client of a service
      * shares one OAuth client row, so prefer the client_name the token endpoint
      * recorded for this token's registration. Tokens without one (issued
-     * before that, or to a client that never registered its redirect URI) use
-     * the row's `name`, which holds the first registrant's client_name.
+     * before that, or to a redirect URI with no registered name of its own)
+     * use the row's `name`, which holds the first registrant's client_name.
      */
     public static function resolveClientName(?McpOAuthAccessToken $token): ?string
     {

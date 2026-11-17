@@ -248,8 +248,7 @@ class McpOAuthClient extends Model
      * client_names after a /register. Every client of a service shares this
      * row, so `name` keeps the first registrant's client_name; this map records
      * each registration's name against the redirect URIs it registered. Names
-     * for URIs no longer registered are dropped, and the latest registration is
-     * moved to the end so it wins the loopback match in registeredNameFor().
+     * for URIs no longer registered are dropped.
      *
      * @return array<string, string>
      */
@@ -257,7 +256,6 @@ class McpOAuthClient extends Model
     {
         $names = array_intersect_key($names, array_flip($registered));
         foreach (array_intersect($requested, $registered) as $uri) {
-            unset($names[$uri]);
             $names[$uri] = $name;
         }
 
@@ -265,24 +263,61 @@ class McpOAuthClient extends Model
     }
 
     /**
-     * The client_name registered for the redirect URI a code was issued to: an
-     * exact match, else the latest registration whose URI accepts it under the
-     * /authorize rules (a native app back on a new loopback port), else null
-     * so the caller falls back to the shared `name`.
+     * The client_name registered for the redirect URI a code was issued to, or
+     * null so the caller falls back to the shared `name`, as before client_names.
+     *
+     * - A URI registered with a name gets that name.
+     * - A URI registered without one (before client_names existed, seeded by
+     *   /authorize, or added from the admin allowlist) gets null: the shared
+     *   `name` is what it was labelled with before.
+     * - An unregistered loopback URI is a native app back on a new ephemeral
+     *   port (RFC 8252). It takes the name registered for the same host and
+     *   path on other ports, but only when every such URI carries that one
+     *   name. None, an unnamed one, or two different names give null.
      */
     public function registeredNameFor(string $redirectUri): ?string
     {
         $names = is_array($this->client_names) ? $this->client_names : [];
-        if (isset($names[$redirectUri])) {
+        if (is_string($names[$redirectUri] ?? null)) {
             return $names[$redirectUri];
         }
 
-        foreach (array_reverse($names, true) as $uri => $name) {
-            if (self::uriMatchesList([(string) $uri], $redirectUri)) {
-                return $name;
-            }
+        $registered = is_array($this->redirect_uris) ? $this->redirect_uris : [];
+        if (in_array($redirectUri, $registered, true)) {
+            return null;
         }
 
-        return null;
+        $key = self::loopbackKeyWithoutPort($redirectUri);
+        if ($key === null) {
+            return null;
+        }
+
+        $found = null;
+        foreach (array_merge($registered, array_keys($names)) as $uri) {
+            if (!is_string($uri) || self::loopbackKeyWithoutPort($uri) !== $key) {
+                continue;
+            }
+            $name = $names[$uri] ?? null;
+            if (!is_string($name) || ($found !== null && $name !== $found)) {
+                return null;
+            }
+            $found = $name;
+        }
+
+        return $found;
+    }
+
+    /**
+     * A loopback redirect URI without its port (host as spelled, path, query),
+     * or null for any other URI. Two URIs with the same key differ only by port.
+     */
+    protected static function loopbackKeyWithoutPort(string $uri): ?string
+    {
+        if (!static::isLoopbackRedirectUri($uri)) {
+            return null;
+        }
+        $p = parse_url($uri);
+
+        return strtolower($p['host']) . ($p['path'] ?? '/') . (isset($p['query']) ? '?' . $p['query'] : '');
     }
 }
