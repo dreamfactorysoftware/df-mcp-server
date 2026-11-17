@@ -148,15 +148,20 @@ class RequestLogger
     }
 
     /**
-     * Best-effort human label for the connecting MCP client. Dynamic client
-     * registration stores the caller's `client_name` in the `name` column of
-     * mcp_oauth_client; surface it so the dashboard can say "Claude Desktop"
-     * instead of a UUID.
+     * Best-effort human label for the connecting MCP client, so the dashboard
+     * can say "Claude Desktop" instead of a UUID. Every client of a service
+     * shares one OAuth client row, so prefer the client_name the token endpoint
+     * recorded for this token's registration. Tokens without one (issued
+     * before that, or to a redirect URI with no registered name of its own)
+     * use the row's `name`, which holds the first registrant's client_name.
      */
     public static function resolveClientName(?McpOAuthAccessToken $token): ?string
     {
         if (!$token || empty($token->client_id)) {
             return null;
+        }
+        if (!empty($token->client_name)) {
+            return $token->client_name;
         }
         $client = \DreamFactory\Core\McpServer\Models\McpOAuthClient::where('client_id', $token->client_id)->first();
         return $client?->name;

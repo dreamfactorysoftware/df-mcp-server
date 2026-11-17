@@ -13,12 +13,14 @@ class McpOAuthClient extends Model
         'client_secret',
         'name',
         'redirect_uris',
+        'client_names',
         'is_active',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
         'redirect_uris' => 'array',
+        'client_names' => 'array',
     ];
 
     protected $hidden = ['client_secret'];
@@ -28,6 +30,9 @@ class McpOAuthClient extends Model
         'https://claude.ai/api/mcp/auth_callback',
         'https://claude.com/api/mcp/auth_callback',
     ];
+
+    /** Width of mcp_request_log.client_name and mcp_oauth_access_token.client_name. */
+    public const MAX_CLIENT_NAME_LENGTH = 200;
 
     /**
      * Generate a unique client ID
@@ -224,5 +229,95 @@ class McpOAuthClient extends Model
         }
 
         return false;
+    }
+
+    /**
+     * A /register client_name as it is stored: a trimmed non-empty string that
+     * fits the client_name columns, or null when the caller sent none.
+     */
+    public static function normalizeClientName(mixed $name): ?string
+    {
+        if (!is_string($name) || trim($name) === '') {
+            return null;
+        }
+
+        return mb_substr(trim($name), 0, self::MAX_CLIENT_NAME_LENGTH);
+    }
+
+    /**
+     * client_names after a /register. Every client of a service shares this
+     * row, so `name` keeps the first registrant's client_name; this map records
+     * each registration's name against the redirect URIs it registered. Names
+     * for URIs no longer registered are dropped.
+     *
+     * @return array<string, string>
+     */
+    public static function withRegisteredName(array $names, array $requested, array $registered, string $name): array
+    {
+        $names = array_intersect_key($names, array_flip($registered));
+        foreach (array_intersect($requested, $registered) as $uri) {
+            $names[$uri] = $name;
+        }
+
+        return $names;
+    }
+
+    /**
+     * The client_name registered for the redirect URI a code was issued to, or
+     * null so the caller falls back to the shared `name`, as before client_names.
+     *
+     * - A URI registered with a name gets that name.
+     * - A URI registered without one (before client_names existed, seeded by
+     *   /authorize, or added from the admin allowlist) gets null: the shared
+     *   `name` is what it was labelled with before.
+     * - An unregistered loopback URI is a native app back on a new ephemeral
+     *   port (RFC 8252). It takes the name registered for the same host and
+     *   path on other ports, but only when every such URI carries that one
+     *   name. None, an unnamed one, or two different names give null.
+     */
+    public function registeredNameFor(string $redirectUri): ?string
+    {
+        $names = is_array($this->client_names) ? $this->client_names : [];
+        if (is_string($names[$redirectUri] ?? null)) {
+            return $names[$redirectUri];
+        }
+
+        $registered = is_array($this->redirect_uris) ? $this->redirect_uris : [];
+        if (in_array($redirectUri, $registered, true)) {
+            return null;
+        }
+
+        $key = self::loopbackKeyWithoutPort($redirectUri);
+        if ($key === null) {
+            return null;
+        }
+
+        $found = null;
+        foreach (array_merge($registered, array_keys($names)) as $uri) {
+            if (!is_string($uri) || self::loopbackKeyWithoutPort($uri) !== $key) {
+                continue;
+            }
+            $name = $names[$uri] ?? null;
+            if (!is_string($name) || ($found !== null && $name !== $found)) {
+                return null;
+            }
+            $found = $name;
+        }
+
+        return $found;
+    }
+
+    /**
+     * A loopback redirect URI without its port (host as spelled, path, query),
+     * or null for any other URI. Two URIs with the same key differ only by port.
+     */
+    protected static function loopbackKeyWithoutPort(string $uri): ?string
+    {
+        if (!static::isLoopbackRedirectUri($uri)) {
+            return null;
+        }
+        $p = parse_url($uri);
+
+        return strtolower($p['host']) . ($p['path'] ?? '/') . (isset($p['query']) ? '?' . $p['query'] : '');
     }
 }
