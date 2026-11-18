@@ -20,19 +20,31 @@ if (-not (Test-Path (Join-Path $SYSTEM_DIR "package.json"))) {
 }
 $SYSTEM_DIR = (Resolve-Path $SYSTEM_DIR).Path
 
+# npm ci installs exactly what package-lock.json records and never rewrites it, so
+# every host runs the same dependency versions. Only a checkout without a lockfile
+# falls back to npm install.
+function Install-DaemonDependencies {
+    param([string[]]$NpmArgs = @())
+    if (Test-Path "package-lock.json") {
+        npm ci @NpmArgs --no-audit --no-fund
+    } else {
+        npm install @NpmArgs --no-audit --no-fund
+    }
+    if ($LASTEXITCODE -ne 0) { throw "[mcp-system-daemon] npm dependency install failed" }
+}
+
 Push-Location $SYSTEM_DIR
 try {
+    # The package ships build\, so a normal start only needs the runtime dependencies.
+    if (-not (Test-Path "node_modules\@modelcontextprotocol\sdk")) {
+        Write-Host "[mcp-system-daemon] node_modules missing; installing runtime dependencies..."
+        Install-DaemonDependencies -NpmArgs @("--omit=dev")
+    }
     if (-not (Test-Path "build\index.js")) {
         Write-Host "[mcp-system-daemon] build\index.js missing; running npm run build..."
-        npm install --no-audit --no-fund
-        if ($LASTEXITCODE -ne 0) { throw "[mcp-system-daemon] npm install failed" }
+        Install-DaemonDependencies
         npm run build
         if ($LASTEXITCODE -ne 0) { throw "[mcp-system-daemon] npm run build failed" }
-    }
-    if (-not (Test-Path "node_modules\@modelcontextprotocol\sdk")) {
-        Write-Host "[mcp-system-daemon] Installing production dependencies..."
-        npm install --omit=dev --no-audit --no-fund
-        if ($LASTEXITCODE -ne 0) { throw "[mcp-system-daemon] npm install failed" }
     }
 } finally {
     Pop-Location

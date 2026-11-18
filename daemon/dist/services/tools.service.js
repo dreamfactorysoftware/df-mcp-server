@@ -26,17 +26,20 @@ export function adaptQueryTemplates(model, call = {}) {
  * Base tool definitions that will be registered for each API.
  * The handler receives the API config and auth, so it knows which API to target.
  *
- * Descriptions stay short on purpose: each verb is emitted once per database,
- * so a long essay here is multiplied by service count in tools/list. Full
- * query syntax and "call get_data_model first" guidance live in the server
- * instructions (once per session). The Zod `schema` object is shared by
- * reference across prefixes — only the JSON serialization is per-tool.
+ * Descriptions stay compact on purpose: in prefixed mode each verb is emitted
+ * once per database, so every sentence here is multiplied by service count in
+ * tools/list. Each one still says what the tool returns, when a sibling is the
+ * better call, and what the call can change, and every parameter carries a
+ * description: MCP clients route on tools/list alone and never see the server
+ * instructions, which keep the long query-syntax guide (once per session).
+ * The Zod `schema` object is shared by reference across prefixes — only the
+ * JSON serialization is per-tool.
  */
 const BASE_TOOLS = [
     {
         name: 'get_api_spec',
         title: 'Get API Spec',
-        description: 'OpenAPI 3.0 spec for this database (endpoints, query syntax, tables). Prefer get_data_model for a condensed schema. compact=true (default).',
+        description: 'OpenAPI 3.0 spec for this database: endpoint paths, query-parameter syntax and, with tables=true, every table. Use it when you need exact filter/order syntax or endpoint details; get_data_model is the cheaper call for planning queries. compact=true (default) returns the token-efficient form.',
         schema: z.object({
             compact: z.boolean().optional().describe('Return compact token-efficient format (default: true)'),
             resource_name: z.string().optional().describe('Get spec for a specific table/resource only'),
@@ -52,9 +55,9 @@ const BASE_TOOLS = [
     {
         name: 'get_data_model',
         title: 'Get Data Model',
-        description: 'BEST FIRST CALL. Condensed model of every table, columns (name/type/FK), row counts, hierarchies, and junction tables. Use this to plan queries before get_table_data.',
+        description: 'BEST FIRST CALL. Condensed model of every table in one response: columns (name/type/FK), row counts, self-referencing hierarchies and junction tables. Use it to plan queries before get_table_data; reach for the per-table schema tools only when one table needs more detail.',
         schema: z.object({
-            refresh: z.boolean().optional().describe('Force refresh cached data')
+            refresh: z.boolean().optional().describe('Bypass the cached model and rebuild it from the database (slow on large schemas).')
         }),
         handler: async (args, _context, apiConfig, auth, call) => {
             const data = await DreamFactoryService.getApiSpec(apiConfig.baseUrl, auth, {
@@ -67,7 +70,7 @@ const BASE_TOOLS = [
     {
         name: 'get_tables',
         title: 'List Tables',
-        description: 'List tables in this database. Prefer get_data_model for columns and relationships.',
+        description: 'Table names only, the cheapest schema call. Use it to confirm a table exists; get_data_model also returns columns and relationships for every table.',
         schema: z.object({}),
         handler: async (_args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTables(apiConfig.baseUrl, auth);
@@ -77,8 +80,8 @@ const BASE_TOOLS = [
     {
         name: 'get_table_schema',
         title: 'Get Table Schema',
-        description: 'Full schema for one table.',
-        schema: z.object({ table_name: z.string() }),
+        description: 'Full definition of ONE table: columns with types, nullability and defaults, primary and foreign keys, and the related-table aliases usable in get_table_data related=. Use it after get_data_model when one table needs closer inspection. get_table_fields returns only the column list and get_table_relationships only the relationship graph.',
+        schema: z.object({ table_name: z.string().describe('Exact table name as returned by get_tables or get_data_model.') }),
         handler: async ({ table_name }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableSchema(table_name, apiConfig.baseUrl, auth);
             return respond(data);
@@ -87,20 +90,20 @@ const BASE_TOOLS = [
     {
         name: 'get_table_data',
         title: 'Get Table Data',
-        description: 'Read rows with filter/order/limit/offset. Max 1000 rows per call; paginate for more. count_only=true to count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.',
+        description: 'Read rows from one table with filter/order/limit/offset; returns a resource array (plus meta.count when include_count is set). Max 1000 rows per call; paginate with offset for more. count_only=true returns just the count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.',
         schema: z.object({
-            table_name: z.string(),
-            fields: z.array(z.string()).optional(),
-            filter: z.string().optional(),
-            offset: z.number().optional(),
+            table_name: z.string().describe('Exact table name from get_tables or get_data_model.'),
+            fields: z.array(z.string()).optional().describe('Columns to return (default: all). Fewer columns means a smaller response.'),
+            filter: z.string().optional().describe('SQL-like WHERE clause: field=value, field>10, field LIKE %text%, field IN (1,2), field IS NULL; combine with AND/OR in parentheses, e.g. (status=open) AND (amount>100). Use bare field names, no quotes or brackets around them.'),
+            offset: z.number().optional().describe('Rows to skip before the first returned row; combine with limit to page.'),
             limit: z.number().optional().describe('Max records per request (server max: 1000). Use with offset to paginate.'),
-            order: z.string().optional(),
-            continue: z.boolean().optional(),
+            order: z.string().optional().describe('Sort clause: "field ASC" or "field DESC", comma-separated for several, e.g. "created DESC, id ASC".'),
+            continue: z.boolean().optional().describe('Rarely needed on reads: continue past per-row errors in a batch instead of failing the whole request.'),
             related: z.string().optional().describe('Include related records via FK (e.g. "parent_table_by_fk_field"). Check relationships in the data model.'),
             count_only: z.boolean().optional().describe('Return only the record count, no data. Use this instead of COUNT() in fields.'),
             include_count: z.boolean().optional().describe('Include total record count in response metadata alongside data.'),
-            include_schema: z.boolean().optional(),
-            ids: z.array(z.union([z.string(), z.number()])).optional()
+            include_schema: z.boolean().optional().describe('Append the table schema to the response (adds size; prefer get_table_schema).'),
+            ids: z.array(z.union([z.string(), z.number()])).optional().describe('Primary-key values to fetch directly, instead of a filter.')
         }),
         handler: async (args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableData(apiConfig.baseUrl, auth, args);
@@ -110,14 +113,14 @@ const BASE_TOOLS = [
     {
         name: 'create_records',
         title: 'Create Records',
-        description: 'Insert one or more rows.',
+        description: 'Insert one or more rows into a table. Returns the primary key of each new row (or the columns named in fields). Not idempotent: repeating the call inserts again. To change existing rows use update_records.',
         schema: z.object({
-            table_name: z.string(),
-            records: z.array(z.record(z.string(), z.unknown())),
-            fields: z.array(z.string()).optional(),
-            related: z.string().optional(),
-            continue: z.boolean().optional(),
-            rollback: z.boolean().optional()
+            table_name: z.string().describe('Exact table name from get_tables or get_data_model.'),
+            records: z.array(z.record(z.string(), z.unknown())).describe('Rows to insert, one object per row keyed by column name. Omit auto-increment keys.'),
+            fields: z.array(z.string()).optional().describe('Columns to return for each created row (default: primary key only).'),
+            related: z.string().optional().describe('Related-table alias whose nested records inside each row should be created too, e.g. "orders_by_customer_id".'),
+            continue: z.boolean().optional().describe('On a per-row error keep inserting the remaining rows and report each failure, instead of stopping at the first.'),
+            rollback: z.boolean().optional().describe('On any per-row error undo the rows this call already inserted (all or nothing).')
         }),
         handler: async ({ table_name, records, ...options }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.createRecords(table_name, apiConfig.baseUrl, auth, records, options);
@@ -127,16 +130,16 @@ const BASE_TOOLS = [
     {
         name: 'update_records',
         title: 'Update Records',
-        description: 'Patch rows by ids or filter.',
+        description: 'Patch existing rows: only the columns present in each record change. Target rows one of three ways: records that each carry the primary key; ids plus a single record applied to every id; or filter plus a single record applied to every match. Returns the primary keys (or fields) of the rows changed.',
         schema: z.object({
-            table_name: z.string(),
-            records: z.array(z.record(z.string(), z.unknown())),
-            fields: z.array(z.string()).optional(),
-            related: z.string().optional(),
-            ids: z.array(z.union([z.string(), z.number()])).optional(),
-            filter: z.string().optional(),
-            continue: z.boolean().optional(),
-            rollback: z.boolean().optional()
+            table_name: z.string().describe('Exact table name from get_tables or get_data_model.'),
+            records: z.array(z.record(z.string(), z.unknown())).describe('Column/value pairs to apply. One object per row when each carries its primary key; a single object when targeting by ids or filter.'),
+            fields: z.array(z.string()).optional().describe('Columns to return for each updated row (default: primary key only).'),
+            related: z.string().optional().describe('Related-table alias whose nested records inside each row should be updated too.'),
+            ids: z.array(z.union([z.string(), z.number()])).optional().describe('Primary-key values of the rows to patch with the single record.'),
+            filter: z.string().optional().describe('SQL-like filter (same syntax as get_table_data) selecting the rows to patch with the single record.'),
+            continue: z.boolean().optional().describe('On a per-row error keep updating the remaining rows and report each failure, instead of stopping at the first.'),
+            rollback: z.boolean().optional().describe('On any per-row error undo the rows this call already changed (all or nothing).')
         }),
         handler: async ({ table_name, records, ...options }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.updateRecords(table_name, apiConfig.baseUrl, auth, records, options);
@@ -146,16 +149,16 @@ const BASE_TOOLS = [
     {
         name: 'delete_records',
         title: 'Delete Records',
-        description: 'Delete rows by ids or filter.',
+        description: 'Permanently delete rows selected by ids or filter; there is no undo. A call with neither ids nor filter is refused unless force=true, which empties the whole table. Returns the primary keys of the deleted rows.',
         schema: z.object({
-            table_name: z.string(),
-            ids: z.array(z.union([z.string(), z.number()])).optional(),
-            filter: z.string().optional(),
-            force: z.boolean().optional(),
-            fields: z.array(z.string()).optional(),
-            related: z.string().optional(),
-            continue: z.boolean().optional(),
-            rollback: z.boolean().optional()
+            table_name: z.string().describe('Exact table name from get_tables or get_data_model.'),
+            ids: z.array(z.union([z.string(), z.number()])).optional().describe('Primary-key values of the rows to delete.'),
+            filter: z.string().optional().describe('SQL-like filter (same syntax as get_table_data) selecting the rows to delete.'),
+            force: z.boolean().optional().describe('true deletes EVERY row in the table when no ids or filter are given. Never set it casually.'),
+            fields: z.array(z.string()).optional().describe('Columns of each deleted row to return (default: primary key only).'),
+            related: z.string().optional().describe('Related-table alias whose records should be included in the response for each deleted row.'),
+            continue: z.boolean().optional().describe('On a per-row error keep deleting the remaining rows and report each failure, instead of stopping at the first.'),
+            rollback: z.boolean().optional().describe('On any per-row error restore the rows this call already deleted (all or nothing).')
         }),
         handler: async ({ table_name, ...options }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.deleteRecords(table_name, apiConfig.baseUrl, auth, options);
@@ -165,10 +168,10 @@ const BASE_TOOLS = [
     {
         name: 'get_table_fields',
         title: 'Get Table Fields',
-        description: 'Field definitions for one table.',
+        description: 'Column list for one table: name, type, length, nullable, default, primary/foreign-key flags. Lighter than get_table_schema, which also returns constraints and related tables; get_data_model already lists these columns for every table.',
         schema: z.object({
-            table_name: z.string(),
-            refresh: z.boolean().optional()
+            table_name: z.string().describe('Exact table name from get_tables or get_data_model.'),
+            refresh: z.boolean().optional().describe('Bypass the schema cache and re-read from the database.')
         }),
         handler: async ({ table_name, refresh }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableFields(table_name, apiConfig.baseUrl, auth, refresh);
@@ -178,10 +181,10 @@ const BASE_TOOLS = [
     {
         name: 'get_table_relationships',
         title: 'Get Table Relationships',
-        description: 'Foreign keys, self-referencing hierarchies, and junction tables for one table.',
+        description: 'Relationships of one table: foreign keys in and out, self-referencing hierarchies (parent_id-style trees) and junction tables for many-to-many. Use it to pick the related= alias for get_table_data; get_data_model summarizes the same relationships for every table.',
         schema: z.object({
-            table_name: z.string(),
-            refresh: z.boolean().optional()
+            table_name: z.string().describe('Exact table name from get_tables or get_data_model.'),
+            refresh: z.boolean().optional().describe('Bypass the schema cache and re-read from the database.')
         }),
         handler: async ({ table_name, refresh }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getTableRelationships(table_name, apiConfig.baseUrl, auth, refresh);
@@ -191,7 +194,7 @@ const BASE_TOOLS = [
     {
         name: 'get_stored_procedures',
         title: 'List Stored Procedures',
-        description: 'List stored procedures.',
+        description: 'List the stored procedures this database exposes, with their parameter names and types, callable through call_stored_procedure. Empty on databases without procedures (e.g. SQLite).',
         schema: z.object({}),
         handler: async (_args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getStoredProcedures(apiConfig.baseUrl, auth);
@@ -201,12 +204,12 @@ const BASE_TOOLS = [
     {
         name: 'call_stored_procedure',
         title: 'Call Stored Procedure',
-        description: 'Execute a stored procedure.',
+        description: 'Execute a stored procedure by name with named parameters and return its result sets and output parameters. Procedures can modify data: check what the procedure does (get_stored_procedures) before calling it.',
         schema: z.object({
-            procedure_name: z.string(),
-            parameters: z.record(z.string(), z.unknown()).optional(),
-            wrapper: z.string().optional(),
-            returns: z.string().optional()
+            procedure_name: z.string().describe('Procedure name exactly as listed by get_stored_procedures.'),
+            parameters: z.record(z.string(), z.unknown()).optional().describe('Input parameters keyed by parameter name.'),
+            wrapper: z.string().optional().describe('Key under which to wrap the returned result set in the response.'),
+            returns: z.string().optional().describe('Declared data type of the procedure\'s scalar return value, e.g. "integer", when the database cannot infer it.')
         }),
         handler: async ({ procedure_name, parameters, wrapper, returns }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.callStoredProcedure(procedure_name, apiConfig.baseUrl, auth, parameters, wrapper, returns);
@@ -216,7 +219,7 @@ const BASE_TOOLS = [
     {
         name: 'get_stored_functions',
         title: 'List Stored Functions',
-        description: 'List stored functions.',
+        description: 'List the stored functions this database exposes, with their parameter names and return types, callable through call_stored_function. Empty on databases without functions.',
         schema: z.object({}),
         handler: async (_args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getStoredFunctions(apiConfig.baseUrl, auth);
@@ -226,11 +229,11 @@ const BASE_TOOLS = [
     {
         name: 'call_stored_function',
         title: 'Call Stored Function',
-        description: 'Execute a stored function.',
+        description: 'Execute a stored (scalar or table-valued) function by name with named parameters and return its value. Functions usually only read, but treat one as able to write unless you know otherwise.',
         schema: z.object({
-            function_name: z.string(),
-            parameters: z.record(z.string(), z.unknown()).optional(),
-            returns: z.string().optional()
+            function_name: z.string().describe('Function name exactly as listed by get_stored_functions.'),
+            parameters: z.record(z.string(), z.unknown()).optional().describe('Input parameters keyed by parameter name.'),
+            returns: z.string().optional().describe('Declared data type of the return value, e.g. "integer", when the database cannot infer it.')
         }),
         handler: async ({ function_name, parameters, returns }, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.callStoredFunction(function_name, apiConfig.baseUrl, auth, parameters, returns);
@@ -240,13 +243,13 @@ const BASE_TOOLS = [
     {
         name: 'get_database_resources',
         title: 'List Database Resources',
-        description: 'List resources this database service exposes.',
+        description: 'List the resource groups this database service exposes (_table, _schema, _proc, _func) with their member names. Use it to check whether a service has procedures or functions at all; for table work use get_tables or get_data_model.',
         schema: z.object({
-            as_list: z.boolean().optional(),
-            as_access_list: z.boolean().optional(),
-            include_access: z.boolean().optional(),
-            fields: z.array(z.string()).optional(),
-            refresh: z.boolean().optional()
+            as_list: z.boolean().optional().describe('Return bare resource names only.'),
+            as_access_list: z.boolean().optional().describe('Return every resource/verb combination the current role may call (for checking permissions).'),
+            include_access: z.boolean().optional().describe('Add the HTTP verbs the current role may use on each resource.'),
+            fields: z.array(z.string()).optional().describe('Resource properties to include (default: name only).'),
+            refresh: z.boolean().optional().describe('Bypass the cached resource list.')
         }),
         handler: async (args, _context, apiConfig, auth) => {
             const data = await DreamFactoryService.getDatabaseResources(apiConfig.baseUrl, auth, args);
@@ -256,7 +259,7 @@ const BASE_TOOLS = [
     {
         name: 'aggregate_data',
         title: 'Aggregate Data',
-        description: 'THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY. Always pass group_by when possible. Do not use get_table_data for aggregation.',
+        description: 'THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY: pushes the aggregation to the database and returns one row per group. Always pass group_by when the question is per category. Do not use get_table_data for aggregation; use it for raw rows instead.',
         schema: z.object({
             table_name: z.string().describe('Table to aggregate'),
             aggregates: z.array(z.object({
@@ -317,11 +320,12 @@ export function registerDreamFactoryTools(server, sessionManager, apiConfigs, di
             }
         }
     }
-    // Register stub tools for connectors that require them
-    registerTool('search', 'Search (stub)', 'Stub search implementation for connectors that require it', z.object({ query: z.string() }), async () => ({
+    // Stub tools for connectors (ChatGPT) that refuse servers without search/fetch.
+    // They do nothing; the descriptions say so and point at the real tools.
+    registerTool('search', 'Search (connector stub)', 'Compatibility stub for connectors (such as ChatGPT) that require a search tool. It searches nothing and always returns an empty results list. To find data, call get_data_model and then get_table_data with a filter; to locate a table by name across databases use all_find_table.', z.object({ query: z.string().describe('Ignored; any text.') }), async () => ({
         content: [{ type: 'text', text: JSON.stringify({ results: [] }) }]
     }));
-    registerTool('fetch', 'Fetch (stub)', 'Stub fetch implementation for connectors that require it', z.object({ id: z.string() }), async ({ id }) => ({
+    registerTool('fetch', 'Fetch (connector stub)', 'Compatibility stub for connectors (such as ChatGPT) that require a fetch tool. It fetches nothing and returns an empty document for any id. To read specific rows, call get_table_data with ids.', z.object({ id: z.string().describe('Ignored; any string.') }), async ({ id }) => ({
         content: [
             {
                 type: 'text',

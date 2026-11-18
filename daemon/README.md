@@ -15,10 +15,16 @@ TypeScript implementation of the MCP Daemon Server for DreamFactory. This daemon
 
 ## Installation
 
+Requires Node.js 20 or newer (22 LTS recommended). Runtime dependency versions are pinned in
+`package-lock.json`; install exactly that tree:
+
 ```bash
 cd daemon
-npm install
+npm ci --omit=dev
 ```
+
+`dist/` is committed, so production needs no build. For development (tests, `npm run dev`,
+rebuilding `dist/`) install the dev dependencies too with `npm install`.
 
 ## Configuration
 
@@ -43,7 +49,7 @@ export MCP_INTERNAL_KEY_FILE=/opt/dreamfactory/storage/framework/mcp_internal_ke
 export MCP_ALLOW_FUNCTION_TOOLS=false
 ```
 
-Tests: `npm test` (node --test via tsx).
+Tests: `npm test` (node --test via tsx; needs the dev dependencies).
 
 ## Running
 
@@ -54,7 +60,9 @@ npm run dev
 
 ### Production
 ```bash
-npm start
+../scripts/start-daemon.sh   # resolves the internal key and runs node dist/server.js
+# or, with the environment already set:
+npm start                    # node dist/server.js
 ```
 
 ## DreamFactory Configuration

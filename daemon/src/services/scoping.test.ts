@@ -52,7 +52,7 @@ test('lazy facade operates on the scoped catalog only', async () => {
 
   // Shortened per-verb descriptions survive into the facade's catalog.
   const desc = JSON.parse(text(await client.callTool({ name: 'describe_tool', arguments: { name: 'ordersdb_get_tables' } })));
-  assert.equal(desc.description, '[ordersdb] List tables in this database. Prefer get_data_model for columns and relationships.');
+  assert.equal(desc.description, '[ordersdb] Table names only, the cheapest schema call. Use it to confirm a table exists; get_data_model also returns columns and relationships for every table.');
 
   // describe/call refuse tools of unscoped services — nothing is invoked.
   const unknownDescribe = await client.callTool({ name: 'describe_tool', arguments: { name: 'customersdb_get_tables' } });

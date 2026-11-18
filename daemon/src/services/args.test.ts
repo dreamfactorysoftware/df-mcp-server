@@ -90,6 +90,10 @@ test('annotationsFor: verb prefix decides the hints', () => {
   assert.deepEqual(annotationsFor('db_delete_records'), { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false });
   assert.equal(annotationsFor('db_update_records').destructiveHint, true);
   assert.deepEqual(annotationsFor('db_create_records'), { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });
+  // create_file overwrites an existing file (DreamFactory check_exist defaults to false).
+  assert.deepEqual(annotationsFor('files_create_file'), { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false });
+  assert.equal(annotationsFor('create_file').destructiveHint, true);
+  assert.equal(annotationsFor('files_create_folder').destructiveHint, false);
   assert.deepEqual(annotationsFor('db_call_stored_procedure'), { readOnlyHint: false, openWorldHint: false });
   assert.deepEqual(annotationsFor('call_tool'), { openWorldHint: false });
   assert.equal(annotationsFor('describe_tool').readOnlyHint, true);

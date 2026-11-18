@@ -61,7 +61,7 @@
   {
     "name": "list_apis",
     "title": "List Available APIs",
-    "description": "List all available database APIs and their tool prefixes",
+    "description": "List the database and file services in this connection with their category and tool-name prefix. Lighter than discover_services, which also reports the HTTP verbs your role permits on each service; call that when you need to know what you may write.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -80,7 +80,7 @@
   {
     "name": "all_get_tables",
     "title": "Get Tables from All Databases",
-    "description": "Retrieve tables from all connected database services in one call",
+    "description": "Table names from every connected database in one call, keyed by service name. Use it when you do not know which database holds the data; for one database call get_tables, and for columns and relationships call get_data_model.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -99,13 +99,13 @@
   {
     "name": "all_find_table",
     "title": "Find Table Across All Databases",
-    "description": "Search for a table by name across all connected databases and return its schema if found",
+    "description": "Look up one table name in every connected database and return its full schema from each database that has it. Use it when a table could live in several services. Returns foundIn (the services that have it) plus per-service schema or error.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
           "type": "string",
-          "description": "The table name to search for"
+          "description": "Exact table name to look for."
         }
       },
       "required": [
@@ -126,7 +126,7 @@
   {
     "name": "all_get_stored_procedures",
     "title": "Get Stored Procedures from All Databases",
-    "description": "Retrieve stored procedures from all connected database services",
+    "description": "Stored procedure names and parameters from every connected database, keyed by service; empty for services without procedures. For a single database call get_stored_procedures.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -145,7 +145,7 @@
   {
     "name": "all_get_stored_functions",
     "title": "Get Stored Functions from All Databases",
-    "description": "Retrieve stored functions from all connected database services",
+    "description": "Stored function names and parameters from every connected database, keyed by service; empty for services without functions. For a single database call get_stored_functions.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -164,7 +164,7 @@
   {
     "name": "all_get_resources",
     "title": "Get Resources from All Databases",
-    "description": "Retrieve all available resources from all connected database services",
+    "description": "Resource groups (_table, _schema, _proc, _func) exposed by every connected database, keyed by service. Use it only to compare what each service offers; all_get_tables is the lighter call when you just need tables.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -183,7 +183,7 @@
   {
     "name": "ordersdb_get_api_spec",
     "title": "ordersdb: Get API Spec",
-    "description": "[ordersdb] OpenAPI 3.0 spec for this database (endpoints, query syntax, tables). Prefer get_data_model for a condensed schema. compact=true (default).",
+    "description": "[ordersdb] OpenAPI 3.0 spec for this database: endpoint paths, query-parameter syntax and, with tables=true, every table. Use it when you need exact filter/order syntax or endpoint details; get_data_model is the cheaper call for planning queries. compact=true (default) returns the token-efficient form.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -219,12 +219,12 @@
   {
     "name": "ordersdb_get_data_model",
     "title": "ordersdb: Get Data Model",
-    "description": "[ordersdb] BEST FIRST CALL. Condensed model of every table, columns (name/type/FK), row counts, hierarchies, and junction tables. Use this to plan queries before get_table_data.",
+    "description": "[ordersdb] BEST FIRST CALL. Condensed model of every table in one response: columns (name/type/FK), row counts, self-referencing hierarchies and junction tables. Use it to plan queries before get_table_data; reach for the per-table schema tools only when one table needs more detail.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "refresh": {
-          "description": "Force refresh cached data",
+          "description": "Bypass the cached model and rebuild it from the database (slow on large schemas).",
           "type": "boolean"
         }
       },
@@ -243,7 +243,7 @@
   {
     "name": "ordersdb_get_tables",
     "title": "ordersdb: List Tables",
-    "description": "[ordersdb] List tables in this database. Prefer get_data_model for columns and relationships.",
+    "description": "[ordersdb] Table names only, the cheapest schema call. Use it to confirm a table exists; get_data_model also returns columns and relationships for every table.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -262,12 +262,13 @@
   {
     "name": "ordersdb_get_table_schema",
     "title": "ordersdb: Get Table Schema",
-    "description": "[ordersdb] Full schema for one table.",
+    "description": "[ordersdb] Full definition of ONE table: columns with types, nullability and defaults, primary and foreign keys, and the related-table aliases usable in get_table_data related=. Use it after get_data_model when one table needs closer inspection. get_table_fields returns only the column list and get_table_relationships only the relationship graph.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name as returned by get_tables or get_data_model."
         }
       },
       "required": [
@@ -288,23 +289,27 @@
   {
     "name": "ordersdb_get_table_data",
     "title": "ordersdb: Get Table Data",
-    "description": "[ordersdb] Read rows with filter/order/limit/offset. Max 1000 rows per call; paginate for more. count_only=true to count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.",
+    "description": "[ordersdb] Read rows from one table with filter/order/limit/offset; returns a resource array (plus meta.count when include_count is set). Max 1000 rows per call; paginate with offset for more. count_only=true returns just the count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "fields": {
+          "description": "Columns to return (default: all). Fewer columns means a smaller response.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "filter": {
+          "description": "SQL-like WHERE clause: field=value, field>10, field LIKE %text%, field IN (1,2), field IS NULL; combine with AND/OR in parentheses, e.g. (status=open) AND (amount>100). Use bare field names, no quotes or brackets around them.",
           "type": "string"
         },
         "offset": {
+          "description": "Rows to skip before the first returned row; combine with limit to page.",
           "type": "number"
         },
         "limit": {
@@ -312,9 +317,11 @@
           "type": "number"
         },
         "order": {
+          "description": "Sort clause: \"field ASC\" or \"field DESC\", comma-separated for several, e.g. \"created DESC, id ASC\".",
           "type": "string"
         },
         "continue": {
+          "description": "Rarely needed on reads: continue past per-row errors in a batch instead of failing the whole request.",
           "type": "boolean"
         },
         "related": {
@@ -330,9 +337,11 @@
           "type": "boolean"
         },
         "include_schema": {
+          "description": "Append the table schema to the response (adds size; prefer get_table_schema).",
           "type": "boolean"
         },
         "ids": {
+          "description": "Primary-key values to fetch directly, instead of a filter.",
           "type": "array",
           "items": {
             "type": [
@@ -360,12 +369,13 @@
   {
     "name": "ordersdb_create_records",
     "title": "ordersdb: Create Records",
-    "description": "[ordersdb] Insert one or more rows.",
+    "description": "[ordersdb] Insert one or more rows into a table. Returns the primary key of each new row (or the columns named in fields). Not idempotent: repeating the call inserts again. To change existing rows use update_records.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "records": {
           "type": "array",
@@ -375,21 +385,26 @@
               "type": "string"
             },
             "additionalProperties": {}
-          }
+          },
+          "description": "Rows to insert, one object per row keyed by column name. Omit auto-increment keys."
         },
         "fields": {
+          "description": "Columns to return for each created row (default: primary key only).",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "related": {
+          "description": "Related-table alias whose nested records inside each row should be created too, e.g. \"orders_by_customer_id\".",
           "type": "string"
         },
         "continue": {
+          "description": "On a per-row error keep inserting the remaining rows and report each failure, instead of stopping at the first.",
           "type": "boolean"
         },
         "rollback": {
+          "description": "On any per-row error undo the rows this call already inserted (all or nothing).",
           "type": "boolean"
         }
       },
@@ -412,12 +427,13 @@
   {
     "name": "ordersdb_update_records",
     "title": "ordersdb: Update Records",
-    "description": "[ordersdb] Patch rows by ids or filter.",
+    "description": "[ordersdb] Patch existing rows: only the columns present in each record change. Target rows one of three ways: records that each carry the primary key; ids plus a single record applied to every id; or filter plus a single record applied to every match. Returns the primary keys (or fields) of the rows changed.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "records": {
           "type": "array",
@@ -427,18 +443,22 @@
               "type": "string"
             },
             "additionalProperties": {}
-          }
+          },
+          "description": "Column/value pairs to apply. One object per row when each carries its primary key; a single object when targeting by ids or filter."
         },
         "fields": {
+          "description": "Columns to return for each updated row (default: primary key only).",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "related": {
+          "description": "Related-table alias whose nested records inside each row should be updated too.",
           "type": "string"
         },
         "ids": {
+          "description": "Primary-key values of the rows to patch with the single record.",
           "type": "array",
           "items": {
             "type": [
@@ -448,12 +468,15 @@
           }
         },
         "filter": {
+          "description": "SQL-like filter (same syntax as get_table_data) selecting the rows to patch with the single record.",
           "type": "string"
         },
         "continue": {
+          "description": "On a per-row error keep updating the remaining rows and report each failure, instead of stopping at the first.",
           "type": "boolean"
         },
         "rollback": {
+          "description": "On any per-row error undo the rows this call already changed (all or nothing).",
           "type": "boolean"
         }
       },
@@ -476,14 +499,16 @@
   {
     "name": "ordersdb_delete_records",
     "title": "ordersdb: Delete Records",
-    "description": "[ordersdb] Delete rows by ids or filter.",
+    "description": "[ordersdb] Permanently delete rows selected by ids or filter; there is no undo. A call with neither ids nor filter is refused unless force=true, which empties the whole table. Returns the primary keys of the deleted rows.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "ids": {
+          "description": "Primary-key values of the rows to delete.",
           "type": "array",
           "items": {
             "type": [
@@ -493,24 +518,30 @@
           }
         },
         "filter": {
+          "description": "SQL-like filter (same syntax as get_table_data) selecting the rows to delete.",
           "type": "string"
         },
         "force": {
+          "description": "true deletes EVERY row in the table when no ids or filter are given. Never set it casually.",
           "type": "boolean"
         },
         "fields": {
+          "description": "Columns of each deleted row to return (default: primary key only).",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "related": {
+          "description": "Related-table alias whose records should be included in the response for each deleted row.",
           "type": "string"
         },
         "continue": {
+          "description": "On a per-row error keep deleting the remaining rows and report each failure, instead of stopping at the first.",
           "type": "boolean"
         },
         "rollback": {
+          "description": "On any per-row error restore the rows this call already deleted (all or nothing).",
           "type": "boolean"
         }
       },
@@ -532,14 +563,16 @@
   {
     "name": "ordersdb_get_table_fields",
     "title": "ordersdb: Get Table Fields",
-    "description": "[ordersdb] Field definitions for one table.",
+    "description": "[ordersdb] Column list for one table: name, type, length, nullable, default, primary/foreign-key flags. Lighter than get_table_schema, which also returns constraints and related tables; get_data_model already lists these columns for every table.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "refresh": {
+          "description": "Bypass the schema cache and re-read from the database.",
           "type": "boolean"
         }
       },
@@ -561,14 +594,16 @@
   {
     "name": "ordersdb_get_table_relationships",
     "title": "ordersdb: Get Table Relationships",
-    "description": "[ordersdb] Foreign keys, self-referencing hierarchies, and junction tables for one table.",
+    "description": "[ordersdb] Relationships of one table: foreign keys in and out, self-referencing hierarchies (parent_id-style trees) and junction tables for many-to-many. Use it to pick the related= alias for get_table_data; get_data_model summarizes the same relationships for every table.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "refresh": {
+          "description": "Bypass the schema cache and re-read from the database.",
           "type": "boolean"
         }
       },
@@ -590,7 +625,7 @@
   {
     "name": "ordersdb_get_stored_procedures",
     "title": "ordersdb: List Stored Procedures",
-    "description": "[ordersdb] List stored procedures.",
+    "description": "[ordersdb] List the stored procedures this database exposes, with their parameter names and types, callable through call_stored_procedure. Empty on databases without procedures (e.g. SQLite).",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -609,14 +644,16 @@
   {
     "name": "ordersdb_call_stored_procedure",
     "title": "ordersdb: Call Stored Procedure",
-    "description": "[ordersdb] Execute a stored procedure.",
+    "description": "[ordersdb] Execute a stored procedure by name with named parameters and return its result sets and output parameters. Procedures can modify data: check what the procedure does (get_stored_procedures) before calling it.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "procedure_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Procedure name exactly as listed by get_stored_procedures."
         },
         "parameters": {
+          "description": "Input parameters keyed by parameter name.",
           "type": "object",
           "propertyNames": {
             "type": "string"
@@ -624,9 +661,11 @@
           "additionalProperties": {}
         },
         "wrapper": {
+          "description": "Key under which to wrap the returned result set in the response.",
           "type": "string"
         },
         "returns": {
+          "description": "Declared data type of the procedure's scalar return value, e.g. \"integer\", when the database cannot infer it.",
           "type": "string"
         }
       },
@@ -646,7 +685,7 @@
   {
     "name": "ordersdb_get_stored_functions",
     "title": "ordersdb: List Stored Functions",
-    "description": "[ordersdb] List stored functions.",
+    "description": "[ordersdb] List the stored functions this database exposes, with their parameter names and return types, callable through call_stored_function. Empty on databases without functions.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -665,14 +704,16 @@
   {
     "name": "ordersdb_call_stored_function",
     "title": "ordersdb: Call Stored Function",
-    "description": "[ordersdb] Execute a stored function.",
+    "description": "[ordersdb] Execute a stored (scalar or table-valued) function by name with named parameters and return its value. Functions usually only read, but treat one as able to write unless you know otherwise.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "function_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Function name exactly as listed by get_stored_functions."
         },
         "parameters": {
+          "description": "Input parameters keyed by parameter name.",
           "type": "object",
           "propertyNames": {
             "type": "string"
@@ -680,6 +721,7 @@
           "additionalProperties": {}
         },
         "returns": {
+          "description": "Declared data type of the return value, e.g. \"integer\", when the database cannot infer it.",
           "type": "string"
         }
       },
@@ -699,26 +741,31 @@
   {
     "name": "ordersdb_get_database_resources",
     "title": "ordersdb: List Database Resources",
-    "description": "[ordersdb] List resources this database service exposes.",
+    "description": "[ordersdb] List the resource groups this database service exposes (_table, _schema, _proc, _func) with their member names. Use it to check whether a service has procedures or functions at all; for table work use get_tables or get_data_model.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "as_list": {
+          "description": "Return bare resource names only.",
           "type": "boolean"
         },
         "as_access_list": {
+          "description": "Return every resource/verb combination the current role may call (for checking permissions).",
           "type": "boolean"
         },
         "include_access": {
+          "description": "Add the HTTP verbs the current role may use on each resource.",
           "type": "boolean"
         },
         "fields": {
+          "description": "Resource properties to include (default: name only).",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "refresh": {
+          "description": "Bypass the cached resource list.",
           "type": "boolean"
         }
       },
@@ -737,7 +784,7 @@
   {
     "name": "ordersdb_aggregate_data",
     "title": "ordersdb: Aggregate Data",
-    "description": "[ordersdb] THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY. Always pass group_by when possible. Do not use get_table_data for aggregation.",
+    "description": "[ordersdb] THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY: pushes the aggregation to the database and returns one row per group. Always pass group_by when the question is per category. Do not use get_table_data for aggregation; use it for raw rows instead.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -808,7 +855,7 @@
   {
     "name": "crm_get_api_spec",
     "title": "crm: Get API Spec",
-    "description": "[crm] OpenAPI 3.0 spec for this database (endpoints, query syntax, tables). Prefer get_data_model for a condensed schema. compact=true (default).",
+    "description": "[crm] OpenAPI 3.0 spec for this database: endpoint paths, query-parameter syntax and, with tables=true, every table. Use it when you need exact filter/order syntax or endpoint details; get_data_model is the cheaper call for planning queries. compact=true (default) returns the token-efficient form.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -844,12 +891,12 @@
   {
     "name": "crm_get_data_model",
     "title": "crm: Get Data Model",
-    "description": "[crm] BEST FIRST CALL. Condensed model of every table, columns (name/type/FK), row counts, hierarchies, and junction tables. Use this to plan queries before get_table_data.",
+    "description": "[crm] BEST FIRST CALL. Condensed model of every table in one response: columns (name/type/FK), row counts, self-referencing hierarchies and junction tables. Use it to plan queries before get_table_data; reach for the per-table schema tools only when one table needs more detail.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "refresh": {
-          "description": "Force refresh cached data",
+          "description": "Bypass the cached model and rebuild it from the database (slow on large schemas).",
           "type": "boolean"
         }
       },
@@ -868,7 +915,7 @@
   {
     "name": "crm_get_tables",
     "title": "crm: List Tables",
-    "description": "[crm] List tables in this database. Prefer get_data_model for columns and relationships.",
+    "description": "[crm] Table names only, the cheapest schema call. Use it to confirm a table exists; get_data_model also returns columns and relationships for every table.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -887,12 +934,13 @@
   {
     "name": "crm_get_table_schema",
     "title": "crm: Get Table Schema",
-    "description": "[crm] Full schema for one table.",
+    "description": "[crm] Full definition of ONE table: columns with types, nullability and defaults, primary and foreign keys, and the related-table aliases usable in get_table_data related=. Use it after get_data_model when one table needs closer inspection. get_table_fields returns only the column list and get_table_relationships only the relationship graph.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name as returned by get_tables or get_data_model."
         }
       },
       "required": [
@@ -913,23 +961,27 @@
   {
     "name": "crm_get_table_data",
     "title": "crm: Get Table Data",
-    "description": "[crm] Read rows with filter/order/limit/offset. Max 1000 rows per call; paginate for more. count_only=true to count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.",
+    "description": "[crm] Read rows from one table with filter/order/limit/offset; returns a resource array (plus meta.count when include_count is set). Max 1000 rows per call; paginate with offset for more. count_only=true returns just the count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "fields": {
+          "description": "Columns to return (default: all). Fewer columns means a smaller response.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "filter": {
+          "description": "SQL-like WHERE clause: field=value, field>10, field LIKE %text%, field IN (1,2), field IS NULL; combine with AND/OR in parentheses, e.g. (status=open) AND (amount>100). Use bare field names, no quotes or brackets around them.",
           "type": "string"
         },
         "offset": {
+          "description": "Rows to skip before the first returned row; combine with limit to page.",
           "type": "number"
         },
         "limit": {
@@ -937,9 +989,11 @@
           "type": "number"
         },
         "order": {
+          "description": "Sort clause: \"field ASC\" or \"field DESC\", comma-separated for several, e.g. \"created DESC, id ASC\".",
           "type": "string"
         },
         "continue": {
+          "description": "Rarely needed on reads: continue past per-row errors in a batch instead of failing the whole request.",
           "type": "boolean"
         },
         "related": {
@@ -955,9 +1009,11 @@
           "type": "boolean"
         },
         "include_schema": {
+          "description": "Append the table schema to the response (adds size; prefer get_table_schema).",
           "type": "boolean"
         },
         "ids": {
+          "description": "Primary-key values to fetch directly, instead of a filter.",
           "type": "array",
           "items": {
             "type": [
@@ -985,12 +1041,13 @@
   {
     "name": "crm_create_records",
     "title": "crm: Create Records",
-    "description": "[crm] Insert one or more rows.",
+    "description": "[crm] Insert one or more rows into a table. Returns the primary key of each new row (or the columns named in fields). Not idempotent: repeating the call inserts again. To change existing rows use update_records.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "records": {
           "type": "array",
@@ -1000,21 +1057,26 @@
               "type": "string"
             },
             "additionalProperties": {}
-          }
+          },
+          "description": "Rows to insert, one object per row keyed by column name. Omit auto-increment keys."
         },
         "fields": {
+          "description": "Columns to return for each created row (default: primary key only).",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "related": {
+          "description": "Related-table alias whose nested records inside each row should be created too, e.g. \"orders_by_customer_id\".",
           "type": "string"
         },
         "continue": {
+          "description": "On a per-row error keep inserting the remaining rows and report each failure, instead of stopping at the first.",
           "type": "boolean"
         },
         "rollback": {
+          "description": "On any per-row error undo the rows this call already inserted (all or nothing).",
           "type": "boolean"
         }
       },
@@ -1037,12 +1099,13 @@
   {
     "name": "crm_update_records",
     "title": "crm: Update Records",
-    "description": "[crm] Patch rows by ids or filter.",
+    "description": "[crm] Patch existing rows: only the columns present in each record change. Target rows one of three ways: records that each carry the primary key; ids plus a single record applied to every id; or filter plus a single record applied to every match. Returns the primary keys (or fields) of the rows changed.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "records": {
           "type": "array",
@@ -1052,18 +1115,22 @@
               "type": "string"
             },
             "additionalProperties": {}
-          }
+          },
+          "description": "Column/value pairs to apply. One object per row when each carries its primary key; a single object when targeting by ids or filter."
         },
         "fields": {
+          "description": "Columns to return for each updated row (default: primary key only).",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "related": {
+          "description": "Related-table alias whose nested records inside each row should be updated too.",
           "type": "string"
         },
         "ids": {
+          "description": "Primary-key values of the rows to patch with the single record.",
           "type": "array",
           "items": {
             "type": [
@@ -1073,12 +1140,15 @@
           }
         },
         "filter": {
+          "description": "SQL-like filter (same syntax as get_table_data) selecting the rows to patch with the single record.",
           "type": "string"
         },
         "continue": {
+          "description": "On a per-row error keep updating the remaining rows and report each failure, instead of stopping at the first.",
           "type": "boolean"
         },
         "rollback": {
+          "description": "On any per-row error undo the rows this call already changed (all or nothing).",
           "type": "boolean"
         }
       },
@@ -1101,14 +1171,16 @@
   {
     "name": "crm_delete_records",
     "title": "crm: Delete Records",
-    "description": "[crm] Delete rows by ids or filter.",
+    "description": "[crm] Permanently delete rows selected by ids or filter; there is no undo. A call with neither ids nor filter is refused unless force=true, which empties the whole table. Returns the primary keys of the deleted rows.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "ids": {
+          "description": "Primary-key values of the rows to delete.",
           "type": "array",
           "items": {
             "type": [
@@ -1118,24 +1190,30 @@
           }
         },
         "filter": {
+          "description": "SQL-like filter (same syntax as get_table_data) selecting the rows to delete.",
           "type": "string"
         },
         "force": {
+          "description": "true deletes EVERY row in the table when no ids or filter are given. Never set it casually.",
           "type": "boolean"
         },
         "fields": {
+          "description": "Columns of each deleted row to return (default: primary key only).",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "related": {
+          "description": "Related-table alias whose records should be included in the response for each deleted row.",
           "type": "string"
         },
         "continue": {
+          "description": "On a per-row error keep deleting the remaining rows and report each failure, instead of stopping at the first.",
           "type": "boolean"
         },
         "rollback": {
+          "description": "On any per-row error restore the rows this call already deleted (all or nothing).",
           "type": "boolean"
         }
       },
@@ -1157,14 +1235,16 @@
   {
     "name": "crm_get_table_fields",
     "title": "crm: Get Table Fields",
-    "description": "[crm] Field definitions for one table.",
+    "description": "[crm] Column list for one table: name, type, length, nullable, default, primary/foreign-key flags. Lighter than get_table_schema, which also returns constraints and related tables; get_data_model already lists these columns for every table.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "refresh": {
+          "description": "Bypass the schema cache and re-read from the database.",
           "type": "boolean"
         }
       },
@@ -1186,14 +1266,16 @@
   {
     "name": "crm_get_table_relationships",
     "title": "crm: Get Table Relationships",
-    "description": "[crm] Foreign keys, self-referencing hierarchies, and junction tables for one table.",
+    "description": "[crm] Relationships of one table: foreign keys in and out, self-referencing hierarchies (parent_id-style trees) and junction tables for many-to-many. Use it to pick the related= alias for get_table_data; get_data_model summarizes the same relationships for every table.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "table_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Exact table name from get_tables or get_data_model."
         },
         "refresh": {
+          "description": "Bypass the schema cache and re-read from the database.",
           "type": "boolean"
         }
       },
@@ -1215,7 +1297,7 @@
   {
     "name": "crm_get_stored_procedures",
     "title": "crm: List Stored Procedures",
-    "description": "[crm] List stored procedures.",
+    "description": "[crm] List the stored procedures this database exposes, with their parameter names and types, callable through call_stored_procedure. Empty on databases without procedures (e.g. SQLite).",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -1234,14 +1316,16 @@
   {
     "name": "crm_call_stored_procedure",
     "title": "crm: Call Stored Procedure",
-    "description": "[crm] Execute a stored procedure.",
+    "description": "[crm] Execute a stored procedure by name with named parameters and return its result sets and output parameters. Procedures can modify data: check what the procedure does (get_stored_procedures) before calling it.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "procedure_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Procedure name exactly as listed by get_stored_procedures."
         },
         "parameters": {
+          "description": "Input parameters keyed by parameter name.",
           "type": "object",
           "propertyNames": {
             "type": "string"
@@ -1249,9 +1333,11 @@
           "additionalProperties": {}
         },
         "wrapper": {
+          "description": "Key under which to wrap the returned result set in the response.",
           "type": "string"
         },
         "returns": {
+          "description": "Declared data type of the procedure's scalar return value, e.g. \"integer\", when the database cannot infer it.",
           "type": "string"
         }
       },
@@ -1271,7 +1357,7 @@
   {
     "name": "crm_get_stored_functions",
     "title": "crm: List Stored Functions",
-    "description": "[crm] List stored functions.",
+    "description": "[crm] List the stored functions this database exposes, with their parameter names and return types, callable through call_stored_function. Empty on databases without functions.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -1290,14 +1376,16 @@
   {
     "name": "crm_call_stored_function",
     "title": "crm: Call Stored Function",
-    "description": "[crm] Execute a stored function.",
+    "description": "[crm] Execute a stored (scalar or table-valued) function by name with named parameters and return its value. Functions usually only read, but treat one as able to write unless you know otherwise.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "function_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Function name exactly as listed by get_stored_functions."
         },
         "parameters": {
+          "description": "Input parameters keyed by parameter name.",
           "type": "object",
           "propertyNames": {
             "type": "string"
@@ -1305,6 +1393,7 @@
           "additionalProperties": {}
         },
         "returns": {
+          "description": "Declared data type of the return value, e.g. \"integer\", when the database cannot infer it.",
           "type": "string"
         }
       },
@@ -1324,26 +1413,31 @@
   {
     "name": "crm_get_database_resources",
     "title": "crm: List Database Resources",
-    "description": "[crm] List resources this database service exposes.",
+    "description": "[crm] List the resource groups this database service exposes (_table, _schema, _proc, _func) with their member names. Use it to check whether a service has procedures or functions at all; for table work use get_tables or get_data_model.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "as_list": {
+          "description": "Return bare resource names only.",
           "type": "boolean"
         },
         "as_access_list": {
+          "description": "Return every resource/verb combination the current role may call (for checking permissions).",
           "type": "boolean"
         },
         "include_access": {
+          "description": "Add the HTTP verbs the current role may use on each resource.",
           "type": "boolean"
         },
         "fields": {
+          "description": "Resource properties to include (default: name only).",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "refresh": {
+          "description": "Bypass the cached resource list.",
           "type": "boolean"
         }
       },
@@ -1362,7 +1456,7 @@
   {
     "name": "crm_aggregate_data",
     "title": "crm: Aggregate Data",
-    "description": "[crm] THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY. Always pass group_by when possible. Do not use get_table_data for aggregation.",
+    "description": "[crm] THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY: pushes the aggregation to the database and returns one row per group. Always pass group_by when the question is per category. Do not use get_table_data for aggregation; use it for raw rows instead.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1432,13 +1526,14 @@
   },
   {
     "name": "search",
-    "title": "Search (stub)",
-    "description": "Stub search implementation for connectors that require it",
+    "title": "Search (connector stub)",
+    "description": "Compatibility stub for connectors (such as ChatGPT) that require a search tool. It searches nothing and always returns an empty results list. To find data, call get_data_model and then get_table_data with a filter; to locate a table by name across databases use all_find_table.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "query": {
-          "type": "string"
+          "type": "string",
+          "description": "Ignored; any text."
         }
       },
       "required": [
@@ -1458,13 +1553,14 @@
   },
   {
     "name": "fetch",
-    "title": "Fetch (stub)",
-    "description": "Stub fetch implementation for connectors that require it",
+    "title": "Fetch (connector stub)",
+    "description": "Compatibility stub for connectors (such as ChatGPT) that require a fetch tool. It fetches nothing and returns an empty document for any id. To read specific rows, call get_table_data with ids.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "id": {
-          "type": "string"
+          "type": "string",
+          "description": "Ignored; any string."
         }
       },
       "required": [

@@ -19,18 +19,30 @@ if [[ ! -f "${SYSTEM_DIR}/package.json" ]]; then
 fi
 cd "${SYSTEM_DIR}"
 
-if [[ ! -f build/index.js ]]; then
-  echo "[mcp-system-daemon] build/index.js missing; running npm run build..."
-  { npm install --no-audit --no-fund && npm run build; } || {
-    echo "[mcp-system-daemon] Failed to build daemon" >&2
+# npm ci installs exactly what package-lock.json records and never rewrites it, so
+# every host runs the same dependency versions. Only a checkout without a lockfile
+# falls back to npm install.
+npm_install() {
+  if [[ -f package-lock.json ]]; then
+    npm ci "$@" --no-audit --no-fund
+  else
+    npm install "$@" --no-audit --no-fund
+  fi
+}
+
+# The package ships build/, so a normal start only needs the runtime dependencies.
+if [[ ! -d node_modules/@modelcontextprotocol/sdk ]]; then
+  echo "[mcp-system-daemon] node_modules missing; installing runtime dependencies..."
+  npm_install --omit=dev || {
+    echo "[mcp-system-daemon] Failed to install daemon dependencies" >&2
     exit 1
   }
 fi
 
-if [[ ! -d node_modules/@modelcontextprotocol/sdk ]]; then
-  echo "[mcp-system-daemon] Installing production dependencies..."
-  npm install --omit=dev --no-audit --no-fund || {
-    echo "[mcp-system-daemon] npm install failed" >&2
+if [[ ! -f build/index.js ]]; then
+  echo "[mcp-system-daemon] build/index.js missing; running npm run build..."
+  { npm_install && npm run build; } || {
+    echo "[mcp-system-daemon] Failed to build daemon" >&2
     exit 1
   }
 fi

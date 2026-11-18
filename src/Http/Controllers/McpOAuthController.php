@@ -103,7 +103,7 @@ class McpOAuthController extends Controller
         }
 
         $requestedRedirectUris = array_values(array_filter((array) $request->input('redirect_uris', []), 'is_string'));
-        $clientName = $request->input('client_name', $mcpService);
+        $clientName = McpOAuthClient::normalizeClientName($request->input('client_name')) ?? $mcpService;
 
         // Redirect URIs configured on the service are always allowed.
         $configuredUris = McpServerConfig::normalizeRedirectUris($serviceConfig['redirect_uris'] ?? null);
@@ -123,14 +123,21 @@ class McpOAuthController extends Controller
             ]);
         }
 
+        // Every client of this service shares one row, so `name` stays the first
+        // registrant's. Record this caller's name against the redirect URIs it
+        // registered; the token endpoint copies it onto the access token so the
+        // request log attributes each token to the client that obtained it.
+        $clientNames = McpOAuthClient::withRegisteredName($client->client_names ?? [], $requestedRedirectUris, $allowedUris, $clientName);
+
         if ($client) {
-            $client->update(['redirect_uris' => $allowedUris]);
+            $client->update(['redirect_uris' => $allowedUris, 'client_names' => $clientNames]);
         } else {
             McpOAuthClient::create([
                 'client_id' => $serviceConfig['oauth_client_id'],
                 'client_secret' => $serviceConfig['oauth_client_secret'],
                 'name' => $clientName,
                 'redirect_uris' => $allowedUris,
+                'client_names' => $clientNames,
                 'is_active' => true,
             ]);
         }
@@ -855,9 +862,11 @@ class McpOAuthController extends Controller
             return $this->tokenErrorResponse('invalid_grant', 'Invalid code_verifier');
         }
 
-        // Create access token
+        // Create access token, named for the client that registered the
+        // redirect URI this code was issued to (null: log falls back to the row's name)
         $accessToken = McpOAuthAccessToken::createToken([
             'client_id' => $authCode->client_id,
+            'client_name' => McpOAuthClient::findByClientId($authCode->client_id)?->registeredNameFor($authCode->redirect_uri),
             'user_id' => $authCode->user_id,
             'df_session_token' => $authCode->df_session_token,
             'user_email' => $authCode->user_email,

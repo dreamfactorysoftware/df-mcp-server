@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use DreamFactory\Core\McpServer\Http\Controllers\McpStreamController;
 use DreamFactory\Core\McpServer\Http\Controllers\McpOAuthController;
+use DreamFactory\Core\McpServer\Enums\McpServiceTypes;
 
 /**
  * Middleware to intercept MCP requests before DreamFactory's routing
@@ -90,6 +91,10 @@ class McpStreamMiddleware
         // Load service config/type and store in request for controllers
         $this->attachServiceAttributes($request, $mcpService);
 
+        if ($rejected = $this->rejectNonEndpoint($request, $mcpService, $method)) {
+            return $rejected;
+        }
+
         // Route to appropriate handler
         if ($subPath === null) {
             // Exact /mcp/{service} path - MCP protocol endpoint
@@ -125,6 +130,9 @@ class McpStreamMiddleware
         $controllerMethod = self::RFC8414_WELL_KNOWN[$wellKnownType] ?? null;
         if ($controllerMethod && in_array($method, ['GET', 'HEAD'], true)) {
             $this->attachServiceAttributes($request, $mcpService);
+            if ($rejected = $this->rejectNonEndpoint($request, $mcpService, $method)) {
+                return $rejected;
+            }
 
             $controller = new McpOAuthController();
             $response = $controller->$controllerMethod($request, $mcpService);
@@ -138,6 +146,26 @@ class McpStreamMiddleware
         }
 
         return $next($request);
+    }
+
+    /**
+     * Only MCP endpoint types serve /mcp/{service} and its OAuth metadata. Any
+     * other service name (a database, a file store) would otherwise be handled
+     * as a data MCP endpoint, with no oauth_client_id to bind bearer tokens to.
+     * Call after attachServiceAttributes(); an unresolved service (null type)
+     * is left to the controllers, which already answer 404.
+     */
+    private function rejectNonEndpoint(Request $request, string $mcpService, string $method)
+    {
+        $serviceType = $request->attributes->get('mcp_service_type');
+        if (!is_string($serviceType) || McpServiceTypes::isEndpoint($serviceType)) {
+            return null;
+        }
+
+        return self::stripBodyForHead(response()->json([
+            'error' => 'MCP service not found',
+            'service' => $mcpService,
+        ], 404)->withHeaders(self::corsHeaders()), $method);
     }
 
     /**

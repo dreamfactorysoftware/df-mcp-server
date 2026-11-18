@@ -92,9 +92,9 @@ class HttpMethodSemanticsTest extends TestCase
             . "so Symfony's prepare() body-stripping never runs; it must strip HEAD bodies itself."
         );
         $this->assertSame(
-            2,
+            3,
             substr_count($this->middlewareSrc, 'return self::stripBodyForHead('),
-            'Both response return paths (MCP protocol + RFC 8414 well-known) must strip HEAD bodies.'
+            'Every response return path (MCP protocol, RFC 8414 well-known, non-endpoint 404) must strip HEAD bodies.'
         );
     }
 

@@ -5,9 +5,21 @@ DAEMON_DIR="${DF_MCP_DAEMON_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../daemon"
 
 [[ -d "${DAEMON_DIR}" ]] || { echo "[mcp-daemon] Missing daemon dir: ${DAEMON_DIR}" >&2; exit 1; }
 
+if [[ ! -d "${DAEMON_DIR}/node_modules" ]]; then
+  echo "[mcp-daemon] node_modules missing; installing runtime dependencies..."
+  (cd "${DAEMON_DIR}" && if [[ -f package-lock.json ]]; then
+      npm ci --omit=dev --no-audit --no-fund
+    else
+      npm install --omit=dev --no-audit --no-fund
+    fi) || {
+    echo "[mcp-daemon] Failed to install daemon dependencies" >&2
+    exit 1
+  }
+fi
+
 if [[ ! -f "${DAEMON_DIR}/dist/server.js" ]]; then
   echo "[mcp-daemon] dist/server.js missing; running npm run build..."
-  (cd "${DAEMON_DIR}" && npm install && npm run build) || {
+  (cd "${DAEMON_DIR}" && npm ci --no-audit --no-fund && npm run build) || {
     echo "[mcp-daemon] Failed to build daemon" >&2
     exit 1
   }
