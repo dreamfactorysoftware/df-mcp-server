@@ -186,6 +186,8 @@ export class LazyState {
     catalog = new Map();
     /** Hot tools are frozen at session start so the advertised list never changes mid-session. */
     hot;
+    /** Tools registered as pinned: listed even when the facade is on. */
+    pinned = new Set();
     decision;
     index;
     names = [];
@@ -204,6 +206,8 @@ export class LazyState {
     }
     register(entry) {
         this.catalog.set(entry.name, entry);
+        if (entry.pinned)
+            this.pinned.add(entry.name);
     }
     /** Full tools/list entries for every registered tool (facade included), as the SDK would emit them. */
     async allTools(extra) {
@@ -213,8 +217,8 @@ export class LazyState {
                 : [...this.catalog.values()].map(t => ({
                     name: t.name, title: t.title, description: t.description, inputSchema: toJsonSchema(t.schema)
                 }));
-            const facade = this.fullList.filter((t) => FACADE.has(t.name) || this.hot.includes(t.name));
-            this.catalogBytes = JSON.stringify({ tools: this.fullList.filter((t) => !FACADE.has(t.name)) }).length;
+            const facade = this.fullList.filter((t) => FACADE.has(t.name) || this.hot.includes(t.name) || this.pinned.has(t.name));
+            this.catalogBytes = JSON.stringify({ tools: this.fullList.filter((t) => !FACADE.has(t.name) && !this.pinned.has(t.name)) }).length;
             this.facadeBytes = JSON.stringify({ tools: facade }).length;
         }
         return this.fullList;
@@ -262,7 +266,7 @@ export class LazyState {
         this.ledger({});
         if (!this.isLazy())
             return all.filter((t) => !FACADE.has(t.name));
-        return all.filter((t) => FACADE.has(t.name) || this.hot.includes(t.name));
+        return all.filter((t) => FACADE.has(t.name) || this.hot.includes(t.name) || this.pinned.has(t.name));
     }
     /** Attach the savings ledger for this request; PHP copies it into mcp_request_log. */
     ledger(extra) {

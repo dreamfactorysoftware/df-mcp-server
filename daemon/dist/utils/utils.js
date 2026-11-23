@@ -5,6 +5,8 @@ import { registerGlobalTools } from '../services/global-tools.service.js';
 import { createLazyState, installLazyFacade, LAZY_INSTRUCTIONS } from '../services/lazy.service.js';
 import { installArgNormalizer } from '../services/args.js';
 import { DreamFactoryService } from '../services/dreamfactory.service.js';
+import { registerSemanticTools } from '../services/semantic-tools.service.js';
+import { installCompactResults } from '../services/tool-utils.js';
 import packageJson from '../../package.json' with { type: 'json' };
 export function getSessionId(req) {
     const header = req.headers['mcp-session-id'];
@@ -177,6 +179,8 @@ export async function discoverServices(rootUrl, auth, req, availableServicesFrom
         throw error;
     }
 }
+/** mcp_server_config booleans: only an explicit on counts (true, 1, '1', 'true'). */
+const isOn = (v) => [true, 1, '1', 'true'].includes(v);
 /**
  * Read the per-service settings the daemon honours out of the `_mcpConfig`
  * envelope (or the X-Mcp-Config header). One parser for the proxied MCP
@@ -184,7 +188,7 @@ export async function discoverServices(rootUrl, auth, req, availableServicesFrom
  * real session gets.
  */
 export function parseMcpConfig(mcpConfigData) {
-    const parsed = { lazyMode: 'auto', toolStyle: 'prefixed', allowWrites: true };
+    const parsed = { lazyMode: 'auto', toolStyle: 'prefixed', allowWrites: true, semanticTools: false, semanticCatalog: false, compactResults: false };
     if (!mcpConfigData || typeof mcpConfigData !== 'object' || Array.isArray(mcpConfigData)) {
         return parsed;
     }
@@ -200,6 +204,10 @@ export function parseMcpConfig(mcpConfigData) {
         parsed.allowWrites = false;
         console.log('Writes disabled (allow_writes=false): write verbs will not be registered');
     }
+    // Opt-ins, default off: with all three off the daemon behaves exactly as 1.4.1.
+    parsed.semanticTools = isOn(data.semantic_tools);
+    parsed.semanticCatalog = isOn(data.semantic_catalog);
+    parsed.compactResults = isOn(data.compact_results);
     if (Array.isArray(data.disabled_tools) && data.disabled_tools.length > 0) {
         parsed.disabledTools = new Set(data.disabled_tools);
         console.log(`Disabled tools (${parsed.disabledTools.size}):`, [...parsed.disabledTools]);
@@ -225,7 +233,10 @@ export function parseMcpConfig(mcpConfigData) {
     }
     return parsed;
 }
-export function createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode = 'auto', toolStyle = 'prefixed', allowWrites = true) {
+export function createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode = 'auto', toolStyle = 'prefixed', allowWrites = true, options = {}) {
+    const semanticRunnables = options.semanticRunnables ?? [];
+    const semanticCatalog = options.semanticCatalog === true;
+    const compactResults = options.compactResults === true;
     const dbApis = apiConfigs.filter(c => c.category === 'database').map(c => c.name);
     const fileApis = apiConfigs.filter(c => c.category === 'file').map(c => c.name);
     const dbPrefixes = dbApis.map(name => name.replace(/[^a-zA-Z0-9]/g, '_'));
@@ -261,7 +272,10 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
         fileApis.length > 0 ? `Available file storage APIs: ${fileApis.join(', ')}` : '',
         '',
         '## Getting Started',
-        `IMPORTANT: Call \`${p}get_data_model\` FIRST before making any data queries.`,
+        semanticRunnables.length > 0 ? `Approved metrics and verified queries are also tools of their own (${semanticRunnables.length}): when a question matches one, call that tool directly instead of composing the query.` : '',
+        semanticCatalog
+            ? `IMPORTANT: Call \`${p}get_semantics\` FIRST. It returns the approved business definitions for the data in a few KB: warnings about traps in the data, what terms like "current" mean, and metrics and verified queries with the exact tool and arguments to run them. When a question matches one, run it as given. Otherwise call \`${p}get_data_model\` before composing any query of your own.`
+            : `IMPORTANT: Call \`${p}get_data_model\` FIRST before making any data queries.`,
         'The data model provides in a single ~10-20KB response:',
         '- Every table with all columns (name, type, primary key, foreign keys)',
         '- Foreign key references showing how tables connect',
@@ -284,18 +298,34 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
             : 'The same verb on every database shares the same parameters — only the prefix changes.',
         dbApis.length > 1 ? 'Use the list_apis tool to see all available APIs.' : '',
         '',
-        `1. \`${merged ? '' : examplePrefix + '_'}get_data_model\` - START HERE. Condensed schema with columns, FKs, and patterns.`,
-        `2. \`${merged ? '' : examplePrefix + '_'}get_api_spec\` - OpenAPI spec with query syntax hints. Use compact=true (default).`,
-        `3. \`${merged ? '' : examplePrefix + '_'}get_table_data\` - Query data with filter, order, limit, offset, fields, related`,
-        `4. \`${merged ? '' : examplePrefix + '_'}aggregate_data\` - Compute SUM/COUNT/AVG/MIN/MAX in ONE call (no manual pagination needed)`,
-        `5. \`${merged ? '' : examplePrefix + '_'}get_table_schema\` - Full schema for a single table (if you need more detail)`,
-        allowWrites
-            ? `6. \`${p}create_records\` / \`update_records\` / \`delete_records\` - CRUD operations`
-            : '',
-        allowWrites
-            ? `7. \`${p}get_stored_procedures\` / \`call_stored_procedure\` - Stored procedure access`
-            : `6. \`${p}get_stored_procedures\` / \`get_stored_functions\` - List stored procedures/functions (read-only server: they cannot be called)`,
-        allowWrites ? `8. \`${p}get_stored_functions\` / \`call_stored_function\` - Stored function access` : '',
+        ...(semanticCatalog ? [
+            `1. \`${merged ? '' : examplePrefix + '_'}get_semantics\` - START HERE. Business definitions: warnings, glossary, metrics and verified queries with runnable arguments (small).`,
+            `2. \`${merged ? '' : examplePrefix + '_'}get_data_model\` - Condensed schema with columns, FKs, and patterns, for queries the definitions do not cover.`,
+            `3. \`${merged ? '' : examplePrefix + '_'}get_api_spec\` - OpenAPI spec with query syntax hints. Use compact=true (default).`,
+            `4. \`${merged ? '' : examplePrefix + '_'}get_table_data\` - Query data with filter, order, limit, offset, fields, related`,
+            `5. \`${merged ? '' : examplePrefix + '_'}aggregate_data\` - Compute SUM/COUNT/AVG/MIN/MAX in ONE call (no manual pagination needed)`,
+            `6. \`${merged ? '' : examplePrefix + '_'}get_table_schema\` - Full schema for a single table (if you need more detail)`,
+            allowWrites
+                ? `7. \`${p}create_records\` / \`update_records\` / \`delete_records\` - CRUD operations`
+                : '',
+            allowWrites
+                ? `8. \`${p}get_stored_procedures\` / \`call_stored_procedure\` - Stored procedure access`
+                : `7. \`${p}get_stored_procedures\` / \`get_stored_functions\` - List stored procedures/functions (read-only server: they cannot be called)`,
+            allowWrites ? `9. \`${p}get_stored_functions\` / \`call_stored_function\` - Stored function access` : '',
+        ] : [
+            `1. \`${merged ? '' : examplePrefix + '_'}get_data_model\` - START HERE. Condensed schema with columns, FKs, and patterns.`,
+            `2. \`${merged ? '' : examplePrefix + '_'}get_api_spec\` - OpenAPI spec with query syntax hints. Use compact=true (default).`,
+            `3. \`${merged ? '' : examplePrefix + '_'}get_table_data\` - Query data with filter, order, limit, offset, fields, related`,
+            `4. \`${merged ? '' : examplePrefix + '_'}aggregate_data\` - Compute SUM/COUNT/AVG/MIN/MAX in ONE call (no manual pagination needed)`,
+            `5. \`${merged ? '' : examplePrefix + '_'}get_table_schema\` - Full schema for a single table (if you need more detail)`,
+            allowWrites
+                ? `6. \`${p}create_records\` / \`update_records\` / \`delete_records\` - CRUD operations`
+                : '',
+            allowWrites
+                ? `7. \`${p}get_stored_procedures\` / \`call_stored_procedure\` - Stored procedure access`
+                : `6. \`${p}get_stored_procedures\` / \`get_stored_functions\` - List stored procedures/functions (read-only server: they cannot be called)`,
+            allowWrites ? `8. \`${p}get_stored_functions\` / \`call_stored_function\` - Stored function access` : '',
+        ]),
         '',
         fileApis.length > 0
             ? (allowWrites
@@ -351,14 +381,21 @@ export function createServer(serviceName, apiConfigs, sessionManager, disabledTo
     const lazy = lazyMode !== 'off' ? createLazyState(server, serviceName, lazyMode) : undefined;
     // Agent identity/access tools — always available, not service-prefixed.
     registerGlobalTools(server, sessionManager, disabledTools);
-    registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools, toolStyle, allowWrites);
+    registerDreamFactoryTools(server, sessionManager, apiConfigs, disabledTools, toolStyle, allowWrites, { semanticCatalog, compactResults });
     if (customTools && customTools.length > 0) {
         registerCustomTools(server, customTools, sessionManager, disabledTools);
     }
+    // Endpoint opt-in (semantic_tools): approved metrics and verified queries as
+    // named tools. Registered after every other tool so a name already taken
+    // (built-in, custom or function tool) keeps it and the semantic tool is skipped.
+    registerSemanticTools(server, sessionManager, apiConfigs, semanticRunnables, toolStyle, disabledTools, { compactResults });
     if (lazy) {
         installLazyFacade(server, lazy);
     }
     // After every tool is registered: snake_case/camelCase aliases and unknown-key errors (issue #66).
     installArgNormalizer(server);
+    // Endpoint opt-in (compact_results): compact JSON for every tool result. Off: 1.4.1's pretty JSON.
+    if (compactResults)
+        installCompactResults(server);
     return server;
 }

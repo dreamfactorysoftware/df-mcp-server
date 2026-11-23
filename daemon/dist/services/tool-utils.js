@@ -1,10 +1,30 @@
 import * as z from 'zod/v4';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { lazyStateFor } from './lazy.service.js';
 import { annotationsFor, registerArgSpec, serviceNameMap, specFor } from './args.js';
+/**
+ * Result style for the tool call being served. compact_results (endpoint
+ * opt-in) switches tool results to compact JSON: pretty-printing cost a third
+ * more bytes on every result (measured 32-39% on data models, row reads and
+ * the semantic catalog). Off (default) keeps 1.4.1's pretty JSON. Scoped per
+ * tools/call by installCompactResults, so every respond() under that call
+ * (database, file, custom, global and lazy-facade tools alike) follows it.
+ */
+const resultStyle = new AsyncLocalStorage();
+export const withCompactResults = (fn) => resultStyle.run({ compact: true }, fn);
+/** Wrap the tools/call handler so results under it are compact JSON. Install last. */
+export function installCompactResults(server) {
+    // ponytail: _requestHandlers is SDK-private (same trick as installArgNormalizer and the lazy tools/list override).
+    const sdk = server.server._requestHandlers?.get('tools/call');
+    if (!sdk)
+        return;
+    server.server.setRequestHandler(CallToolRequestSchema, (request, extra) => withCompactResults(() => sdk(request, extra)));
+}
 export const respond = (data) => {
     let text;
     try {
-        text = JSON.stringify(data, null, 2) ?? 'null';
+        text = (resultStyle.getStore()?.compact ? JSON.stringify(data) : JSON.stringify(data, null, 2)) ?? 'null';
     }
     catch {
         text = String(data);
@@ -88,7 +108,7 @@ export function createToolRegistrar(server, disabledTools) {
         // Lazy mode keeps a catalog of every tool so the facade can search,
         // describe and call them by name; results are shaped/paged when active.
         const lazy = lazyStateFor(server);
-        lazy?.register({ name, title, description, schema, handler, annotations, spec });
+        lazy?.register({ name, title, description, schema, handler, annotations, spec, pinned: opts.pinned });
         server.registerTool(name, { title, description, inputSchema: schema, annotations }, async (params, context) => {
             console.log(`[tool] ${name} called`);
             try {

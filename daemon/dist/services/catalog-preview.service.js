@@ -5,9 +5,10 @@ import { SessionService } from './session.service.js';
 import { isFacadeTool, lazyStateFor } from './lazy.service.js';
 import { annotationsFor } from './args.js';
 import { sanitizeApiName } from './tool-utils.js';
-import { DB_TOOL_NAMES } from './tools.service.js';
+import { baseTools } from './tools.service.js';
 const LAZY_MODES = ['auto', 'on', 'off'];
-const DB_VERBS = new Set(DB_TOOL_NAMES);
+// Every database verb any opt-in can register (get_semantics under semantic_catalog).
+const DB_VERBS = new Set(baseTools({ semanticCatalog: true }).map(t => t.name));
 // ponytail: the only global tool that creates something; extend if more land.
 const GLOBAL_WRITE = new Set(['request_access']);
 export async function previewCatalog(input) {
@@ -20,7 +21,7 @@ export async function previewCatalog(input) {
     const apiConfigs = Array.isArray(input._mcpAvailableServices)
         ? parseAvailableServicesList(input._mcpAvailableServices, 'http://preview.invalid/api/v2') ?? []
         : [];
-    const server = createServer(serviceName, apiConfigs, new SessionService(), config.disabledTools, config.customTools, config.lazyMode, config.toolStyle, config.allowWrites);
+    const server = createServer(serviceName, apiConfigs, new SessionService(), config.disabledTools, config.customTools, config.lazyMode, config.toolStyle, config.allowWrites, { semanticCatalog: config.semanticCatalog, compactResults: config.compactResults });
     const client = new Client({
         name: typeof input.clientName === 'string' && input.clientName !== '' ? input.clientName : 'df-admin-preview',
         version: '0'
