@@ -11,6 +11,7 @@ import { runWithResponse } from './services/ledger.js';
 import { previewCatalog } from './services/catalog-preview.service.js';
 import { internalKeyGate, internalKeyStatus } from './services/internal-key.js';
 import { functionToolsEnabled } from './services/custom-tools.service.js';
+import { loadSemanticRunnables } from './services/semantic-tools.service.js';
 import {
   createServer,
   getSessionId,
@@ -286,7 +287,13 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
         return undefined;
       }
     })();
-    const { disabledTools, customTools, lazyMode, toolStyle, allowWrites } = parseMcpConfig(mcpConfigData);
+    const { disabledTools, customTools, lazyMode, toolStyle, allowWrites, semanticTools, semanticCatalog, compactResults } = parseMcpConfig(mcpConfigData);
+    // Opt-in named semantic tools, read with the caller's credentials so the role scopes them.
+    const semanticRunnables = semanticTools
+      ? await loadSemanticRunnables(apiConfigs, { sessionToken: dfSessionToken, apiKey: dfApiKey })
+      : [];
+    // Endpoint opt-ins; all off (the default) is exactly 1.4.1.
+    const serverOptions = { semanticRunnables, semanticCatalog, compactResults };
 
     const hasCustomTools = customTools !== undefined && customTools.length > 0;
     const catalogFromPhp = Array.isArray(availableServicesFromBody)
@@ -323,7 +330,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
         apiConfigs
       });
 
-      const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle, allowWrites);
+      const statelessServer = createServer(serviceName, apiConfigs, requestSessions, disabledTools, customTools, lazyMode, toolStyle, allowWrites, serverOptions);
       // No session remembers that the client already listed tools or who the
       // client is, so decide lazy behaviour per request from the catalog and
       // the client name PHP forwards (X-Mcp-Client-Name).
@@ -347,7 +354,7 @@ app.all('/mcp/:serviceName', async (req: Request, res: Response) => {
       return;
     }
 
-    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode, toolStyle, allowWrites);
+    const server = createServer(serviceName, apiConfigs, sessionManager, disabledTools, customTools, lazyMode, toolStyle, allowWrites, serverOptions);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => {

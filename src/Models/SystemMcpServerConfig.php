@@ -31,6 +31,10 @@ class SystemMcpServerConfig extends McpServerConfig
         'exposed_services',
         // The system daemon has no DB/file write verbs for the switch to hide.
         'allow_writes',
+        // Nor database tools for the semantic catalog / result opt-ins to change.
+        'semantic_tools',
+        'semantic_catalog',
+        'compact_results',
     ];
 
     /**

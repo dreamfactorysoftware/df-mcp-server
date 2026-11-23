@@ -31,6 +31,9 @@ class McpServerConfig extends BaseServiceConfigModel
         'scope_tools',
         'tool_style',
         'allow_writes',
+        'semantic_tools',
+        'semantic_catalog',
+        'compact_results',
     ];
 
     protected $casts = [
@@ -42,6 +45,9 @@ class McpServerConfig extends BaseServiceConfigModel
         'exposed_services' => 'array',
         'scope_tools' => 'boolean',
         'allow_writes' => 'boolean',
+        'semantic_tools' => 'boolean',
+        'semantic_catalog' => 'boolean',
+        'compact_results' => 'boolean',
         'redirect_uris' => 'array',
     ];
 
@@ -348,6 +354,24 @@ class McpServerConfig extends BaseServiceConfigModel
                 $schema['description'] = 'On (default): tools can create, update and delete records and files and call stored procedures/functions, subject to the role. Off: this MCP server is read-only — the write tools are not offered to clients at all, regardless of role or per-tool settings. Clients must reconnect to pick up a change.';
                 $schema['type'] = 'boolean';
                 $schema['default'] = true;
+                break;
+            case 'semantic_tools':
+                $schema['label'] = 'Semantic tools';
+                $schema['description'] = 'Off (default): no tool per definition. On: every approved metric and verified query in the semantic catalog of an exposed database also becomes a tool of its own (metric_<name>, query_<name>) with typed parameters, which models call more reliably than copying the definition. The tools run the approved definition under the caller\'s role, stay listed when lazy tool loading is on, and follow approvals within about 30 seconds.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = false;
+                break;
+            case 'semantic_catalog':
+                $schema['label'] = 'Semantic catalog';
+                $schema['description'] = 'Off (default): tools and instructions are exactly as without a semantic catalog. On: clients get a get_semantics tool (approved business definitions, metrics and verified queries from the df-semantic catalog) and are told to call it first; get_data_model returns the enriched model with recorded column meanings and drops query templates the catalog supersedes; aggregate results use the requested aliases. Servers without df-semantic answer get_semantics with a short "no catalog" note. Clients must reconnect to pick up a change.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = false;
+                break;
+            case 'compact_results':
+                $schema['label'] = 'Compact results';
+                $schema['description'] = 'Off (default): tool results are pretty-printed JSON and reads return what DreamFactory returns. On: results are compact JSON (about a third fewer tokens); get_table_data returns 50 rows with a count unless a limit is given; grouped aggregates return 100 groups unless a limit is given (max 5000); get_data_model answers with an index above 12 tables and trims samples and long enumerations (tables, samples and detail arguments ask for more). Clients must reconnect to pick up a change.';
+                $schema['type'] = 'boolean';
+                $schema['default'] = false;
                 break;
             case 'allow_api_key_auth':
                 $schema['label'] = 'Allow API Key Authentication';

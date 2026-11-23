@@ -60,6 +60,14 @@ const FILE_SERVICE_TYPES = new Set([
   'webdav_file',
 ]);
 
+/**
+ * Endpoint opt-ins that change aggregate_data results. Both absent (the
+ * default): exactly 1.4.1's behaviour.
+ *  aliases: semantic_catalog - rename DreamFactory's FN_column keys to the caller's aliases.
+ *  groupLimit: compact_results - cap grouped results at this many groups (1.4.1 pages up to 50,000).
+ */
+export type AggregateBehaviour = { aliases?: boolean; groupLimit?: number };
+
 export class DreamFactoryService {
   /**
    * Get all available services from DreamFactory.
@@ -359,9 +367,18 @@ export class DreamFactoryService {
       aggregates: Array<{ function: string; field: string; alias?: string }>;
       filter?: string;
       group_by?: string[];
-    }
+      limit?: number;
+    },
+    behaviour: AggregateBehaviour = {}
   ): Promise<unknown> {
     const { table_name: tableName, aggregates, filter, group_by: groupBy } = options;
+    // compact_results: a grouping on a high-cardinality column used to page
+    // through 50,000 groups (3.6 MB seen in production logs). Cap it; the
+    // caller can raise the limit or narrow with a filter. Off: 1.4.1 paging.
+    const groupLimit = behaviour.groupLimit === undefined
+      ? undefined
+      : Math.max(1, Math.min(5000, Math.floor(behaviour.groupLimit)));
+    const alias = (rows: Record<string, unknown>[]) => behaviour.aliases ? applyAggregateAliases(rows, aggregates, groupBy) : rows;
 
     // Build fields list: group-by columns + aggregate expressions
     const fields: string[] = [];
@@ -386,7 +403,7 @@ export class DreamFactoryService {
         if (!groupBy || groupBy.length === 0) {
           // Whole-table aggregate: exactly one row.
           const data = await this.getTableData(baseUrl, auth, { ...params, limit: 1 }) as Record<string, unknown>;
-          return { results: (data?.resource ?? []) as Record<string, unknown>[], mode: 'server-side' };
+          return { results: alias((data?.resource ?? []) as Record<string, unknown>[]), mode: 'server-side' };
         }
         // Grouped: DreamFactory caps every response at the service's max_records
         // (commonly 1000), so page through the groups. Ordering by the group
@@ -394,19 +411,36 @@ export class DreamFactoryService {
         params.group = groupBy.join(',');
         params.order = groupBy.join(',');
         const PAGE = 1000;
-        const MAX_GROUPS = 50000;
+        if (groupLimit === undefined) {
+          const MAX_GROUPS = 50000;
+          const rows: Record<string, unknown>[] = [];
+          let truncated = false;
+          for (let offset = 0; ; offset += PAGE) {
+            const data = await this.getTableData(baseUrl, auth, { ...params, limit: PAGE, offset }) as Record<string, unknown>;
+            const page = (data?.resource ?? []) as Record<string, unknown>[];
+            rows.push(...page);
+            if (page.length < PAGE) break;
+            if (rows.length >= MAX_GROUPS) { truncated = true; break; }
+          }
+          const results = alias(rows);
+          return truncated
+            ? { results, mode: 'server-side', groups: results.length, truncated: true, note: `Stopped at ${MAX_GROUPS} groups; add a filter to narrow the grouping.` }
+            : { results, mode: 'server-side', groups: results.length };
+        }
+        // Fetch one group past the limit so we know whether there are more.
         const rows: Record<string, unknown>[] = [];
-        let truncated = false;
-        for (let offset = 0; ; offset += PAGE) {
-          const data = await this.getTableData(baseUrl, auth, { ...params, limit: PAGE, offset }) as Record<string, unknown>;
+        for (let offset = 0; rows.length <= groupLimit; offset += PAGE) {
+          const want = Math.min(PAGE, groupLimit + 1 - rows.length);
+          const data = await this.getTableData(baseUrl, auth, { ...params, limit: want, offset }) as Record<string, unknown>;
           const page = (data?.resource ?? []) as Record<string, unknown>[];
           rows.push(...page);
-          if (page.length < PAGE) break;
-          if (rows.length >= MAX_GROUPS) { truncated = true; break; }
+          if (page.length < want) break;
         }
+        const truncated = rows.length > groupLimit;
+        const results = alias(rows.slice(0, groupLimit));
         return truncated
-          ? { results: rows, mode: 'server-side', groups: rows.length, truncated: true, note: `Stopped at ${MAX_GROUPS} groups; add a filter to narrow the grouping.` }
-          : { results: rows, mode: 'server-side', groups: rows.length };
+          ? { results, mode: 'server-side', groups: results.length, truncated: true, note: `Showing the first ${groupLimit} groups; more exist. Narrow with a filter or raise limit (max 5000).` }
+          : { results, mode: 'server-side', groups: results.length };
       } catch (serverErr) {
         console.warn('[aggregateData] Server-side aggregation failed, falling back to client-side:', serverErr instanceof Error ? serverErr.message : serverErr);
       }
@@ -449,7 +483,10 @@ export class DreamFactoryService {
       for (const agg of aggs) {
         const fn = (agg.function || '').toUpperCase();
         const field = agg.field || '*';
-        const alias = agg.alias || `${fn}_${field}`;
+        let alias = agg.alias || `${fn}_${field}`;
+        // semantic_catalog: an alias that would overwrite a group column or an
+        // earlier result keeps DreamFactory's server-side key, as applyAggregateAliases does.
+        if (behaviour.aliases && agg.alias && (groupBy?.includes(alias) || alias in result)) alias = serverAggregateKey(agg);
         if (fn === 'COUNT') {
           result[alias] = field === '*' ? rows.length : rows.filter(r => r[field] != null).length;
         } else {
@@ -475,8 +512,31 @@ export class DreamFactoryService {
         }
         groups[key]._rows.push(row);
       }
-      const results = Object.values(groups).map(g => ({ ...g._key, ...computeAgg(g._rows, aggregates) }));
-      return { results, rows_scanned: allRows.length, total_count: totalCount, mode: 'client-side-fallback' };
+      const all = Object.values(groups).map(g => ({ ...g._key, ...computeAgg(g._rows, aggregates) }));
+      if (groupLimit === undefined || all.length <= groupLimit) {
+        return { results: all, rows_scanned: allRows.length, total_count: totalCount, mode: 'client-side-fallback' };
+      }
+      // Grouping order here is object-key order (integer-like keys first), not
+      // anything meaningful; sort like the server-side ORDER BY group_by so the
+      // groups kept are the first ones in that order, and say so.
+      const cmp = (a: unknown, b: unknown): number => {
+        if (a === b) return 0;
+        if (a === null || a === undefined) return -1;
+        if (b === null || b === undefined) return 1;
+        if (typeof a === 'number' && typeof b === 'number') return a - b;
+        if (typeof a === 'number') return -1;
+        if (typeof b === 'number') return 1;
+        return String(a) < String(b) ? -1 : 1;
+      };
+      all.sort((x, y) => {
+        for (const g of groupBy) {
+          const c = cmp((x as Record<string, unknown>)[g], (y as Record<string, unknown>)[g]);
+          if (c !== 0) return c;
+        }
+        return 0;
+      });
+      const results = all.slice(0, groupLimit);
+      return { results, groups: all.length, truncated: true, note: `Showing the first ${groupLimit} of ${all.length} groups, ordered by ${groupBy.join(', ')}. Narrow with a filter or raise limit (max 5000).`, rows_scanned: allRows.length, total_count: totalCount, mode: 'client-side-fallback' };
     }
 
     return { results: [computeAgg(allRows, aggregates)], rows_scanned: allRows.length, total_count: totalCount, mode: 'client-side-fallback' };
@@ -493,16 +553,19 @@ export class DreamFactoryService {
       compact?: boolean;
       resource_name?: string;
       tables?: boolean;
-      model?: boolean;
+      model?: boolean | 'semantics';
       refresh?: boolean;
       format?: string;
+      /** semantic_catalog: ask df-core for the enriched model (?model=true&enrich=true). */
+      enrich?: boolean;
     } = {}
   ): Promise<unknown> {
     const params = new URLSearchParams();
     if (options.compact) params.set('compact', 'true');
     if (options.resource_name) params.set('resource_name', options.resource_name);
     if (options.tables) params.set('tables', 'true');
-    if (options.model) params.set('model', 'true');
+    if (options.model) params.set('model', options.model === 'semantics' ? 'semantics' : 'true');
+    if (options.enrich) params.set('enrich', 'true');
     if (options.refresh) params.set('refresh', 'true');
     if (options.format) params.set('format', options.format);
     return this.request('GET', `${baseUrl}/_spec`, auth, params);
@@ -631,4 +694,42 @@ export class DreamFactoryService {
 
     return response.json();
   }
+}
+
+/** DreamFactory's key for a server-side aggregate column: FN_column, COUNT(*) is COUNT_ALL. */
+function serverAggregateKey(agg: { function: string; field: string }): string {
+  const fn = (agg.function || '').toUpperCase();
+  const field = agg.field || '*';
+  return field === '*' ? `${fn}_ALL` : `${fn}_${field.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+}
+
+/**
+ * DreamFactory names a server-side aggregate column FN_column (COUNT(*) is
+ * COUNT_ALL) and ignores any alias, so a metric asking for `revenue` came back
+ * as SUM_total_amount. Apply the caller's aliases to the rows here (only under
+ * semantic_catalog or a named semantic tool). An alias never overwrites a
+ * group_by column or a key already in the row (another column or an earlier
+ * alias): that aggregate keeps DreamFactory's key instead.
+ */
+export function applyAggregateAliases(
+  rows: Record<string, unknown>[],
+  aggregates: Array<{ function: string; field: string; alias?: string }>,
+  groupBy: string[] = []
+): Record<string, unknown>[] {
+  const renames: Array<[string, string]> = [];
+  for (const agg of aggregates ?? []) {
+    if (!agg?.alias) continue;
+    const serverKey = serverAggregateKey(agg);
+    if (serverKey !== agg.alias) renames.push([serverKey, agg.alias]);
+  }
+  if (renames.length === 0) return rows;
+  return rows.map(row => {
+    const out: Record<string, unknown> = { ...row };
+    for (const [from, to] of renames) {
+      if (!(from in out) || groupBy.includes(to) || to in out) continue;
+      out[to] = out[from];
+      delete out[from];
+    }
+    return out;
+  });
 }

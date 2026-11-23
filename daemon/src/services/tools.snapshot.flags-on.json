@@ -1,0 +1,1676 @@
+{
+  "instructions": "You are connected to the DreamFactory service \"snap\".\nAvailable database APIs: ordersdb, crm\n## Getting Started\nIMPORTANT: Call `ordersdb_get_semantics` FIRST. It returns the approved business definitions for the data in a few KB: warnings about traps in the data, what terms like \"current\" mean, and metrics and verified queries with the exact tool and arguments to run them. When a question matches one, run it as given. Otherwise call `ordersdb_get_data_model` before composing any query of your own.\nThe data model provides in a single ~10-20KB response:\n- Every table with all columns (name, type, primary key, foreign keys)\n- Foreign key references showing how tables connect\n- Structural patterns you MUST handle correctly:\n  * HIERARCHIES: Self-referencing FKs (e.g. dept.parent_dept_id → dept.dept_id) mean\n    records form a TREE. You must use recursive traversal to find ALL descendants,\n    not just direct children. Aggregate metrics must roll up through ALL levels.\n  * JUNCTION TABLES: Many-to-many relationships via intermediate tables.\n- Row counts per table\n## Tool Usage Guide\nArgument names are snake_case (table_name, count_only, include_count); camelCase is accepted too. Unknown arguments are rejected, never ignored.\nAll database tools are prefixed with the API name (e.g., db_get_tables, mysql_get_table_data).\nThe same verb on every database shares the same parameters — only the prefix changes.\nUse the list_apis tool to see all available APIs.\n1. `ordersdb_get_semantics` - START HERE. Business definitions: warnings, glossary, metrics and verified queries with runnable arguments (small).\n2. `ordersdb_get_data_model` - Condensed schema with columns, FKs, and patterns, for queries the definitions do not cover.\n3. `ordersdb_get_api_spec` - OpenAPI spec with query syntax hints. Use compact=true (default).\n4. `ordersdb_get_table_data` - Query data with filter, order, limit, offset, fields, related\n5. `ordersdb_aggregate_data` - Compute SUM/COUNT/AVG/MIN/MAX in ONE call (no manual pagination needed)\n6. `ordersdb_get_table_schema` - Full schema for a single table (if you need more detail)\n7. `ordersdb_create_records` / `update_records` / `delete_records` - CRUD operations\n8. `ordersdb_get_stored_procedures` / `call_stored_procedure` - Stored procedure access\n9. `ordersdb_get_stored_functions` / `call_stored_function` - Stored function access\n## Query Syntax Quick Reference\n- Filter: `field=value`, `field>10`, `field LIKE %text%`, `field IN (1,2,3)`, `field BETWEEN 1 AND 10`, `field IS NULL`\n- IMPORTANT: Use field names exactly as they appear in the schema — do NOT add quotes, brackets, backticks, or URL-encoding around field names. Spaces in field names are valid as-is. Example: `Production Day=2026-03-16` (NOT `[Production Day]`, NOT `\"Production Day\"`, NOT `Production%20Day`)\n- Combine filters: `(field1=value1) AND (field2>value2)`, `(f1=v1) OR (f2=v2)`\n- Order: `field ASC`, `field DESC`, `field1 ASC, field2 DESC`\n- Fields: select specific columns to reduce response size\n- Related: include related records via foreign keys (e.g., `related=parent_table_by_fk_field`)\n- Pagination: use `limit` and `offset`, set `include_count=true` for total count\n- Counting: use `count_only=true` to get just the count without data\n- Aggregation: use `ordersdb_aggregate_data` for SUM/COUNT/AVG/MIN/MAX — it pushes computation to the database server\n- Max page size: 1000 records. Always paginate for tables with more rows.\n## Key Data Modeling Hints\n- When a table has a column referencing ITSELF (self-referencing FK), it forms a tree/hierarchy.\n  Example: dept.parent_dept_id → dept.dept_id means departments are nested.\n  You MUST recursively traverse to aggregate child data into parent totals.\n- When you see amount + paid_amount columns, compute outstanding = amount - paid_amount.\n  An invoice with status \"paid\" but paid_amount < amount still has an outstanding balance.\nAll tools operate against the DreamFactory REST API using the authenticated user session.",
+  "tools": [
+    {
+      "name": "discover_services",
+      "title": "Discover Services",
+      "description": "Discover which DreamFactory services and operations YOU (the calling agent) are permitted to access, based on your assigned role. Returns the role-filtered service catalog with the operations (GET/POST/PUT/PATCH/DELETE) allowed on each. Call this first to learn your boundaries before querying any data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "request_access",
+      "title": "Request Access",
+      "description": "Request access you do not currently have. Creates a pending request for human approval and notifies administrators via alerts. Provide the service names and operations you need plus an optional reason. You will NOT get access immediately — an administrator must approve it, after which a fresh scoped key is issued.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Service names to request, e.g. [\"mysql\",\"postgres\"]."
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Operations needed: any of GET, POST, PUT, PATCH, DELETE."
+          },
+          "note": {
+            "description": "Why you need this access (shown to the approving admin).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "services",
+          "operations"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "list_apis",
+      "title": "List Available APIs",
+      "description": "List the database and file services in this connection with their category and tool-name prefix. Lighter than discover_services, which also reports the HTTP verbs your role permits on each service; call that when you need to know what you may write.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "all_get_tables",
+      "title": "Get Tables from All Databases",
+      "description": "Table names from every connected database in one call, keyed by service name. Use it when you do not know which database holds the data; for one database call get_tables, and for columns and relationships call get_data_model.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "all_find_table",
+      "title": "Find Table Across All Databases",
+      "description": "Look up one table name in every connected database and return its full schema from each database that has it. Use it when a table could live in several services. Returns foundIn (the services that have it) plus per-service schema or error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name to look for."
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "all_get_stored_procedures",
+      "title": "Get Stored Procedures from All Databases",
+      "description": "Stored procedure names and parameters from every connected database, keyed by service; empty for services without procedures. For a single database call get_stored_procedures.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "all_get_stored_functions",
+      "title": "Get Stored Functions from All Databases",
+      "description": "Stored function names and parameters from every connected database, keyed by service; empty for services without functions. For a single database call get_stored_functions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "all_get_resources",
+      "title": "Get Resources from All Databases",
+      "description": "Resource groups (_table, _schema, _proc, _func) exposed by every connected database, keyed by service. Use it only to compare what each service offers; all_get_tables is the lighter call when you just need tables.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_api_spec",
+      "title": "ordersdb: Get API Spec",
+      "description": "[ordersdb] OpenAPI 3.0 spec for this database: endpoint paths, query-parameter syntax and, with tables=true, every table. Use it when you need exact filter/order syntax or endpoint details; get_data_model is the cheaper call for planning queries. compact=true (default) returns the token-efficient form.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "compact": {
+            "description": "Return compact token-efficient format (default: true)",
+            "type": "boolean"
+          },
+          "resource_name": {
+            "description": "Get spec for a specific table/resource only",
+            "type": "string"
+          },
+          "tables": {
+            "description": "Include full table and field details",
+            "type": "boolean"
+          },
+          "refresh": {
+            "description": "Force refresh cached spec data",
+            "type": "boolean"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_semantics",
+      "title": "ordersdb: Get Business Definitions",
+      "description": "[ordersdb] CALL FIRST. Approved business definitions for this database: what terms like \"current\", \"active\" or \"headcount\" mean in the data, metrics and verified queries with the exact tool arguments to run them. Small; follow these definitions instead of guessing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_data_model",
+      "title": "ordersdb: Get Data Model",
+      "description": "[ordersdb] Condensed model of every table: columns (name/type/FK), row counts, hierarchies, junction tables. Call get_semantics first; use this to plan any query the business definitions do not already answer. On larger databases the first call returns an index; pass tables for the details you need.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tables": {
+            "description": "Only these tables, with samples and enumerations (plus their relationships). Omit for all.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "detail": {
+            "description": "Full detail for every table even on a large database (default: index above 12 tables)",
+            "type": "boolean"
+          },
+          "samples": {
+            "description": "Sample rows per table (default 1; 0 for none)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "templates": {
+            "description": "Include query templates (default: only when no catalog query exists)",
+            "type": "boolean"
+          },
+          "refresh": {
+            "description": "Bypass the cached model and rebuild it from the database (slow on large schemas).",
+            "type": "boolean"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_tables",
+      "title": "ordersdb: List Tables",
+      "description": "[ordersdb] Table names only, the cheapest schema call. Use it to confirm a table exists; get_data_model also returns columns and relationships for every table.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_table_schema",
+      "title": "ordersdb: Get Table Schema",
+      "description": "[ordersdb] Full definition of ONE table: columns with types, nullability and defaults, primary and foreign keys, and the related-table aliases usable in get_table_data related=. Use it after get_data_model when one table needs closer inspection. get_table_fields returns only the column list and get_table_relationships only the relationship graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name as returned by get_tables or get_data_model."
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_table_data",
+      "title": "ordersdb: Get Table Data",
+      "description": "[ordersdb] Read rows from one table with filter/order/limit/offset. Returns 50 rows unless limit is set (max 1000); meta.next tells you when there are more. count_only=true returns just the count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "fields": {
+            "description": "Columns to return (default: all). Fewer columns means a smaller response.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filter": {
+            "description": "SQL-like WHERE clause: field=value, field>10, field LIKE %text%, field IN (1,2), field IS NULL; combine with AND/OR in parentheses, e.g. (status=open) AND (amount>100). Use bare field names, no quotes or brackets around them.",
+            "type": "string"
+          },
+          "offset": {
+            "description": "Rows to skip before the first returned row; combine with limit to page.",
+            "type": "number"
+          },
+          "limit": {
+            "description": "Max records per request (default 50, server max 1000). Use with offset to paginate.",
+            "type": "number"
+          },
+          "order": {
+            "description": "Sort clause: \"field ASC\" or \"field DESC\", comma-separated for several, e.g. \"created DESC, id ASC\".",
+            "type": "string"
+          },
+          "continue": {
+            "description": "Rarely needed on reads: continue past per-row errors in a batch instead of failing the whole request.",
+            "type": "boolean"
+          },
+          "related": {
+            "description": "Include related records via FK (e.g. \"parent_table_by_fk_field\"). Check relationships in the data model.",
+            "type": "string"
+          },
+          "count_only": {
+            "description": "Return only the record count, no data. Use this instead of COUNT() in fields.",
+            "type": "boolean"
+          },
+          "include_count": {
+            "description": "Include total record count in response metadata alongside data.",
+            "type": "boolean"
+          },
+          "include_schema": {
+            "description": "Append the table schema to the response (adds size; prefer get_table_schema).",
+            "type": "boolean"
+          },
+          "ids": {
+            "description": "Primary-key values to fetch directly, instead of a filter.",
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_create_records",
+      "title": "ordersdb: Create Records",
+      "description": "[ordersdb] Insert one or more rows into a table. Returns the primary key of each new row (or the columns named in fields). Not idempotent: repeating the call inserts again. To change existing rows use update_records.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "description": "Rows to insert, one object per row keyed by column name. Omit auto-increment keys."
+          },
+          "fields": {
+            "description": "Columns to return for each created row (default: primary key only).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "related": {
+            "description": "Related-table alias whose nested records inside each row should be created too, e.g. \"orders_by_customer_id\".",
+            "type": "string"
+          },
+          "continue": {
+            "description": "On a per-row error keep inserting the remaining rows and report each failure, instead of stopping at the first.",
+            "type": "boolean"
+          },
+          "rollback": {
+            "description": "On any per-row error undo the rows this call already inserted (all or nothing).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name",
+          "records"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_update_records",
+      "title": "ordersdb: Update Records",
+      "description": "[ordersdb] Patch existing rows: only the columns present in each record change. Target rows one of three ways: records that each carry the primary key; ids plus a single record applied to every id; or filter plus a single record applied to every match. Returns the primary keys (or fields) of the rows changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "description": "Column/value pairs to apply. One object per row when each carries its primary key; a single object when targeting by ids or filter."
+          },
+          "fields": {
+            "description": "Columns to return for each updated row (default: primary key only).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "related": {
+            "description": "Related-table alias whose nested records inside each row should be updated too.",
+            "type": "string"
+          },
+          "ids": {
+            "description": "Primary-key values of the rows to patch with the single record.",
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          },
+          "filter": {
+            "description": "SQL-like filter (same syntax as get_table_data) selecting the rows to patch with the single record.",
+            "type": "string"
+          },
+          "continue": {
+            "description": "On a per-row error keep updating the remaining rows and report each failure, instead of stopping at the first.",
+            "type": "boolean"
+          },
+          "rollback": {
+            "description": "On any per-row error undo the rows this call already changed (all or nothing).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name",
+          "records"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_delete_records",
+      "title": "ordersdb: Delete Records",
+      "description": "[ordersdb] Permanently delete rows selected by ids or filter; there is no undo. A call with neither ids nor filter is refused unless force=true, which empties the whole table. Returns the primary keys of the deleted rows.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "ids": {
+            "description": "Primary-key values of the rows to delete.",
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          },
+          "filter": {
+            "description": "SQL-like filter (same syntax as get_table_data) selecting the rows to delete.",
+            "type": "string"
+          },
+          "force": {
+            "description": "true deletes EVERY row in the table when no ids or filter are given. Never set it casually.",
+            "type": "boolean"
+          },
+          "fields": {
+            "description": "Columns of each deleted row to return (default: primary key only).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "related": {
+            "description": "Related-table alias whose records should be included in the response for each deleted row.",
+            "type": "string"
+          },
+          "continue": {
+            "description": "On a per-row error keep deleting the remaining rows and report each failure, instead of stopping at the first.",
+            "type": "boolean"
+          },
+          "rollback": {
+            "description": "On any per-row error restore the rows this call already deleted (all or nothing).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_table_fields",
+      "title": "ordersdb: Get Table Fields",
+      "description": "[ordersdb] Column list for one table: name, type, length, nullable, default, primary/foreign-key flags. Lighter than get_table_schema, which also returns constraints and related tables; get_data_model already lists these columns for every table.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "refresh": {
+            "description": "Bypass the schema cache and re-read from the database.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_table_relationships",
+      "title": "ordersdb: Get Table Relationships",
+      "description": "[ordersdb] Relationships of one table: foreign keys in and out, self-referencing hierarchies (parent_id-style trees) and junction tables for many-to-many. Use it to pick the related= alias for get_table_data; get_data_model summarizes the same relationships for every table.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "refresh": {
+            "description": "Bypass the schema cache and re-read from the database.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_stored_procedures",
+      "title": "ordersdb: List Stored Procedures",
+      "description": "[ordersdb] List the stored procedures this database exposes, with their parameter names and types, callable through call_stored_procedure. Empty on databases without procedures (e.g. SQLite).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_call_stored_procedure",
+      "title": "ordersdb: Call Stored Procedure",
+      "description": "[ordersdb] Execute a stored procedure by name with named parameters and return its result sets and output parameters. Procedures can modify data: check what the procedure does (get_stored_procedures) before calling it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "procedure_name": {
+            "type": "string",
+            "description": "Procedure name exactly as listed by get_stored_procedures."
+          },
+          "parameters": {
+            "description": "Input parameters keyed by parameter name.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "wrapper": {
+            "description": "Key under which to wrap the returned result set in the response.",
+            "type": "string"
+          },
+          "returns": {
+            "description": "Declared data type of the procedure's scalar return value, e.g. \"integer\", when the database cannot infer it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "procedure_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_stored_functions",
+      "title": "ordersdb: List Stored Functions",
+      "description": "[ordersdb] List the stored functions this database exposes, with their parameter names and return types, callable through call_stored_function. Empty on databases without functions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_call_stored_function",
+      "title": "ordersdb: Call Stored Function",
+      "description": "[ordersdb] Execute a stored (scalar or table-valued) function by name with named parameters and return its value. Functions usually only read, but treat one as able to write unless you know otherwise.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "function_name": {
+            "type": "string",
+            "description": "Function name exactly as listed by get_stored_functions."
+          },
+          "parameters": {
+            "description": "Input parameters keyed by parameter name.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "returns": {
+            "description": "Declared data type of the return value, e.g. \"integer\", when the database cannot infer it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "function_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_get_database_resources",
+      "title": "ordersdb: List Database Resources",
+      "description": "[ordersdb] List the resource groups this database service exposes (_table, _schema, _proc, _func) with their member names. Use it to check whether a service has procedures or functions at all; for table work use get_tables or get_data_model.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "as_list": {
+            "description": "Return bare resource names only.",
+            "type": "boolean"
+          },
+          "as_access_list": {
+            "description": "Return every resource/verb combination the current role may call (for checking permissions).",
+            "type": "boolean"
+          },
+          "include_access": {
+            "description": "Add the HTTP verbs the current role may use on each resource.",
+            "type": "boolean"
+          },
+          "fields": {
+            "description": "Resource properties to include (default: name only).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "refresh": {
+            "description": "Bypass the cached resource list.",
+            "type": "boolean"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "ordersdb_aggregate_data",
+      "title": "ordersdb: Aggregate Data",
+      "description": "[ordersdb] THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY: pushes the aggregation to the database and returns one row per group. Always pass group_by when the question is per category. Grouped results return 100 groups unless limit is set; the response says when there are more. Do not use get_table_data for aggregation; use it for raw rows instead.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Table to aggregate"
+          },
+          "aggregates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "function": {
+                  "type": "string",
+                  "enum": [
+                    "SUM",
+                    "COUNT",
+                    "AVG",
+                    "MIN",
+                    "MAX"
+                  ],
+                  "description": "Aggregate function"
+                },
+                "field": {
+                  "type": "string",
+                  "description": "Column to aggregate (use \"*\" for COUNT)"
+                },
+                "alias": {
+                  "description": "Name for the result column",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "function",
+                "field"
+              ]
+            },
+            "description": "List of aggregations to compute"
+          },
+          "filter": {
+            "description": "Filter rows before aggregating (same syntax as get_table_data)",
+            "type": "string"
+          },
+          "group_by": {
+            "description": "Group results by these columns",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limit": {
+            "description": "Max groups to return (default 100, max 5000). Narrow with filter when truncated.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        },
+        "required": [
+          "table_name",
+          "aggregates"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_api_spec",
+      "title": "crm: Get API Spec",
+      "description": "[crm] OpenAPI 3.0 spec for this database: endpoint paths, query-parameter syntax and, with tables=true, every table. Use it when you need exact filter/order syntax or endpoint details; get_data_model is the cheaper call for planning queries. compact=true (default) returns the token-efficient form.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "compact": {
+            "description": "Return compact token-efficient format (default: true)",
+            "type": "boolean"
+          },
+          "resource_name": {
+            "description": "Get spec for a specific table/resource only",
+            "type": "string"
+          },
+          "tables": {
+            "description": "Include full table and field details",
+            "type": "boolean"
+          },
+          "refresh": {
+            "description": "Force refresh cached spec data",
+            "type": "boolean"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_semantics",
+      "title": "crm: Get Business Definitions",
+      "description": "[crm] CALL FIRST. Approved business definitions for this database: what terms like \"current\", \"active\" or \"headcount\" mean in the data, metrics and verified queries with the exact tool arguments to run them. Small; follow these definitions instead of guessing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_data_model",
+      "title": "crm: Get Data Model",
+      "description": "[crm] Condensed model of every table: columns (name/type/FK), row counts, hierarchies, junction tables. Call get_semantics first; use this to plan any query the business definitions do not already answer. On larger databases the first call returns an index; pass tables for the details you need.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tables": {
+            "description": "Only these tables, with samples and enumerations (plus their relationships). Omit for all.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "detail": {
+            "description": "Full detail for every table even on a large database (default: index above 12 tables)",
+            "type": "boolean"
+          },
+          "samples": {
+            "description": "Sample rows per table (default 1; 0 for none)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "templates": {
+            "description": "Include query templates (default: only when no catalog query exists)",
+            "type": "boolean"
+          },
+          "refresh": {
+            "description": "Bypass the cached model and rebuild it from the database (slow on large schemas).",
+            "type": "boolean"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_tables",
+      "title": "crm: List Tables",
+      "description": "[crm] Table names only, the cheapest schema call. Use it to confirm a table exists; get_data_model also returns columns and relationships for every table.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_table_schema",
+      "title": "crm: Get Table Schema",
+      "description": "[crm] Full definition of ONE table: columns with types, nullability and defaults, primary and foreign keys, and the related-table aliases usable in get_table_data related=. Use it after get_data_model when one table needs closer inspection. get_table_fields returns only the column list and get_table_relationships only the relationship graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name as returned by get_tables or get_data_model."
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_table_data",
+      "title": "crm: Get Table Data",
+      "description": "[crm] Read rows from one table with filter/order/limit/offset. Returns 50 rows unless limit is set (max 1000); meta.next tells you when there are more. count_only=true returns just the count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "fields": {
+            "description": "Columns to return (default: all). Fewer columns means a smaller response.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filter": {
+            "description": "SQL-like WHERE clause: field=value, field>10, field LIKE %text%, field IN (1,2), field IS NULL; combine with AND/OR in parentheses, e.g. (status=open) AND (amount>100). Use bare field names, no quotes or brackets around them.",
+            "type": "string"
+          },
+          "offset": {
+            "description": "Rows to skip before the first returned row; combine with limit to page.",
+            "type": "number"
+          },
+          "limit": {
+            "description": "Max records per request (default 50, server max 1000). Use with offset to paginate.",
+            "type": "number"
+          },
+          "order": {
+            "description": "Sort clause: \"field ASC\" or \"field DESC\", comma-separated for several, e.g. \"created DESC, id ASC\".",
+            "type": "string"
+          },
+          "continue": {
+            "description": "Rarely needed on reads: continue past per-row errors in a batch instead of failing the whole request.",
+            "type": "boolean"
+          },
+          "related": {
+            "description": "Include related records via FK (e.g. \"parent_table_by_fk_field\"). Check relationships in the data model.",
+            "type": "string"
+          },
+          "count_only": {
+            "description": "Return only the record count, no data. Use this instead of COUNT() in fields.",
+            "type": "boolean"
+          },
+          "include_count": {
+            "description": "Include total record count in response metadata alongside data.",
+            "type": "boolean"
+          },
+          "include_schema": {
+            "description": "Append the table schema to the response (adds size; prefer get_table_schema).",
+            "type": "boolean"
+          },
+          "ids": {
+            "description": "Primary-key values to fetch directly, instead of a filter.",
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_create_records",
+      "title": "crm: Create Records",
+      "description": "[crm] Insert one or more rows into a table. Returns the primary key of each new row (or the columns named in fields). Not idempotent: repeating the call inserts again. To change existing rows use update_records.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "description": "Rows to insert, one object per row keyed by column name. Omit auto-increment keys."
+          },
+          "fields": {
+            "description": "Columns to return for each created row (default: primary key only).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "related": {
+            "description": "Related-table alias whose nested records inside each row should be created too, e.g. \"orders_by_customer_id\".",
+            "type": "string"
+          },
+          "continue": {
+            "description": "On a per-row error keep inserting the remaining rows and report each failure, instead of stopping at the first.",
+            "type": "boolean"
+          },
+          "rollback": {
+            "description": "On any per-row error undo the rows this call already inserted (all or nothing).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name",
+          "records"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_update_records",
+      "title": "crm: Update Records",
+      "description": "[crm] Patch existing rows: only the columns present in each record change. Target rows one of three ways: records that each carry the primary key; ids plus a single record applied to every id; or filter plus a single record applied to every match. Returns the primary keys (or fields) of the rows changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "description": "Column/value pairs to apply. One object per row when each carries its primary key; a single object when targeting by ids or filter."
+          },
+          "fields": {
+            "description": "Columns to return for each updated row (default: primary key only).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "related": {
+            "description": "Related-table alias whose nested records inside each row should be updated too.",
+            "type": "string"
+          },
+          "ids": {
+            "description": "Primary-key values of the rows to patch with the single record.",
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          },
+          "filter": {
+            "description": "SQL-like filter (same syntax as get_table_data) selecting the rows to patch with the single record.",
+            "type": "string"
+          },
+          "continue": {
+            "description": "On a per-row error keep updating the remaining rows and report each failure, instead of stopping at the first.",
+            "type": "boolean"
+          },
+          "rollback": {
+            "description": "On any per-row error undo the rows this call already changed (all or nothing).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name",
+          "records"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_delete_records",
+      "title": "crm: Delete Records",
+      "description": "[crm] Permanently delete rows selected by ids or filter; there is no undo. A call with neither ids nor filter is refused unless force=true, which empties the whole table. Returns the primary keys of the deleted rows.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "ids": {
+            "description": "Primary-key values of the rows to delete.",
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          },
+          "filter": {
+            "description": "SQL-like filter (same syntax as get_table_data) selecting the rows to delete.",
+            "type": "string"
+          },
+          "force": {
+            "description": "true deletes EVERY row in the table when no ids or filter are given. Never set it casually.",
+            "type": "boolean"
+          },
+          "fields": {
+            "description": "Columns of each deleted row to return (default: primary key only).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "related": {
+            "description": "Related-table alias whose records should be included in the response for each deleted row.",
+            "type": "string"
+          },
+          "continue": {
+            "description": "On a per-row error keep deleting the remaining rows and report each failure, instead of stopping at the first.",
+            "type": "boolean"
+          },
+          "rollback": {
+            "description": "On any per-row error restore the rows this call already deleted (all or nothing).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_table_fields",
+      "title": "crm: Get Table Fields",
+      "description": "[crm] Column list for one table: name, type, length, nullable, default, primary/foreign-key flags. Lighter than get_table_schema, which also returns constraints and related tables; get_data_model already lists these columns for every table.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "refresh": {
+            "description": "Bypass the schema cache and re-read from the database.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_table_relationships",
+      "title": "crm: Get Table Relationships",
+      "description": "[crm] Relationships of one table: foreign keys in and out, self-referencing hierarchies (parent_id-style trees) and junction tables for many-to-many. Use it to pick the related= alias for get_table_data; get_data_model summarizes the same relationships for every table.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Exact table name from get_tables or get_data_model."
+          },
+          "refresh": {
+            "description": "Bypass the schema cache and re-read from the database.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_stored_procedures",
+      "title": "crm: List Stored Procedures",
+      "description": "[crm] List the stored procedures this database exposes, with their parameter names and types, callable through call_stored_procedure. Empty on databases without procedures (e.g. SQLite).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_call_stored_procedure",
+      "title": "crm: Call Stored Procedure",
+      "description": "[crm] Execute a stored procedure by name with named parameters and return its result sets and output parameters. Procedures can modify data: check what the procedure does (get_stored_procedures) before calling it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "procedure_name": {
+            "type": "string",
+            "description": "Procedure name exactly as listed by get_stored_procedures."
+          },
+          "parameters": {
+            "description": "Input parameters keyed by parameter name.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "wrapper": {
+            "description": "Key under which to wrap the returned result set in the response.",
+            "type": "string"
+          },
+          "returns": {
+            "description": "Declared data type of the procedure's scalar return value, e.g. \"integer\", when the database cannot infer it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "procedure_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_stored_functions",
+      "title": "crm: List Stored Functions",
+      "description": "[crm] List the stored functions this database exposes, with their parameter names and return types, callable through call_stored_function. Empty on databases without functions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_call_stored_function",
+      "title": "crm: Call Stored Function",
+      "description": "[crm] Execute a stored (scalar or table-valued) function by name with named parameters and return its value. Functions usually only read, but treat one as able to write unless you know otherwise.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "function_name": {
+            "type": "string",
+            "description": "Function name exactly as listed by get_stored_functions."
+          },
+          "parameters": {
+            "description": "Input parameters keyed by parameter name.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "returns": {
+            "description": "Declared data type of the return value, e.g. \"integer\", when the database cannot infer it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "function_name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_get_database_resources",
+      "title": "crm: List Database Resources",
+      "description": "[crm] List the resource groups this database service exposes (_table, _schema, _proc, _func) with their member names. Use it to check whether a service has procedures or functions at all; for table work use get_tables or get_data_model.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "as_list": {
+            "description": "Return bare resource names only.",
+            "type": "boolean"
+          },
+          "as_access_list": {
+            "description": "Return every resource/verb combination the current role may call (for checking permissions).",
+            "type": "boolean"
+          },
+          "include_access": {
+            "description": "Add the HTTP verbs the current role may use on each resource.",
+            "type": "boolean"
+          },
+          "fields": {
+            "description": "Resource properties to include (default: name only).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "refresh": {
+            "description": "Bypass the cached resource list.",
+            "type": "boolean"
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "crm_aggregate_data",
+      "title": "crm: Aggregate Data",
+      "description": "[crm] THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY: pushes the aggregation to the database and returns one row per group. Always pass group_by when the question is per category. Grouped results return 100 groups unless limit is set; the response says when there are more. Do not use get_table_data for aggregation; use it for raw rows instead.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "description": "Table to aggregate"
+          },
+          "aggregates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "function": {
+                  "type": "string",
+                  "enum": [
+                    "SUM",
+                    "COUNT",
+                    "AVG",
+                    "MIN",
+                    "MAX"
+                  ],
+                  "description": "Aggregate function"
+                },
+                "field": {
+                  "type": "string",
+                  "description": "Column to aggregate (use \"*\" for COUNT)"
+                },
+                "alias": {
+                  "description": "Name for the result column",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "function",
+                "field"
+              ]
+            },
+            "description": "List of aggregations to compute"
+          },
+          "filter": {
+            "description": "Filter rows before aggregating (same syntax as get_table_data)",
+            "type": "string"
+          },
+          "group_by": {
+            "description": "Group results by these columns",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limit": {
+            "description": "Max groups to return (default 100, max 5000). Narrow with filter when truncated.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        },
+        "required": [
+          "table_name",
+          "aggregates"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "search",
+      "title": "Search (connector stub)",
+      "description": "Compatibility stub for connectors (such as ChatGPT) that require a search tool. It searches nothing and always returns an empty results list. To find data, call get_data_model and then get_table_data with a filter; to locate a table by name across databases use all_find_table.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Ignored; any text."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "fetch",
+      "title": "Fetch (connector stub)",
+      "description": "Compatibility stub for connectors (such as ChatGPT) that require a fetch tool. It fetches nothing and returns an empty document for any id. To read specific rows, call get_table_data with ids.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Ignored; any string."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    }
+  ]
+}

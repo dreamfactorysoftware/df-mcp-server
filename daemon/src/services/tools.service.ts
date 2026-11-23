@@ -39,6 +39,152 @@ export function adaptQueryTemplates(model: any, call: CallStyle = {}): any {
 }
 
 /**
+ * df-semantic's `semantics` block (served by get_semantics, and first in the
+ * full data model) names bare verbs in `run_with` plus the service. Rewrite
+ * each into the exact call this server accepts, the way adaptQueryTemplates
+ * does for query templates: `{prefix}_{verb}` in prefixed mode, `service`
+ * added to the arguments in merged multi-database mode. The informational
+ * `service` key is dropped since the call now encodes it.
+ */
+export function adaptSemantics(data: any, call: CallStyle = {}): any {
+  const semantics = data?.semantics;
+  if (!semantics || typeof semantics !== 'object') return data;
+  for (const list of [semantics.metrics, semantics.verified_queries]) {
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      const run = entry?.run_with;
+      if (!run || typeof run.tool !== 'string') continue;
+      if (call.prefix) run.tool = `${call.prefix}_${run.tool}`;
+      if (call.service) run.arguments = { ...(run.arguments ?? {}), service: call.service };
+      delete run.service;
+    }
+  }
+  return data;
+}
+
+/** Default page for get_table_data when the caller sets no limit. */
+export const DEFAULT_ROW_LIMIT = 50;
+/** Default and ceiling for grouped aggregate_data results. */
+export const DEFAULT_GROUP_LIMIT = 100;
+export const MAX_GROUP_LIMIT = 5000;
+/** Sample rows kept per table in get_data_model unless asked otherwise. */
+export const DEFAULT_SAMPLES = 1;
+const MAX_ENUM_VALUES = 20;
+/** Above this many tables, get_data_model answers with an index unless detail or tables is given. */
+export const INDEX_TABLE_THRESHOLD = 12;
+/** Enumerations this small stay in the index: coded columns and test rows live there (the slim model caps them at 20 too). */
+export const INDEX_ENUM_MAX = 20;
+
+/**
+ * The index form of the data model: every table with its row count and its
+ * columns as one string each (name:type, pk, -> fk target), plus the
+ * relationships as one line each and the structural patterns. No types
+ * beyond the name, no samples, no enumerations: those come from
+ * get_data_model(tables=[...]). On a 28-table service this is a quarter of
+ * the slim model and a tenth of the full one.
+ */
+export function indexDataModel(model: any): any {
+  const tables: Record<string, { row_count?: unknown; columns: string[] }> = {};
+  for (const [name, t] of Object.entries<any>(model.tables ?? {})) {
+    const columns = (t?.columns ?? []).map((c: any) => {
+      let s = String(c?.name ?? '');
+      if (c?.type) s += `:${c.type}`;
+      if (c?.pk) s += ' pk';
+      if (c?.fk) s += ` -> ${typeof c.fk === 'string' ? c.fk : JSON.stringify(c.fk)}`;
+      return s;
+    });
+    const entry: { row_count?: unknown; columns: string[]; enum_values?: Record<string, unknown> } =
+      t?.row_count === undefined ? { columns } : { row_count: t.row_count, columns };
+    // Small enumerations are the cheapest semantics there are (status codes,
+    // department codes, the test rows among them); keep them in the index.
+    if (t?.enum_values && typeof t.enum_values === 'object') {
+      const small = Object.fromEntries(Object.entries<any>(t.enum_values).filter(([, v]) => Array.isArray(v) && v.length > 0 && v.length <= INDEX_ENUM_MAX));
+      if (Object.keys(small).length) entry.enum_values = small;
+    }
+    tables[name] = entry;
+  }
+  let relationships: unknown = model.relationships;
+  if (relationships && typeof relationships === 'object' && !Array.isArray(relationships)) {
+    relationships = Object.fromEntries(Object.entries<any>(relationships).map(([table, rels]) => [
+      table,
+      (Array.isArray(rels) ? rels : []).map((r: any) => `${r?.name ?? '?'} (${r?.type ?? 'rel'} -> ${r?.ref_table ?? '?'}${r?.junction_table ? ' via ' + r.junction_table : ''})`)
+    ]));
+  }
+  const n = Object.keys(tables).length;
+  const out: any = {
+    service: model.service,
+    description: `Index of ${n} tables: row counts, columns (name:type, pk, -> foreign key) and small enumerations. Call get_data_model with tables=[...] for sample rows and the larger enumerations of the tables you need, or detail=true for everything.`,
+    index_only: true,
+  };
+  if (model.semantics) out.semantics = model.semantics;
+  out.tables = tables;
+  if (relationships) out.relationships = relationships;
+  if (model.patterns) out.patterns = model.patterns;
+  return out;
+}
+
+/**
+ * compact_results: trim the condensed data model to what a planning step
+ * needs. df-core sends three sample rows per table and every enumeration in
+ * full; on a 28-table database that is 73 KB (18k tokens) per call. Keep one
+ * sample row and up to 20 enumeration values, answer with an index above 12
+ * tables, and narrow to `tables` when the caller names them.
+ */
+export function slimDataModel(model: any, opts: { tables?: string[]; samples?: number; detail?: boolean } = {}): any {
+  if (!model || typeof model !== 'object' || !model.tables || typeof model.tables !== 'object') return model;
+  const keep = opts.tables?.length ? new Set(opts.tables) : null;
+  if (!keep && !opts.detail && Object.keys(model.tables).length > INDEX_TABLE_THRESHOLD) {
+    return indexDataModel(model);
+  }
+  const out: any = { ...model };
+  const samples = Math.max(0, Math.min(3, opts.samples ?? DEFAULT_SAMPLES));
+  const tables: Record<string, any> = {};
+  for (const [name, t] of Object.entries<any>(model.tables)) {
+    if (keep && !keep.has(name)) continue;
+    const slim: any = { ...t };
+    if (Array.isArray(slim.sample_data)) {
+      if (samples === 0) delete slim.sample_data;
+      else slim.sample_data = slim.sample_data.slice(0, samples);
+    }
+    if (slim.enum_values && typeof slim.enum_values === 'object') {
+      const enums: Record<string, unknown> = {};
+      for (const [col, vals] of Object.entries<any>(slim.enum_values)) {
+        enums[col] = Array.isArray(vals) && vals.length > MAX_ENUM_VALUES
+          ? [...vals.slice(0, MAX_ENUM_VALUES), `… ${vals.length - MAX_ENUM_VALUES} more`]
+          : vals;
+      }
+      slim.enum_values = enums;
+    }
+    tables[name] = slim;
+  }
+  out.tables = tables;
+  if (keep) {
+    if (Array.isArray(out.relationships)) {
+      out.relationships = out.relationships.filter((r: any) => keep.has(r?.from_table ?? r?.table ?? '') || keep.has(r?.to_table ?? r?.references ?? ''));
+    } else if (out.relationships && typeof out.relationships === 'object') {
+      out.relationships = Object.fromEntries(Object.entries(out.relationships).filter(([k]) => keep.has(k)));
+    }
+    out.tables_omitted = Object.keys(model.tables).filter(n => !keep.has(n)).length;
+  }
+  return out;
+}
+
+/**
+ * semantic_catalog: drop df-core's query templates when the approved catalog
+ * already carries runnable metrics or verified queries (they answer the same
+ * questions with approved definitions), unless the caller asks for them.
+ */
+export function dropTemplates(model: any, templates?: boolean): any {
+  if (!model || typeof model !== 'object' || !('query_templates' in model)) return model;
+  const catalogRuns = !!(model.semantics && (model.semantics.metrics?.length || model.semantics.verified_queries?.length));
+  if (templates === false || (templates !== true && catalogRuns)) {
+    const { query_templates: _dropped, ...rest } = model;
+    return rest;
+  }
+  return model;
+}
+
+/**
  * Base tool definitions that will be registered for each API.
  * The handler receives the API config and auth, so it knows which API to target.
  *
@@ -51,7 +197,23 @@ export function adaptQueryTemplates(model: any, call: CallStyle = {}): any {
  * The Zod `schema` object is shared by reference across prefixes — only the
  * JSON serialization is per-tool.
  */
-const BASE_TOOLS: ToolDefinition[] = [
+/**
+ * Endpoint opt-ins that change the database verbs (mcp_server_config columns).
+ * Both off (the default) yields exactly 1.4.1's definitions.
+ *  semanticCatalog (semantic_catalog): get_semantics; get_data_model asks for
+ *    the enriched model, puts semantics first and drops query templates the
+ *    catalog supersedes; aggregate aliases are applied to server-side rows.
+ *  compactResults (compact_results): row/group defaults and caps, the data
+ *    model index, sample/enum trimming, and the optional args that drive them.
+ */
+export type ToolFeatures = { semanticCatalog?: boolean; compactResults?: boolean };
+
+const GET_DATA_MODEL_141 = 'BEST FIRST CALL. Condensed model of every table in one response: columns (name/type/FK), row counts, self-referencing hierarchies and junction tables. Use it to plan queries before get_table_data; reach for the per-table schema tools only when one table needs more detail.';
+const GET_DATA_MODEL_SEMANTIC = 'Condensed model of every table: columns (name/type/FK), row counts, hierarchies, junction tables. Call get_semantics first; use this to plan any query the business definitions do not already answer.';
+const GET_DATA_MODEL_INDEX = ' On larger databases the first call returns an index; pass tables for the details you need.';
+
+function buildBaseTools(f: ToolFeatures): ToolDefinition[] {
+  const tools: ToolDefinition[] = [
   {
     name: 'get_api_spec',
     title: 'Get API Spec',
@@ -69,18 +231,48 @@ const BASE_TOOLS: ToolDefinition[] = [
     }
   },
   {
+    name: 'get_semantics',
+    title: 'Get Business Definitions',
+    description: 'CALL FIRST. Approved business definitions for this database: what terms like "current", "active" or "headcount" mean in the data, metrics and verified queries with the exact tool arguments to run them. Small; follow these definitions instead of guessing.',
+    schema: z.object({}),
+    handler: async (_args, _context, apiConfig, auth, call) => {
+      const data = await DreamFactoryService.getApiSpec(apiConfig.baseUrl, auth, { model: 'semantics' }) as { semantics?: unknown } | null;
+      // Without df-semantic, df-core ignores model=semantics and answers with
+      // the whole OpenAPI document (no `semantics` key). Never relay that.
+      if (!data || typeof data !== 'object' || !('semantics' in data)) {
+        return respond({ semantics: null, note: 'No semantic catalog on this server. Use get_data_model.' });
+      }
+      if (!data.semantics) {
+        return respond({ semantics: null, note: 'No approved business definitions for this database. Use get_data_model.' });
+      }
+      return respond(adaptSemantics(data, call));
+    }
+  },
+  {
     name: 'get_data_model',
     title: 'Get Data Model',
-    description: 'BEST FIRST CALL. Condensed model of every table in one response: columns (name/type/FK), row counts, self-referencing hierarchies and junction tables. Use it to plan queries before get_table_data; reach for the per-table schema tools only when one table needs more detail.',
+    description: (f.semanticCatalog ? GET_DATA_MODEL_SEMANTIC : GET_DATA_MODEL_141) + (f.compactResults ? GET_DATA_MODEL_INDEX : ''),
     schema: z.object({
+      ...(f.compactResults ? {
+        tables: z.array(z.string()).optional().describe('Only these tables, with samples and enumerations (plus their relationships). Omit for all.'),
+        detail: z.boolean().optional().describe('Full detail for every table even on a large database (default: index above 12 tables)'),
+        samples: z.number().int().min(0).max(3).optional().describe('Sample rows per table (default 1; 0 for none)')
+      } : {}),
+      ...(f.semanticCatalog ? {
+        templates: z.boolean().optional().describe('Include query templates (default: only when no catalog query exists)')
+      } : {}),
       refresh: z.boolean().optional().describe('Bypass the cached model and rebuild it from the database (slow on large schemas).')
     }),
     handler: async (args, _context, apiConfig, auth, call) => {
-      const data = await DreamFactoryService.getApiSpec(apiConfig.baseUrl, auth, {
+      let model = await DreamFactoryService.getApiSpec(apiConfig.baseUrl, auth, {
         model: true,
-        refresh: args?.refresh
+        refresh: args?.refresh,
+        ...(f.semanticCatalog ? { enrich: true } : {})
       });
-      return respond(adaptQueryTemplates(data, call));
+      if (f.compactResults) model = slimDataModel(model, { tables: args?.tables, samples: args?.samples, detail: args?.detail });
+      if (f.semanticCatalog) model = dropTemplates(model, args?.templates);
+      model = adaptQueryTemplates(model, call);
+      return respond(f.semanticCatalog ? adaptSemantics(model, call) : model);
     }
   },
   {
@@ -106,13 +298,17 @@ const BASE_TOOLS: ToolDefinition[] = [
   {
     name: 'get_table_data',
     title: 'Get Table Data',
-    description: 'Read rows from one table with filter/order/limit/offset; returns a resource array (plus meta.count when include_count is set). Max 1000 rows per call; paginate with offset for more. count_only=true returns just the count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.',
+    description: f.compactResults
+      ? 'Read rows from one table with filter/order/limit/offset. Returns 50 rows unless limit is set (max 1000); meta.next tells you when there are more. count_only=true returns just the count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.'
+      : 'Read rows from one table with filter/order/limit/offset; returns a resource array (plus meta.count when include_count is set). Max 1000 rows per call; paginate with offset for more. count_only=true returns just the count. For SUM/COUNT/AVG/MIN/MAX/GROUP BY use aggregate_data — this tool cannot aggregate.',
     schema: z.object({
       table_name: z.string().describe('Exact table name from get_tables or get_data_model.'),
       fields: z.array(z.string()).optional().describe('Columns to return (default: all). Fewer columns means a smaller response.'),
       filter: z.string().optional().describe('SQL-like WHERE clause: field=value, field>10, field LIKE %text%, field IN (1,2), field IS NULL; combine with AND/OR in parentheses, e.g. (status=open) AND (amount>100). Use bare field names, no quotes or brackets around them.'),
       offset: z.number().optional().describe('Rows to skip before the first returned row; combine with limit to page.'),
-      limit: z.number().optional().describe('Max records per request (server max: 1000). Use with offset to paginate.'),
+      limit: z.number().optional().describe(f.compactResults
+        ? 'Max records per request (default 50, server max 1000). Use with offset to paginate.'
+        : 'Max records per request (server max: 1000). Use with offset to paginate.'),
       order: z.string().optional().describe('Sort clause: "field ASC" or "field DESC", comma-separated for several, e.g. "created DESC, id ASC".'),
       continue: z.boolean().optional().describe('Rarely needed on reads: continue past per-row errors in a batch instead of failing the whole request.'),
       related: z.string().optional().describe('Include related records via FK (e.g. "parent_table_by_fk_field"). Check relationships in the data model.'),
@@ -122,7 +318,12 @@ const BASE_TOOLS: ToolDefinition[] = [
       ids: z.array(z.union([z.string(), z.number()])).optional().describe('Primary-key values to fetch directly, instead of a filter.')
     }),
     handler: async (args, _context, apiConfig, auth) => {
-      const data = await DreamFactoryService.getTableData(apiConfig.baseUrl, auth, args);
+      // An unbounded read returns the server maximum (1000 rows, ~180 KB on a
+      // wide table). Page by default; the model can raise limit or paginate.
+      // compact_results only; off, 1.4.1 sends the read through unchanged.
+      const wantsAll = args?.count_only || (Array.isArray(args?.ids) && args.ids.length > 0);
+      const params = f.compactResults && args?.limit === undefined && !wantsAll ? { ...args, limit: DEFAULT_ROW_LIMIT, include_count: args?.include_count ?? true } : args;
+      const data = await DreamFactoryService.getTableData(apiConfig.baseUrl, auth, params);
       return respond(data);
     }
   },
@@ -282,7 +483,9 @@ const BASE_TOOLS: ToolDefinition[] = [
   {
     name: 'aggregate_data',
     title: 'Aggregate Data',
-    description: 'THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY: pushes the aggregation to the database and returns one row per group. Always pass group_by when the question is per category. Do not use get_table_data for aggregation; use it for raw rows instead.',
+    description: f.compactResults
+      ? 'THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY: pushes the aggregation to the database and returns one row per group. Always pass group_by when the question is per category. Grouped results return 100 groups unless limit is set; the response says when there are more. Do not use get_table_data for aggregation; use it for raw rows instead.'
+      : 'THE ONLY WAY to SUM/COUNT/AVG/MIN/MAX/GROUP BY: pushes the aggregation to the database and returns one row per group. Always pass group_by when the question is per category. Do not use get_table_data for aggregation; use it for raw rows instead.',
     schema: z.object({
       table_name: z.string().describe('Table to aggregate'),
       aggregates: z.array(z.object({
@@ -291,16 +494,40 @@ const BASE_TOOLS: ToolDefinition[] = [
         alias: z.string().optional().describe('Name for the result column')
       })).describe('List of aggregations to compute'),
       filter: z.string().optional().describe('Filter rows before aggregating (same syntax as get_table_data)'),
-      group_by: z.array(z.string()).optional().describe('Group results by these columns')
+      group_by: z.array(z.string()).optional().describe('Group results by these columns'),
+      ...(f.compactResults ? {
+        limit: z.number().int().min(1).max(MAX_GROUP_LIMIT).optional().describe(`Max groups to return (default ${DEFAULT_GROUP_LIMIT}, max ${MAX_GROUP_LIMIT}). Narrow with filter when truncated.`)
+      } : {})
     }),
     handler: async (args, _context, apiConfig, auth) => {
-      const data = await DreamFactoryService.aggregateData(apiConfig.baseUrl, auth, args);
+      const data = await DreamFactoryService.aggregateData(apiConfig.baseUrl, auth, args, {
+        aliases: f.semanticCatalog,
+        groupLimit: f.compactResults ? (args?.limit ?? DEFAULT_GROUP_LIMIT) : undefined
+      });
       return respond(data);
     }
   }
-];
+  ];
+  return f.semanticCatalog ? tools : tools.filter(t => t.name !== 'get_semantics');
+}
 
-/** Base tool names for database services. */
+const builtTools = new Map<string, ToolDefinition[]>();
+
+/** Database verb definitions for a feature set (built once per combination, so schemas are shared by reference). */
+export function baseTools(f: ToolFeatures = {}): ToolDefinition[] {
+  const key = `${!!f.semanticCatalog}/${!!f.compactResults}`;
+  let tools = builtTools.get(key);
+  if (!tools) {
+    tools = buildBaseTools({ semanticCatalog: !!f.semanticCatalog, compactResults: !!f.compactResults });
+    builtTools.set(key, tools);
+  }
+  return tools;
+}
+
+/** The 1.4.1 database verbs (every opt-in off). */
+export const BASE_TOOLS: ToolDefinition[] = baseTools();
+
+/** Base tool names for database services (1.4.1's set; every opt-in off). */
 export const DB_TOOL_NAMES = BASE_TOOLS.map(t => t.name);
 
 
@@ -330,9 +557,12 @@ export function registerDreamFactoryTools(
   apiConfigs: ApiConfig[],
   disabledTools?: Set<string>,
   toolStyle: ToolStyle = 'prefixed',
-  allowWrites = true
+  allowWrites = true,
+  features: ToolFeatures = {}
 ) {
   const registerTool = createToolRegistrar(server, disabledTools);
+  // The database verbs for this endpoint's opt-ins (1.4.1's when all are off).
+  const BASE_TOOLS = baseTools(features);
 
   // Register API connector tools (list_apis, all_get_tables, etc.)
   registerApiConnectorTools(server, sessionManager, apiConfigs, disabledTools);

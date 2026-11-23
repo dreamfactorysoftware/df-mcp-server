@@ -71,7 +71,7 @@ class AllowWritesWiringTest extends TestCase
         $server = self::src('daemon/src/server.ts');
         // The envelope parse lives in utils.ts (parseMcpConfig) since the catalog-preview refactor.
         $this->assertStringContainsString('allow_writes', self::src('daemon/src/utils/utils.ts'), 'daemon reads the flag from the config envelope');
-        $this->assertSame(2, substr_count($server, 'lazyMode, toolStyle, allowWrites)'), 'stateless and stateful createServer both pass it');
+        $this->assertSame(2, substr_count($server, 'lazyMode, toolStyle, allowWrites, serverOptions)'), 'stateless and stateful createServer both pass it');
 
         $utils = self::src('daemon/src/services/tool-utils.ts');
         $verbs = substr($utils, strpos($utils, 'export const WRITE_VERBS'), 400);

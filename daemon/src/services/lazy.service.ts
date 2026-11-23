@@ -32,6 +32,8 @@ export type CatalogEntry = {
   handler: (params: any, context: { sessionId?: string }) => Promise<ToolResponse>;
   annotations?: ToolAnnotations;
   spec?: ArgSpec;
+  /** Always advertised, never counted in the catalog size (named semantic tools). */
+  pinned?: boolean;
 };
 
 const FACADE = new Set(['search_tools', 'describe_tool', 'call_tool', 'fetch_more', 'list_tools']);
@@ -209,6 +211,8 @@ export class LazyState {
   readonly catalog = new Map<string, CatalogEntry>();
   /** Hot tools are frozen at session start so the advertised list never changes mid-session. */
   readonly hot: string[];
+  /** Tools registered as pinned: listed even when the facade is on. */
+  readonly pinned = new Set<string>();
   private decision?: LazyDecision;
   private index?: SearchIndex;
   private names: string[] = [];
@@ -226,6 +230,7 @@ export class LazyState {
 
   register(entry: CatalogEntry): void {
     this.catalog.set(entry.name, entry);
+    if (entry.pinned) this.pinned.add(entry.name);
   }
 
   /** Full tools/list entries for every registered tool (facade included), as the SDK would emit them. */
@@ -236,8 +241,8 @@ export class LazyState {
         : [...this.catalog.values()].map(t => ({
           name: t.name, title: t.title, description: t.description, inputSchema: toJsonSchema(t.schema)
         }));
-      const facade = this.fullList.filter((t: any) => FACADE.has(t.name) || this.hot.includes(t.name));
-      this.catalogBytes = JSON.stringify({ tools: this.fullList.filter((t: any) => !FACADE.has(t.name)) }).length;
+      const facade = this.fullList.filter((t: any) => FACADE.has(t.name) || this.hot.includes(t.name) || this.pinned.has(t.name));
+      this.catalogBytes = JSON.stringify({ tools: this.fullList.filter((t: any) => !FACADE.has(t.name) && !this.pinned.has(t.name)) }).length;
       this.facadeBytes = JSON.stringify({ tools: facade }).length;
     }
     return this.fullList;
@@ -284,7 +289,7 @@ export class LazyState {
     const all = await this.allTools(extra);
     this.ledger({});
     if (!this.isLazy()) return all.filter((t: any) => !FACADE.has(t.name));
-    return all.filter((t: any) => FACADE.has(t.name) || this.hot.includes(t.name));
+    return all.filter((t: any) => FACADE.has(t.name) || this.hot.includes(t.name) || this.pinned.has(t.name));
   }
 
   /** Attach the savings ledger for this request; PHP copies it into mcp_request_log. */
